@@ -1,0 +1,99 @@
+<!-- <!DOCTYPE html>
+<html>
+<head>
+    <title>Raspberry Pi WebRTC Stream</title>
+</head>
+<body>
+    <h1>My Camera Stream</h1>
+    <iframe src="https://localhost:8888/rpicam" width="1280" height="720" style="border: none;"></iframe>
+</body>
+</html> -->
+
+<!-- <!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>HLS Streaming Example</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/video.js/7.17.0/video.min.js"></script>
+    <link
+      href="https://cdnjs.cloudflare.com/ajax/libs/video.js/7.17.0/video-js.min.css"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <h1>Adaptive Video Streaming with HLS</h1>
+    <video id="videoPlayer" class="video-js" controls width="720" height="400" seekable>
+      <source
+        src="http://localhost:8888/rpicam/index.m3u8"
+        type="application/x-mpegURL"
+      />
+      Your browser does not support HLS playback.
+    </video>
+    <script>
+      var player = videojs("videoPlayer");
+    </script>
+  </body>
+</html> -->
+
+
+<!-- <script
+  defer
+  src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.6.13/hls.min.js"
+></script>
+
+
+<video id="myvideo" controls muted autoplay width="1920" height="1080"></video>
+
+
+<script>
+  window.addEventListener("load", () => {
+    if (Hls.isSupported()) {
+      const hls = new Hls({
+        xhrSetup: function (xhr, url) {
+          let user = ""; // fill if needed
+          let pass = ""; // fill if needed
+          let token = ""; // fil if needed
+
+          if (user !== "") {
+            const credentials = btoa(`${user}:${pass}`);
+            xhr.setRequestHeader("Authorization", `Basic ${credentials}`);
+          } else if (token !== "") {
+            xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+          }
+        },
+      });
+
+      hls.on(Hls.Events.MEDIA_ATTACHED, () => {
+        hls.loadSource("http://localhost:8888/rpicam/index.m3u8");
+      });
+
+      hls.attachMedia(document.getElementById("myvideo"));
+    }
+  });
+</script> -->
+<script defer src="./reader.js"></script>
+<video id="myvideo" controls muted autoplay width="640" height="480"></video>
+<script>
+  let reader = null;
+
+  window.addEventListener("load", () => {
+    reader = new MediaMTXWebRTCReader({
+      url: "http://localhost:8889/rpicam/whep",
+      user: "", // fill if needed
+      pass: "", // fill if needed
+      token: "", // fill if needed
+      onError: (err) => {
+        console.error(err);
+      },
+      onTrack: (evt) => {
+        document.getElementById("myvideo").srcObject = evt.streams[0];
+      },
+    });
+  });
+
+  window.addEventListener("beforeunload", () => {
+    if (reader !== null) {
+      reader.close();
+    }
+  });
+</script>

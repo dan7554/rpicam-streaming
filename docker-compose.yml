@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  mediamtx:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mediamtx-server
+    restart: unless-stopped
+    ports:
+      - "8554:8554"     # RTSP
+      - "1935:1935"     # RTMP
+      - "8888:8888"     # HTTP API
+      - "8889:8889"     # WebRTC
+      - "9996:9996"     # SRT
+      - "8890:8890/udp" # WebRTC UDP
+      - "8189:8189/udp" # WebRTC UDP
+    environment:
+      - MTX_RTSPTRANSPORTS=tcp
+      - MTX_WEBRTCADDITIONALHOSTS=localhost
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+      - ./server.crt:/server.crt:ro
+      - ./server.key:/server.key:ro
+    networks:
+      - mediamtx-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8888/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  mediamtx-network:
+    driver: bridge

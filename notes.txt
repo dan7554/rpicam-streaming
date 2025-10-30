@@ -1,0 +1,81 @@
+rpicam-vid -t 0 --bitrate 4500000 --inline --width 1920 --height 1080 --framerate 30 --listen -o - | ffmpeg -fflags +genpts -i - -c:v copy -f rtsp rtsp://mac:8554/rpicam
+
+
+rpicam-vid -t 0 --camera 0 --nopreview --codec yuv420 --width 1280 --height 720 --inline --listen -o - | ffmpeg -f rawvideo -pix_fmt yuv420p -s:v 1280x720 -i /dev/stdin -c:v libx264 -preset ultrafast -tune zerolatency -f rtsp rtsp://192.168.50.39:8554/rpicam
+
+
+rpicam-vid -t 0 --camera 0 --nopreview --codec yuv420 --width 1280 --height 720 --inline --listen -o - | ffmpeg -f rawvideo -s:v 1280x720 -i /dev/stdin -c:v h264_v4l2m2m -f rtsp rtsp://192.168.50.39:8554/rpicam
+
+
+# Fixed command - using copy codec to avoid re-encoding H.264 stream
+rpicam-vid -t 0 --codec h264 --inline --framerate 30 --width 1280 --height 720 -o - | ffmpeg -fflags +genpts -re -i - -c:v copy -f rtsp rtsp://mac:8554/rpicam
+
+# Fixed: Add proper stream initialization and error handling
+rpicam-vid -t 0 --codec h264 --inline --framerate 30 --width 1280 --height 720 --flush -o - | ffmpeg -fflags +genpts+igndts -re -analyzeduration 1000000 -probesize 1000000 -i - -c:v copy -avoid_negative_ts make_zero -f rtsp rtsp://mac:8554/rpicam
+
+# Alternative: Use raw YUV420 output (more reliable)
+rpicam-vid -t 0 --camera 0 --nopreview --codec yuv420 --brightness 0 --width 1280 --height 720 --framerate 30 --inline -o - | ffmpeg -f rawvideo -pix_fmt yuv420p -s:v 1280x720 -r 30 -i - -c:v libx264 -preset veryfast -tune zerolatency -f rtsp rtsp://mac:8554/rpicam
+
+
+
+--crf 23 - Better quality encoding (lower = better quality, 18-28 recommended)
+
+White Balance Modes:
+--awb auto      # Automatic (best for mixed lighting)
+--awb daylight  # Outdoor/daylight
+--awb tungsten  # Indoor tungsten lighting
+--awb fluorescent # Fluorescent lighting
+--awb incandescent # Warm indoor lighting
+--awb flash     # Flash photography
+--awb cloudy    # Cloudy outdoor conditions
+
+Fine-tuning Parameters:
+--brightness 0.05   # Subtle brightness (try -0.1 to 0.2)
+--contrast 1.1      # Moderate contrast (try 0.9 to 1.5)
+--saturation 1.2    # Rich colors (try 1.0 to 1.4)
+--sharpness 0.8     # Moderate sharpness (try 0.5 to 1.2)
+--ev 2              # Exposure compensation (try -3 to 3)
+
+For Different Conditions:
+Indoor/Low Light: --awb tungsten --brightness 0.2 --contrast 1.0 --saturation 1.1
+Bright Outdoor: --awb daylight --brightness -0.1 --contrast 1.3 --saturation 1.2
+Overcast: --awb cloudy --brightness 0.1 --contrast 1.2 --saturation 1.3
+
+sudo apt-get install yasm libvpx. libx264.
+
+
+ffmpeg -re -f lavfi -i testsrc=size=1280x720:rate=30 \
+-f lavfi -i "sine=frequency=1000:sample_rate=48000" \
+-c:v libx264 -pix_fmt yuv420p -preset ultrafast -b:v 600k \
+-c:a libopus -ar 48000 -ac 2 -b:a 128k \
+-f whip http://192.168.50.39:8889/stream/whip
+
+
+
+
+  rpicam-vid -t 0 --camera 0 --nopreview --codec yuv420 --width 1280 --height 720 --inline --listen -o - | ffmpeg -f v4l2 -i - -c:v h264_omx -b:v 2M -f rtsp rtsp://192.168.50.130:8554/rpicam
+
+
+
+rpicam-vid -t 0 -g 10 --bitrate 4500000 --inline --width 1920 --height 1080 --framerate 30 --rotation 180 --codec libav --libav-format flv --libav-audio --audio-bitrate 16000 --av-sync 200000 -n -o rtsp://192.168.50.55:8554/rpicam
+
+wget https://github.com/bluenviron/mediamtx/releases/download/v1.15.3/mediamtx_v1.15.3_linux_armv7.tar.gz
+
+
+
+
+tar -xvzf ./mediamtx_v1.15.3_linux_armv7.tar.gz
+
+
+
+--bitrate 4500000 --inline --width 1920 --height 1080 --framerate 30
+
+
+
+sudo systemctl start rpicam-stream.service
+
+sudo systemctl stop rpicam-stream.service
+
+
+339576545997.dkr.ecr.us-east-2.amazonaws.com/mediamtx:latest
+339576545997.dkr.ecr.us-east-2.amazonaws.com/mediamtx:20251027-171303
