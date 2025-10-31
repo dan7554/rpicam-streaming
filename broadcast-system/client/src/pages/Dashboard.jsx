@@ -1,14 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import { Grid, Paper, Typography, Box, Card, CardContent } from '@mui/material';
-import { io } from 'socket.io-client';
 import CameraManager from '../components/CameraManager';
 import SceneComposer from '../components/SceneComposer';
 import StreamManager from '../components/StreamManager';
 import SystemStats from '../components/SystemStats';
 import LivePreview from '../components/LivePreview';
+import { useWebSocket } from '../hooks/useWebSocket';
 
 const Dashboard = () => {
-  const [socket, setSocket] = useState(null);
+  const { socket } = useWebSocket();
   const [systemStats, setSystemStats] = useState({
     cameras: { total: 0, online: 0, offline: 0 },
     streams: { active: 0, viewers: 0 },
@@ -16,22 +16,26 @@ const Dashboard = () => {
   });
 
   useEffect(() => {
-    // Initialize socket connection
-    const newSocket = io(process.env.REACT_APP_SERVER_URL || 'ws://localhost:3001');
-    setSocket(newSocket);
+    if (socket) {
+      // Listen for system stats updates
+      socket.on('system-stats', (stats) => {
+        if (stats && typeof stats === 'object') {
+          setSystemStats(prevStats => ({
+            cameras: { ...prevStats.cameras, ...stats.cameras },
+            streams: { ...prevStats.streams, ...stats.streams },
+            system: { ...prevStats.system, ...stats.system }
+          }));
+        }
+      });
 
-    // Listen for system stats updates
-    newSocket.on('system-stats', (stats) => {
-      setSystemStats(stats);
-    });
+      // Request initial stats
+      socket.emit('get-system-stats');
 
-    // Request initial stats
-    newSocket.emit('get-system-stats');
-
-    return () => {
-      newSocket.close();
-    };
-  }, []);
+      return () => {
+        socket.off('system-stats');
+      };
+    }
+  }, [socket]);
 
   return (
     <Box sx={{ flexGrow: 1, p: 3 }}>

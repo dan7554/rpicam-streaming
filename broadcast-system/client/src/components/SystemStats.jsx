@@ -29,7 +29,11 @@ const SystemStats = ({ stats, socket }) => {
 
   useEffect(() => {
     if (socket) {
-      socket.on('realtime-stats', setRealtimeStats);
+      socket.on('realtime-stats', (newStats) => {
+        if (newStats && typeof newStats === 'object') {
+          setRealtimeStats(newStats);
+        }
+      });
       
       return () => {
         socket.off('realtime-stats');

@@ -127,9 +127,10 @@ const StreamManager = ({ socket }) => {
     try {
       setLoading(true);
       const response = await fetch('/api/streaming/streams');
-      const data = await response.json();
-      setStreams(data);
-      setActiveStreams(data.filter(s => s.status === 'live').map(s => s.id));
+      const result = await response.json();
+      const data = result.data || result; // Handle both response formats
+      setStreams(Array.isArray(data) ? data : []);
+      setActiveStreams(Array.isArray(data) ? data.filter(s => s?.status === 'live').map(s => s?.id).filter(Boolean) : []);
     } catch (err) {
       setError('Failed to fetch streams');
     } finally {
@@ -181,16 +182,18 @@ const StreamManager = ({ socket }) => {
   };
 
   const handleEditStream = (stream) => {
+    if (!stream) return;
+    
     setEditingStream(stream);
     setStreamForm({
-      name: stream.name,
-      platform: stream.platform,
-      rtmpUrl: stream.rtmpUrl,
-      streamKey: stream.streamKey,
-      bitrate: stream.bitrate,
-      resolution: stream.resolution,
-      framerate: stream.framerate,
-      enabled: stream.enabled
+      name: stream.name || '',
+      platform: stream.platform || 'custom',
+      rtmpUrl: stream.rtmpUrl || '',
+      streamKey: stream.streamKey || '',
+      bitrate: stream.bitrate || 2500,
+      resolution: stream.resolution || '1920x1080',
+      framerate: stream.framerate || 30,
+      enabled: stream.enabled !== false
     });
     setStreamDialogOpen(true);
   };
@@ -390,42 +393,56 @@ const StreamManager = ({ socket }) => {
       {/* Stream List */}
       <Grid container spacing={2}>
         {streams.map((stream) => {
-          const platform = platforms.find(p => p.id === stream.platform);
-          const isActive = activeStreams.includes(stream.id);
+          // Safely access stream properties with defaults
+          const safeStream = {
+            id: stream?.id || 'unknown',
+            name: stream?.name || 'Unknown Stream',
+            platform: stream?.platform || 'custom',
+            status: stream?.status || 'offline',
+            enabled: stream?.enabled !== false,
+            resolution: stream?.resolution || '1920x1080',
+            framerate: stream?.framerate || 30,
+            bitrate: stream?.bitrate || 2500,
+            stats: stream?.stats || null,
+            ...stream
+          };
+
+          const platform = platforms.find(p => p.id === safeStream.platform);
+          const isActive = activeStreams.includes(safeStream.id);
           
           return (
-            <Grid item xs={12} key={stream.id}>
+            <Grid item xs={12} key={safeStream.id}>
               <Card sx={{ 
                 backgroundColor: '#2d2d30',
                 border: isActive ? '1px solid #4caf50' : '1px solid #444',
-                opacity: stream.enabled ? 1 : 0.6
+                opacity: safeStream.enabled ? 1 : 0.6
               }}>
                 <CardContent>
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                     <Box sx={{ flex: 1 }}>
                       <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
                         {platform && (
-                          <Box sx={{ color: platform.color, mr: 1 }}>
+                          <Box sx={{ color: platform.color || 'white', mr: 1 }}>
                             {platform.icon}
                           </Box>
                         )}
                         <Typography variant="h6" sx={{ color: 'white', mr: 2 }}>
-                          {stream.name}
+                          {safeStream.name}
                         </Typography>
                         <Chip 
-                          icon={getStatusIcon(stream.status)}
-                          label={stream.status || 'offline'}
-                          color={getStatusColor(stream.status)}
+                          icon={getStatusIcon(safeStream.status)}
+                          label={safeStream.status}
+                          color={getStatusColor(safeStream.status)}
                           size="small"
-                          className={stream.status === 'live' ? 'live-indicator' : ''}
+                          className={safeStream.status === 'live' ? 'live-indicator' : ''}
                         />
                       </Box>
                       
                       <Typography variant="body2" sx={{ color: '#ccc', mb: 1 }}>
-                        {platform?.name} • {stream.resolution} • {stream.framerate}fps • {stream.bitrate}kbps
+                        {platform?.name || 'Custom'} • {safeStream.resolution} • {safeStream.framerate}fps • {safeStream.bitrate}kbps
                       </Typography>
 
-                      {stream.stats && isActive && (
+                      {safeStream.stats && isActive && (
                         <Box sx={{ mt: 2 }}>
                           <Grid container spacing={2}>
                             <Grid item xs={3}>
@@ -433,7 +450,7 @@ const StreamManager = ({ socket }) => {
                                 Duration
                               </Typography>
                               <Typography variant="body2" sx={{ color: 'white' }}>
-                                {formatDuration(stream.stats.duration)}
+                                {formatDuration(safeStream.stats.duration || 0)}
                               </Typography>
                             </Grid>
                             <Grid item xs={3}>
@@ -441,7 +458,7 @@ const StreamManager = ({ socket }) => {
                                 Data Sent
                               </Typography>
                               <Typography variant="body2" sx={{ color: 'white' }}>
-                                {formatBytes(stream.stats.bytesTransferred)}
+                                {formatBytes(safeStream.stats.bytesTransferred || 0)}
                               </Typography>
                             </Grid>
                             <Grid item xs={3}>

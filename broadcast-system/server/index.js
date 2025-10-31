@@ -27,7 +27,7 @@ class BroadcastServer {
       }
     });
 
-    this.port = process.env.PORT || 3000;
+    this.port = process.env.PORT || 3001;
     this.mediamtxUrl = process.env.MEDIAMTX_URL || 'http://localhost:8888';
     
     // Initialize services

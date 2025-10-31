@@ -28,13 +28,17 @@ function App() {
     if (socket) {
       // Listen for system status updates
       socket.on('system-stats', (stats) => {
-        updateSystemStatus(stats);
+        if (stats && typeof stats === 'object') {
+          updateSystemStatus(stats);
+        }
       });
 
       // Listen for initial state
       socket.on('initial-state', (state) => {
         // Update store with initial state
-        console.log('Received initial state:', state);
+        if (state && typeof state === 'object') {
+          console.log('Received initial state:', state);
+        }
       });
 
       return () => {

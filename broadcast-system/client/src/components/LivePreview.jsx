@@ -60,18 +60,30 @@ const LivePreview = ({ socket }) => {
   useEffect(() => {
     if (socket) {
       socket.on('preview-stream-url', (url) => {
-        setStreamUrl(url);
-        if (videoRef.current) {
-          videoRef.current.src = url;
+        if (url && typeof url === 'string') {
+          setStreamUrl(url);
+          if (videoRef.current) {
+            videoRef.current.src = url;
+          }
         }
       });
 
       socket.on('preview-stats', (streamStats) => {
-        setStats(streamStats);
+        if (streamStats && typeof streamStats === 'object') {
+          setStats(prevStats => ({
+            bitrate: streamStats.bitrate || prevStats.bitrate || 0,
+            fps: streamStats.fps || prevStats.fps || 0,
+            resolution: streamStats.resolution || prevStats.resolution || '1920x1080',
+            latency: streamStats.latency || prevStats.latency || 0,
+            ...streamStats
+          }));
+        }
       });
 
       socket.on('preview-error', (errorMsg) => {
-        setError(errorMsg);
+        if (errorMsg) {
+          setError(String(errorMsg));
+        }
       });
 
       // Request initial preview stream
@@ -270,17 +282,17 @@ const LivePreview = ({ socket }) => {
           className="video-overlay-controls"
         >
           <Chip 
-            label={`${stats.fps} FPS`} 
+            label={`${stats?.fps || 0} FPS`} 
             size="small" 
             sx={{ backgroundColor: 'rgba(0,0,0,0.7)', color: 'white' }}
           />
           <Chip 
-            label={formatBytes(stats.bitrate)} 
+            label={formatBytes(stats?.bitrate || 0)} 
             size="small" 
             sx={{ backgroundColor: 'rgba(0,0,0,0.7)', color: 'white' }}
           />
           <Chip 
-            label={stats.resolution} 
+            label={stats?.resolution || '1920x1080'} 
             size="small" 
             sx={{ backgroundColor: 'rgba(0,0,0,0.7)', color: 'white' }}
           />
@@ -472,7 +484,7 @@ const LivePreview = ({ socket }) => {
                 Resolution
               </Typography>
               <Typography variant="body2" sx={{ color: 'white' }}>
-                {stats.resolution}
+                {stats?.resolution || '1920x1080'}
               </Typography>
             </Grid>
             <Grid item xs={6} sm={3}>
@@ -480,7 +492,7 @@ const LivePreview = ({ socket }) => {
                 Frame Rate
               </Typography>
               <Typography variant="body2" sx={{ color: 'white' }}>
-                {stats.fps} FPS
+                {stats?.fps || 0} FPS
               </Typography>
             </Grid>
             <Grid item xs={6} sm={3}>
@@ -488,7 +500,7 @@ const LivePreview = ({ socket }) => {
                 Bitrate
               </Typography>
               <Typography variant="body2" sx={{ color: 'white' }}>
-                {formatBytes(stats.bitrate)}
+                {formatBytes(stats?.bitrate || 0)}
               </Typography>
             </Grid>
             <Grid item xs={6} sm={3}>
@@ -496,7 +508,7 @@ const LivePreview = ({ socket }) => {
                 Latency
               </Typography>
               <Typography variant="body2" sx={{ color: 'white' }}>
-                {stats.latency}ms
+                {stats?.latency || 0}ms
               </Typography>
             </Grid>
           </Grid>

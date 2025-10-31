@@ -52,13 +52,13 @@ const CameraManager = ({ socket }) => {
     if (socket) {
       // Listen for camera updates
       socket.on('cameras-updated', (updatedCameras) => {
-        setCameras(updatedCameras);
+        setCameras(Array.isArray(updatedCameras) ? updatedCameras : []);
       });
 
       socket.on('camera-status-changed', (cameraId, status) => {
-        setCameras(prev => prev.map(cam => 
+        setCameras(prev => Array.isArray(prev) ? prev.map(cam => 
           cam.id === cameraId ? { ...cam, status } : cam
-        ));
+        ) : []);
       });
 
       // Request initial camera list
@@ -77,8 +77,9 @@ const CameraManager = ({ socket }) => {
     try {
       setLoading(true);
       const response = await fetch('/api/cameras');
-      const data = await response.json();
-      setCameras(data);
+      const result = await response.json();
+      const data = result.data || result; // Handle both response formats
+      setCameras(Array.isArray(data) ? data : []);
     } catch (err) {
       setError('Failed to fetch cameras');
     } finally {
@@ -101,12 +102,14 @@ const CameraManager = ({ socket }) => {
   };
 
   const handleEditCamera = (camera) => {
+    if (!camera) return;
+    
     setEditingCamera(camera);
     setCameraForm({
-      name: camera.name,
-      url: camera.url,
-      type: camera.type,
-      enabled: camera.enabled,
+      name: camera.name || '',
+      url: camera.url || '',
+      type: camera.type || 'rtsp',
+      enabled: camera.enabled !== undefined ? camera.enabled : true,
       position: camera.position || { x: 0, y: 0 },
       resolution: camera.resolution || '1920x1080',
       framerate: camera.framerate || 30
@@ -224,93 +227,106 @@ const CameraManager = ({ socket }) => {
       )}
 
       <Grid container spacing={2}>
-        {cameras.map((camera) => (
-          <Grid item xs={12} sm={6} md={4} key={camera.id}>
-            <Card 
-              className={`camera-card ${selectedCamera === camera.id ? 'active' : ''} ${camera.status === 'offline' ? 'offline' : ''}`}
-            >
-              <CardContent sx={{ pb: 1 }}>
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-                  <Typography variant="h6" component="h3" sx={{ color: 'white', fontSize: '1rem' }}>
-                    {camera.name}
-                  </Typography>
-                  <Chip 
-                    icon={getStatusIcon(camera.status)}
-                    label={camera.status}
-                    color={getStatusColor(camera.status)}
-                    size="small"
-                  />
-                </Box>
+        {cameras.map((camera) => {
+          // Safely access camera properties with defaults
+          const safeCamera = {
+            id: camera?.id || 'unknown',
+            name: camera?.name || 'Unknown Camera',
+            status: camera?.status || 'offline',
+            previewUrl: camera?.previewUrl || '',
+            resolution: camera?.resolution || '1920x1080',
+            framerate: camera?.framerate || 30,
+            ...camera
+          };
 
-                <div className="video-preview-container">
-                  {camera.status === 'online' ? (
-                    <video 
-                      className="video-preview"
-                      src={camera.previewUrl}
-                      autoPlay
-                      muted
-                      onError={() => console.log('Video preview error for camera:', camera.id)}
+          return (
+            <Grid item xs={12} sm={6} md={4} key={safeCamera.id}>
+              <Card 
+                className={`camera-card ${selectedCamera === safeCamera.id ? 'active' : ''} ${safeCamera.status === 'offline' ? 'offline' : ''}`}
+              >
+                <CardContent sx={{ pb: 1 }}>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                    <Typography variant="h6" component="h3" sx={{ color: 'white', fontSize: '1rem' }}>
+                      {safeCamera.name}
+                    </Typography>
+                    <Chip 
+                      icon={getStatusIcon(safeCamera.status)}
+                      label={safeCamera.status}
+                      color={getStatusColor(safeCamera.status)}
+                      size="small"
                     />
-                  ) : (
-                    <Box sx={{ 
-                      display: 'flex', 
-                      alignItems: 'center', 
-                      justifyContent: 'center',
-                      height: '100%',
-                      color: 'white',
-                      flexDirection: 'column'
-                    }}>
-                      <VideocamOff sx={{ fontSize: 40, mb: 1 }} />
-                      <Typography variant="body2">
-                        {camera.status === 'connecting' ? 'Connecting...' : 'Offline'}
-                      </Typography>
-                    </Box>
-                  )}
-                  
-                  <div className="video-preview-overlay">
-                    <IconButton 
-                      sx={{ color: 'white', mr: 1 }}
-                      onClick={() => handleEditCamera(camera)}
-                    >
-                      <Settings />
-                    </IconButton>
+                  </Box>
+
+                  <div className="video-preview-container">
+                    {safeCamera.status === 'online' ? (
+                      <video 
+                        className="video-preview"
+                        src={safeCamera.previewUrl}
+                        autoPlay
+                        muted
+                        onError={() => console.log('Video preview error for camera:', safeCamera.id)}
+                      />
+                    ) : (
+                      <Box sx={{ 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        justifyContent: 'center',
+                        height: '100%',
+                        color: 'white',
+                        flexDirection: 'column'
+                      }}>
+                        <VideocamOff sx={{ fontSize: 40, mb: 1 }} />
+                        <Typography variant="body2">
+                          {safeCamera.status === 'connecting' ? 'Connecting...' : 'Offline'}
+                        </Typography>
+                      </Box>
+                    )}
+                    
+                    <div className="video-preview-overlay">
+                      <IconButton 
+                        sx={{ color: 'white', mr: 1 }}
+                        onClick={() => handleEditCamera(safeCamera)}
+                      >
+                        <Settings />
+                      </IconButton>
+                    </div>
                   </div>
-                </div>
 
-                <Typography variant="body2" sx={{ color: '#ccc', mt: 1, fontSize: '0.75rem' }}>
-                  {camera.resolution} • {camera.framerate}fps
-                </Typography>
-              </CardContent>
+                  <Typography variant="body2" sx={{ color: '#ccc', mt: 1, fontSize: '0.75rem' }}>
+                    {safeCamera.resolution} • {safeCamera.framerate}fps
+                  </Typography>
+                </CardContent>
 
-              <CardActions sx={{ pt: 0, px: 2, pb: 2 }}>
-                <Button 
-                  size="small" 
-                  variant={selectedCamera === camera.id ? "contained" : "outlined"}
-                  color={selectedCamera === camera.id ? "success" : "primary"}
-                  onClick={() => handleSwitchCamera(camera.id)}
-                  disabled={camera.status !== 'online'}
-                  sx={{ mr: 1, flex: 1 }}
-                >
-                  {selectedCamera === camera.id ? 'Active' : 'Switch To'}
-                </Button>
-                <IconButton 
-                  size="small" 
-                  onClick={() => handleEditCamera(camera)}
-                  sx={{ color: '#1976d2' }}
-                >
-                  <Edit />
-                </IconButton>
-                <IconButton 
-                  size="small" 
-                  onClick={() => handleDeleteCamera(camera.id)}
-                  sx={{ color: '#f44336' }}
-                >
-                  <Delete />
-                </IconButton>
-              </CardActions>
-            </Card>
-          </Grid>
-        ))}
+                <CardActions sx={{ pt: 0, px: 2, pb: 2 }}>
+                  <Button 
+                    size="small" 
+                    variant={selectedCamera === safeCamera.id ? "contained" : "outlined"}
+                    color={selectedCamera === safeCamera.id ? "success" : "primary"}
+                    onClick={() => handleSwitchCamera(safeCamera.id)}
+                    disabled={safeCamera.status !== 'online'}
+                    sx={{ mr: 1, flex: 1 }}
+                  >
+                    {selectedCamera === safeCamera.id ? 'Active' : 'Switch To'}
+                  </Button>
+                  <IconButton 
+                    size="small" 
+                    onClick={() => handleEditCamera(safeCamera)}
+                    sx={{ color: '#1976d2' }}
+                  >
+                    <Edit />
+                  </IconButton>
+                  <IconButton 
+                    size="small" 
+                    onClick={() => handleDeleteCamera(safeCamera.id)}
+                    sx={{ color: '#f44336' }}
+                  >
+                    <Delete />
+                  </IconButton>
+                </CardActions>
+              </Card>
+            </Grid>
+          );
+        })}
       </Grid>
 
       {cameras.length === 0 && !loading && (

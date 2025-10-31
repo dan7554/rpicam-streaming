@@ -66,7 +66,7 @@ const SceneComposer = ({ socket }) => {
     if (socket) {
       socket.on('scenes-updated', setScenes);
       socket.on('active-scene-changed', setActiveScene);
-      socket.on('cameras-updated', setCameras);
+      socket.on('cameras-updated', (data) => setCameras(Array.isArray(data) ? data : []));
       
       fetchScenes();
       fetchCameras();
@@ -85,7 +85,7 @@ const SceneComposer = ({ socket }) => {
     try {
       const response = await fetch('/api/scenes');
       const data = await response.json();
-      setScenes(data);
+      setScenes(data.data.scenes);
     } catch (err) {
       console.error('Failed to fetch scenes:', err);
     }
@@ -94,8 +94,9 @@ const SceneComposer = ({ socket }) => {
   const fetchCameras = async () => {
     try {
       const response = await fetch('/api/cameras');
-      const data = await response.json();
-      setCameras(data.filter(cam => cam.status === 'online'));
+      const result = await response.json();
+      const data = result.data || result; // Handle both response formats
+      setCameras(Array.isArray(data) ? data.filter(cam => cam.status === 'online') : []);
     } catch (err) {
       console.error('Failed to fetch cameras:', err);
     }
@@ -128,10 +129,12 @@ const SceneComposer = ({ socket }) => {
   };
 
   const handleEditScene = (scene) => {
+    if (!scene) return;
+    
     setEditingScene(scene);
     setSceneForm({
-      name: scene.name,
-      layout: scene.layout,
+      name: scene.name || '',
+      layout: scene.layout || 'single',
       cameras: scene.cameras || [],
       transition: scene.transition || 'fade',
       duration: scene.duration || 1000
@@ -241,7 +244,7 @@ const SceneComposer = ({ socket }) => {
   };
 
   const selectedLayout = sceneLayouts.find(l => l.id === sceneForm.layout);
-
+  
   return (
     <Paper sx={{ p: 2, backgroundColor: '#1d1d1d', border: '1px solid #333' }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
@@ -259,7 +262,7 @@ const SceneComposer = ({ socket }) => {
       </Box>
 
       <Grid container spacing={2}>
-        {scenes.map((scene) => (
+        {scenes?.map((scene) => (
           <Grid item xs={12} sm={6} md={4} key={scene.id}>
             <Card 
               sx={{ 
@@ -315,7 +318,7 @@ const SceneComposer = ({ socket }) => {
                 </IconButton>
                 <IconButton 
                   size="small" 
-                  onClick={() => handleDeleteScene(scene.id)}
+                  onClick={() => handleDeleteScene(scene?.id)}
                   sx={{ color: '#f44336' }}
                 >
                   <Delete />
@@ -326,7 +329,7 @@ const SceneComposer = ({ socket }) => {
         ))}
       </Grid>
 
-      {scenes.length === 0 && (
+      {(scenes?.length || 0) === 0 && (
         <Box sx={{ textAlign: 'center', py: 4 }}>
           <Typography variant="body1" sx={{ color: '#ccc', mb: 2 }}>
             No scenes configured
@@ -412,8 +415,8 @@ const SceneComposer = ({ socket }) => {
                             <em>None</em>
                           </MenuItem>
                           {cameras.map((camera) => (
-                            <MenuItem key={camera.id} value={camera.id}>
-                              {camera.name}
+                            <MenuItem key={camera?.id || `camera-${Math.random()}`} value={camera?.id || ''}>
+                              {camera?.name || 'Unknown Camera'}
                             </MenuItem>
                           ))}
                         </Select>
