@@ -1,0 +1,23 @@
+{
+  "cameras": [
+    {
+      "id": "rpicam",
+      "name": "Raspberry Pi Camera",
+      "type": "webrtc",
+      "url": "http://localhost:8889/rpicam/whep",
+      "rtspUrl": "rtsp://localhost:8554/rpicam",
+      "enabled": true,
+      "position": {
+        "x": 0,
+        "y": 0,
+        "width": 1920,
+        "height": 1080
+      },
+      "settings": {
+        "resolution": "1920x1080",
+        "framerate": 30,
+        "bitrate": 5000
+      }
+    }
+  ]
+}

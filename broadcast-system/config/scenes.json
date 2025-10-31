@@ -1,0 +1,174 @@
+{
+  "scenes": [
+    {
+      "id": "single-cam",
+      "name": "Single Camera",
+      "layout": "fullscreen",
+      "cameras": [
+        {
+          "cameraId": "rpicam",
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 1920,
+            "height": 1080
+          },
+          "zIndex": 1
+        }
+      ],
+      "overlays": [],
+      "audio": {
+        "commentary": true,
+        "ambient": false,
+        "music": false
+      }
+    },
+    {
+      "id": "picture-in-picture",
+      "name": "Picture in Picture",
+      "layout": "pip",
+      "cameras": [
+        {
+          "cameraId": "rpicam",
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 1920,
+            "height": 1080
+          },
+          "zIndex": 1
+        },
+        {
+          "cameraId": "rpicam",
+          "position": {
+            "x": 1440,
+            "y": 80,
+            "width": 400,
+            "height": 225
+          },
+          "zIndex": 2
+        }
+      ],
+      "overlays": [
+        {
+          "type": "text",
+          "content": "LIVE",
+          "position": {
+            "x": 50,
+            "y": 50
+          },
+          "style": {
+            "color": "red",
+            "fontSize": "24px",
+            "fontWeight": "bold"
+          }
+        }
+      ],
+      "audio": {
+        "commentary": true,
+        "ambient": true,
+        "music": false
+      }
+    },
+    {
+      "id": "split-screen",
+      "name": "Split Screen",
+      "layout": "split",
+      "cameras": [
+        {
+          "cameraId": "rpicam",
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 960,
+            "height": 1080
+          },
+          "zIndex": 1
+        },
+        {
+          "cameraId": "rpicam",
+          "position": {
+            "x": 960,
+            "y": 0,
+            "width": 960,
+            "height": 1080
+          },
+          "zIndex": 1
+        }
+      ],
+      "overlays": [],
+      "audio": {
+        "commentary": true,
+        "ambient": false,
+        "music": false
+      }
+    },
+    {
+      "id": "quad-view",
+      "name": "Quad View",
+      "layout": "quad",
+      "cameras": [
+        {
+          "cameraId": "rpicam",
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 960,
+            "height": 540
+          },
+          "zIndex": 1
+        },
+        {
+          "cameraId": "rpicam",
+          "position": {
+            "x": 960,
+            "y": 0,
+            "width": 960,
+            "height": 540
+          },
+          "zIndex": 1
+        },
+        {
+          "cameraId": "rpicam",
+          "position": {
+            "x": 0,
+            "y": 540,
+            "width": 960,
+            "height": 540
+          },
+          "zIndex": 1
+        },
+        {
+          "cameraId": "rpicam",
+          "position": {
+            "x": 960,
+            "y": 540,
+            "width": 960,
+            "height": 540
+          },
+          "zIndex": 1
+        }
+      ],
+      "overlays": [
+        {
+          "type": "text",
+          "content": "Multi-Camera View",
+          "position": {
+            "x": 960,
+            "y": 20
+          },
+          "style": {
+            "color": "white",
+            "fontSize": "20px",
+            "textAlign": "center"
+          }
+        }
+      ],
+      "audio": {
+        "commentary": true,
+        "ambient": false,
+        "music": false
+      }
+    }
+  ]
+}
