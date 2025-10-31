@@ -1693,6 +1693,19 @@ quick-deploy: ## ⚡ Quick deployment (build → ECR → update ECS)
 	@echo "🔄 Updating ECS service..."
 	$(MAKE) ecs-update
 	@echo ""
+	@echo "⏳ Waiting up to 2 minutes for the new task to be in RUNNING state..."
+	@for i in $$(seq 1 24); do \
+		TASK_STATUS=$$(aws ecs describe-services --cluster $(ECS_CLUSTER_NAME) --services $(ECS_SERVICE_NAME) --region $(AWS_REGION) --query 'services[0].deployments[0].runningCount' --output text 2>/dev/null); \
+		if [ "$$TASK_STATUS" -ge "1" ]; then \
+			echo "✅ New task is RUNNING."; \
+			break; \
+		fi; \
+		echo "⏳ Waiting for task to start... (attempt $$i/24)"; \
+		sleep 5; \
+	done
+	@echo "🎯 Updating RTSP DNS record to point to the new task's IP address..."
+	@$(MAKE) dns-create-rtsp-record
+	@echo ""
 	@echo "✅ Quick deployment complete!"
 	@echo "============================="
 	@echo "🔍 Checking deployment status..."
@@ -1983,3 +1996,219 @@ aws-list-resources: ## 📋 List all AWS resources created by this project
 	@echo "============"
 	@echo -n "   ecsTaskExecutionRole: "
 	@aws iam get-role --role-name ecsTaskExecutionRole --region $(AWS_REGION) --query 'Role.RoleName' --output text 2>/dev/null || echo "NOT_FOUND"
+
+###############################################
+# Recording and Playback targets
+
+.PHONY: recording-setup recording-enable recording-disable recording-status recording-clean recording-test recording-web-player
+
+recording-setup: ## 📹 Set up MediaMTX recording capabilities with HLS
+	@echo "📹 Setting up MediaMTX Recording with HLS for Browser Scrubbing"
+	@echo "=============================================================="
+	@echo ""
+	@echo "🎯 This will configure MediaMTX to:"
+	@echo "   • Record live streams to HLS segments"
+	@echo "   • Enable browser-based scrubbing/seeking"
+	@echo "   • Store recordings in container storage"
+	@echo "   • Provide HTTP access to recorded content"
+	@echo ""
+	@echo "🔧 Creating recording-enabled configuration..."
+	@echo "# MediaMTX Configuration with Recording Support" > recording-config.yml
+	@echo "logLevel: info" >> recording-config.yml
+	@echo "logDestinations: [stdout]" >> recording-config.yml
+	@echo "logFile: \"\"" >> recording-config.yml
+	@echo "" >> recording-config.yml
+	@echo "# Enable API for recording control" >> recording-config.yml
+	@echo "api: yes" >> recording-config.yml
+	@echo "apiAddress: 0.0.0.0:9997" >> recording-config.yml
+	@echo "" >> recording-config.yml
+	@echo "# Enable metrics" >> recording-config.yml
+	@echo "metrics: yes" >> recording-config.yml
+	@echo "metricsAddress: 0.0.0.0:9998" >> recording-config.yml
+	@echo "" >> recording-config.yml
+	@echo "# Enable PPROF for debugging" >> recording-config.yml
+	@echo "pprof: yes" >> recording-config.yml
+	@echo "pprofAddress: 0.0.0.0:9999" >> recording-config.yml
+	@echo "" >> recording-config.yml
+	@echo "# Enable recording for all paths" >> recording-config.yml
+	@echo "recordPath: /recordings/%path/%Y-%m-%d_%H-%M-%S" >> recording-config.yml
+	@echo "" >> recording-config.yml
+	@echo "# HLS Configuration for browser playback" >> recording-config.yml
+	@echo "hls: yes" >> recording-config.yml
+	@echo "hlsAddress: 0.0.0.0:8888" >> recording-config.yml
+	@echo "hlsEncryption: no" >> recording-config.yml
+	@echo "hlsAllowOrigin: \"*\"" >> recording-config.yml
+	@echo "hlsSegmentCount: 10" >> recording-config.yml
+	@echo "hlsSegmentDuration: 2s" >> recording-config.yml
+	@echo "hlsPartDuration: 200ms" >> recording-config.yml
+	@echo "hlsSegmentMaxSize: 50M" >> recording-config.yml
+	@echo "hlsMuxerCloseAfter: 60s" >> recording-config.yml
+	@echo "" >> recording-config.yml
+	@echo "# WebRTC Configuration" >> recording-config.yml
+	@echo "webrtc: yes" >> recording-config.yml
+	@echo "webrtcAddress: 0.0.0.0:8889" >> recording-config.yml
+	@echo "webrtcAllowOrigin: \"*\"" >> recording-config.yml
+	@echo "" >> recording-config.yml
+	@echo "# RTSP Configuration" >> recording-config.yml
+	@echo "rtsp: yes" >> recording-config.yml
+	@echo "rtspAddress: 0.0.0.0:8554" >> recording-config.yml
+	@echo "rtspTransports: [tcp, udp]" >> recording-config.yml
+	@echo "" >> recording-config.yml
+	@echo "# RTMP Configuration" >> recording-config.yml
+	@echo "rtmp: yes" >> recording-config.yml
+	@echo "rtmpAddress: 0.0.0.0:1935" >> recording-config.yml
+	@echo "" >> recording-config.yml
+	@echo "# SRT Configuration" >> recording-config.yml
+	@echo "srt: yes" >> recording-config.yml
+	@echo "srtAddress: 0.0.0.0:9996" >> recording-config.yml
+	@echo "" >> recording-config.yml
+	@echo "# Path configurations with recording" >> recording-config.yml
+	@echo "paths:" >> recording-config.yml
+	@echo "  rpicam:" >> recording-config.yml
+	@echo "    # Enable recording for the Pi camera stream" >> recording-config.yml
+	@echo "    record: yes" >> recording-config.yml
+	@echo "    recordPath: /recordings/rpicam/%Y-%m-%d_%H-%M-%S" >> recording-config.yml
+	@echo "    recordFormat: fmp4" >> recording-config.yml
+	@echo "    recordPartDuration: 1s" >> recording-config.yml
+	@echo "    recordSegmentDuration: 1h" >> recording-config.yml
+	@echo "    recordDeleteAfter: 24h" >> recording-config.yml
+	@echo "    publishUser: \"\"" >> recording-config.yml
+	@echo "    publishPass: \"\"" >> recording-config.yml
+	@echo "    publishIPs: []" >> recording-config.yml
+	@echo "    readUser: \"\"" >> recording-config.yml
+	@echo "    readPass: \"\"" >> recording-config.yml
+	@echo "    readIPs: []" >> recording-config.yml
+	@echo "" >> recording-config.yml
+	@echo "  # Default path for other streams" >> recording-config.yml
+	@echo "  \"~^.*\": # Regex pattern for all paths" >> recording-config.yml
+	@echo "    record: yes" >> recording-config.yml
+	@echo "    recordPath: /recordings/%path/%Y-%m-%d_%H-%M-%S" >> recording-config.yml
+	@echo "    recordFormat: fmp4" >> recording-config.yml
+	@echo "    recordPartDuration: 1s" >> recording-config.yml
+	@echo "    recordSegmentDuration: 1h" >> recording-config.yml
+	@echo "    recordDeleteAfter: 24h" >> recording-config.yml
+	@echo "✅ Recording configuration created: recording-config.yml"
+	@echo ""
+	@echo "📦 Building Docker image with recording support..."
+	@echo "FROM bluenviron/mediamtx:1.15.3-ffmpeg" > Dockerfile.recording
+	@echo "COPY recording-config.yml /mediamtx.yml" >> Dockerfile.recording
+	@echo "RUN mkdir -p /recordings" >> Dockerfile.recording
+	@echo "EXPOSE 8554 8888 8889 1935 9996 9997 9998 9999" >> Dockerfile.recording
+	@echo "CMD [\"/mediamtx\"]" >> Dockerfile.recording
+	@docker build -f Dockerfile.recording -t $(IMAGE_NAME):recording .
+	@rm -f Dockerfile.recording
+	@echo ""
+	@echo "🚀 Next steps:"
+	@echo "   make recording-enable     # Enable recording in production"
+	@echo "   make recording-test       # Test recording locally"
+
+recording-test: ## 🧪 Test recording locally
+	@echo "🧪 Testing Recording Locally"
+	@echo "============================"
+	@echo "🐳 Starting MediaMTX with recording..."
+	@docker run --rm -d \
+		--name $(CONTAINER_NAME)-recording-test \
+		-p 8554:8554 \
+		-p 8888:8888 \
+		-p 8889:8889 \
+		-p 9997:9997 \
+		-v $$(pwd)/recordings:/recordings \
+		$(IMAGE_NAME):recording
+	@echo "⏳ Waiting for service to start..."
+	@sleep 10
+	@echo ""
+	@echo "🧪 Testing endpoints..."
+	@echo "RTSP: rtsp://localhost:8554"
+	@echo "Web UI: http://localhost:8888"
+	@echo "API: http://localhost:9997/v3/paths/list"
+	@echo ""
+	@echo "🛑 To stop test: docker stop $(CONTAINER_NAME)-recording-test"
+
+recording-web-player: ## 🎮 Create HTML5 video player for recorded streams
+	@echo "🎮 Creating HTML5 Player for Stream Scrubbing"
+	@echo "=============================================="
+	@echo "Creating stream player HTML file..."
+	@echo '<!DOCTYPE html>' > stream-player.html
+	@echo '<html lang="en">' >> stream-player.html
+	@echo '<head>' >> stream-player.html
+	@echo '    <meta charset="UTF-8">' >> stream-player.html
+	@echo '    <meta name="viewport" content="width=device-width, initial-scale=1.0">' >> stream-player.html
+	@echo '    <title>MediaMTX Stream Player with Scrubbing</title>' >> stream-player.html
+	@echo '    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>' >> stream-player.html
+	@echo '    <style>' >> stream-player.html
+	@echo '        body { font-family: Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; background: #1a1a1a; color: white; }' >> stream-player.html
+	@echo '        .player-container { background: #2a2a2a; border-radius: 10px; padding: 20px; margin-bottom: 20px; }' >> stream-player.html
+	@echo '        video { width: 100%; max-width: 800px; border-radius: 5px; }' >> stream-player.html
+	@echo '        .controls { margin-top: 15px; }' >> stream-player.html
+	@echo '        .url-input { width: 100%; max-width: 600px; padding: 10px; margin: 10px 0; border: 1px solid #555; border-radius: 5px; background: #333; color: white; }' >> stream-player.html
+	@echo '        button { background: #007bff; color: white; border: none; padding: 10px 20px; margin: 5px; border-radius: 5px; cursor: pointer; }' >> stream-player.html
+	@echo '        button:hover { background: #0056b3; }' >> stream-player.html
+	@echo '        .info { background: #333; padding: 15px; border-radius: 5px; margin-top: 20px; }' >> stream-player.html
+	@echo '        .status { margin-top: 10px; padding: 10px; border-radius: 5px; }' >> stream-player.html
+	@echo '        .status.success { background: #d4edda; color: #155724; }' >> stream-player.html
+	@echo '        .status.error { background: #f8d7da; color: #721c24; }' >> stream-player.html
+	@echo '    </style>' >> stream-player.html
+	@echo '</head>' >> stream-player.html
+	@echo '<body>' >> stream-player.html
+	@echo '    <h1>🎬 MediaMTX Stream Player</h1>' >> stream-player.html
+	@echo '    <div class="player-container">' >> stream-player.html
+	@echo '        <h2>Live Stream with Scrubbing</h2>' >> stream-player.html
+	@echo '        <video id="video" controls>' >> stream-player.html
+	@echo '            Your browser does not support the video tag.' >> stream-player.html
+	@echo '        </video>' >> stream-player.html
+	@echo '        <div class="controls">' >> stream-player.html
+	@echo '            <input type="text" id="streamUrl" class="url-input" ' >> stream-player.html
+	@echo '                   placeholder="Enter HLS stream URL" ' >> stream-player.html
+	@echo '                   value="http://stream.racetrackstreaming.com:8888/rpicam/index.m3u8">' >> stream-player.html
+	@echo '            <br>' >> stream-player.html
+	@echo '            <button onclick="loadStream()">Load Stream</button>' >> stream-player.html
+	@echo '            <button onclick="togglePlayPause()">Play/Pause</button>' >> stream-player.html
+	@echo '            <button onclick="seekBackward()">⏪ -10s</button>' >> stream-player.html
+	@echo '            <button onclick="seekForward()">⏩ +10s</button>' >> stream-player.html
+	@echo '            <button onclick="toggleMute()">🔊 Mute</button>' >> stream-player.html
+	@echo '        </div>' >> stream-player.html
+	@echo '        <div id="status" class="status" style="display: none;"></div>' >> stream-player.html
+	@echo '    </div>' >> stream-player.html
+	@echo '    <script>' >> stream-player.html
+	@echo '        const video = document.getElementById("video");' >> stream-player.html
+	@echo '        const streamUrlInput = document.getElementById("streamUrl");' >> stream-player.html
+	@echo '        const statusDiv = document.getElementById("status");' >> stream-player.html
+	@echo '        let hls = null;' >> stream-player.html
+	@echo '        function loadStream() {' >> stream-player.html
+	@echo '            const url = streamUrlInput.value.trim();' >> stream-player.html
+	@echo '            if (!url) return;' >> stream-player.html
+	@echo '            if (hls) hls.destroy();' >> stream-player.html
+	@echo '            if (Hls.isSupported()) {' >> stream-player.html
+	@echo '                hls = new Hls();' >> stream-player.html
+	@echo '                hls.loadSource(url);' >> stream-player.html
+	@echo '                hls.attachMedia(video);' >> stream-player.html
+	@echo '            } else if (video.canPlayType("application/vnd.apple.mpegurl")) {' >> stream-player.html
+	@echo '                video.src = url;' >> stream-player.html
+	@echo '            }' >> stream-player.html
+	@echo '        }' >> stream-player.html
+	@echo '        function togglePlayPause() { video.paused ? video.play() : video.pause(); }' >> stream-player.html
+	@echo '        function seekBackward() { video.currentTime = Math.max(0, video.currentTime - 10); }' >> stream-player.html
+	@echo '        function seekForward() { video.currentTime = Math.min(video.duration, video.currentTime + 10); }' >> stream-player.html
+	@echo '        function toggleMute() { video.muted = !video.muted; }' >> stream-player.html
+	@echo '        window.addEventListener("load", function() { if (streamUrlInput.value) setTimeout(loadStream, 1000); });' >> stream-player.html
+	@echo '    </script>' >> stream-player.html
+	@echo '</body>' >> stream-player.html
+	@echo '</html>' >> stream-player.html
+	@echo "✅ HTML5 player created: stream-player.html"
+	@echo ""
+	@echo "🌐 Open in browser: file://$$(pwd)/stream-player.html"
+	@echo ""
+	@echo "🎯 Features:"
+	@echo "   • Full timeline scrubbing/seeking"
+	@echo "   • Keyboard controls (Space, arrows)"
+	@echo "   • Live stream with ~10 second history"
+	@echo "   • Works with any HLS-compatible browser"
+
+recording-clean: ## 🧹 Clean up recording files and test containers
+	@echo "🧹 Cleaning up recording files..."
+	@rm -rf recordings/
+	@rm -f recording-config.yml
+	@echo "🐳 Stopping test containers..."
+	@-docker stop $(CONTAINER_NAME)-recording-test 2>/dev/null || true
+	@-docker rm $(CONTAINER_NAME)-recording-test 2>/dev/null || true
+	@echo "✅ Recording cleanup complete"
