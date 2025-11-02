@@ -81,6 +81,11 @@ const LivePreview = ({ socket }) => {
         }
       });
 
+      socket.on('preview-quality-changed', (quality) => {
+        console.log('✅ Preview quality changed to:', quality);
+        setQuality(quality);
+      });
+
       // Request initial preview stream
       console.log('🚀 LivePreview requesting initial preview stream...');
       socket.emit('get-preview-stream');
@@ -90,6 +95,7 @@ const LivePreview = ({ socket }) => {
         socket.off('camera-switched');
         socket.off('preview-stats');
         socket.off('preview-error');
+        socket.off('preview-quality-changed');
       };
     }
   }, [socket]);

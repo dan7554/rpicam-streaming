@@ -66,10 +66,36 @@ const CommentaryControl = () => {
           setAudioLevel(level);
         }
       });
+
+      // Listen for commentary control confirmations
+      socket.on('microphone-toggled', (data) => {
+        console.log('🎤 Microphone toggled:', data);
+      });
+
+      socket.on('commentary-volume-changed', (data) => {
+        console.log('🔊 Commentary volume changed:', data);
+      });
+
+      socket.on('commentary-recording-started', (data) => {
+        console.log('🎙️ Commentary recording started:', data);
+      });
+
+      socket.on('commentary-recording-stopped', (data) => {
+        console.log('⏹️ Commentary recording stopped:', data);
+      });
+
+      socket.on('commentary-toggled', (data) => {
+        console.log('📺 Commentary toggled:', data);
+      });
       
       return () => {
         socket.off('commentary-stats');
         socket.off('audio-level');
+        socket.off('microphone-toggled');
+        socket.off('commentary-volume-changed');
+        socket.off('commentary-recording-started');
+        socket.off('commentary-recording-stopped');
+        socket.off('commentary-toggled');
       };
     }
   }, [socket, setAudioLevel]);

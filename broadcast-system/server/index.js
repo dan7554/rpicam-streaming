@@ -58,7 +58,7 @@ class BroadcastServer {
     // API Routes
     this.app.use('/api/cameras', cameraRoutes(this.cameraManager, this.io));
     this.app.use('/api/scenes', sceneRoutes(this.sceneComposer, this.io));
-    this.app.use('/api/stream', streamRoutes(this.streamManager, this.io));
+    this.app.use('/api/streaming/streams', streamRoutes(this.streamManager, this.io));
     this.app.use('/api/config', configRoutes());
 
     // Health check
@@ -164,7 +164,7 @@ class BroadcastServer {
 
       // Audio level monitoring
       socket.on('audio-level', (data) => {
-        this.io.emit('audio-level-update', data);
+        this.io.emit('audio-level', data);
       });
 
       // Preview controls
@@ -204,6 +204,51 @@ class BroadcastServer {
             socket.emit('preview-stats', stats);
           }
         });
+      });
+
+      // Preview quality and stream controls
+      socket.on('change-preview-quality', (quality) => {
+        console.log('🎛️ Changing preview quality to:', quality);
+        // This could be implemented to request different quality streams
+        // For now, just acknowledge the request
+        socket.emit('preview-quality-changed', quality);
+      });
+
+      socket.on('refresh-preview-stream', () => {
+        console.log('🔄 Refreshing preview stream');
+        // Re-emit the current preview stream URL
+        const cameras = this.cameraManager.getCameras();
+        const activeCamera = cameras.find(cam => cam.status === 'online');
+        if (activeCamera) {
+          const streamUrl = this.cameraManager.getPreviewUrl(activeCamera.id);
+          socket.emit('preview-stream-url', streamUrl);
+        }
+      });
+
+      // Commentary controls
+      socket.on('toggle-microphone', (enabled) => {
+        console.log('🎤 Toggling microphone:', enabled);
+        this.io.emit('microphone-toggled', { enabled, socketId: socket.id });
+      });
+
+      socket.on('set-commentary-volume', (volume) => {
+        console.log('🔊 Setting commentary volume:', volume);
+        this.io.emit('commentary-volume-changed', { volume, socketId: socket.id });
+      });
+
+      socket.on('start-commentary-recording', () => {
+        console.log('🎙️ Starting commentary recording');
+        this.io.emit('commentary-recording-started', { socketId: socket.id });
+      });
+
+      socket.on('stop-commentary-recording', () => {
+        console.log('⏹️ Stopping commentary recording');
+        this.io.emit('commentary-recording-stopped', { socketId: socket.id });
+      });
+
+      socket.on('toggle-commentary', (enabled) => {
+        console.log('📺 Toggling commentary:', enabled);
+        this.io.emit('commentary-toggled', { enabled, socketId: socket.id });
       });
 
       // Disconnect handling
@@ -263,6 +308,15 @@ class BroadcastServer {
     setInterval(async () => {
       const cameraStatus = await this.cameraManager.checkHealth();
       this.io.emit('camera-health', cameraStatus);
+      
+      // Also emit individual camera status changes
+      const cameras = this.cameraManager.getCameras();
+      this.io.emit('cameras-updated', cameras);
+      
+      // Emit status changes for each camera
+      cameras.forEach(camera => {
+        this.io.emit('camera-status-changed', camera.id, camera.status);
+      });
     }, 30000);
 
     // Monitor stream health every 10 seconds
@@ -282,6 +336,12 @@ class BroadcastServer {
         }
       }
     }, 5000);
+
+    // Monitor commentary stats every 2 seconds
+    setInterval(() => {
+      const commentaryStats = this.commentaryManager.getStats();
+      this.io.emit('commentary-stats', commentaryStats);
+    }, 2000);
 
     // Monitor system resources every 60 seconds
     setInterval(() => {
