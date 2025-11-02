@@ -28,7 +28,7 @@ class BroadcastServer {
     });
 
     this.port = process.env.PORT || 3001;
-    this.mediamtxUrl = process.env.MEDIAMTX_URL || 'http://localhost:8888';
+    this.mediamtxUrl = process.env.MEDIAMTX_URL || 'https://192.168.50.208:8889';
     
     // Initialize services
     this.cameraManager = new CameraManager(this.mediamtxUrl);

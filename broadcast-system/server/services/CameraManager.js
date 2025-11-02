@@ -1,13 +1,24 @@
 const axios = require('axios');
+const https = require('https');
 const { v4: uuidv4 } = require('uuid');
 
 class CameraManager {
   constructor(mediamtxUrl) {
     this.mediamtxUrl = mediamtxUrl;
+    this.mediamtxApiUrl = 'https://192.168.50.208:9997'; // Use HTTPS for API
+    this.mediamtxHost = '192.168.50.208'; // Host for URLs
     this.cameras = new Map();
     this.activeCameras = new Set();
     this.previewCache = new Map();
     this.healthCheckInterval = null;
+    
+    // Configure axios to handle self-signed certificates
+    this.axiosConfig = {
+      httpsAgent: new https.Agent({
+        rejectUnauthorized: false // Accept self-signed certificates
+      }),
+      timeout: 5000
+    };
   }
 
   async initialize() {
@@ -84,10 +95,13 @@ class CameraManager {
 
   async discoverExistingStreams() {
     try {
-      const response = await axios.get(`${this.mediamtxUrl}/v3/paths/list`);
-      const paths = response.data.items || {};
+      const response = await axios.get(`${this.mediamtxApiUrl}/v3/paths/list`, this.axiosConfig);
+      const paths = response.data.items || [];
       
-      for (const [pathName, pathInfo] of Object.entries(paths)) {
+      // The response is now an array of path objects, not a key-value object
+      for (const pathInfo of paths) {
+        const pathName = pathInfo.name;
+        
         // Check if we already have this camera configured
         if (!this.cameras.has(pathName)) {
           // Auto-discover new camera
@@ -95,14 +109,23 @@ class CameraManager {
             id: pathName,
             name: `Auto-discovered: ${pathName}`,
             type: 'webrtc',
-            url: `${this.mediamtxUrl.replace('8888', '8889')}/${pathName}/whep`,
-            rtspUrl: `${this.mediamtxUrl.replace('http', 'rtsp').replace('8888', '8554')}/${pathName}`,
+            url: `https://${this.mediamtxHost}:8889/${pathName}/`,
+            rtspUrl: `rtsp://${this.mediamtxHost}:8554/${pathName}`,
             enabled: true,
             autodiscovered: true,
-            position: { x: 0, y: 0, width: 1920, height: 1080 }
+            position: { x: 0, y: 0, width: 1920, height: 1080 },
+            status: pathInfo.ready ? 'online' : 'offline',
+            lastSeen: pathInfo.readyTime || new Date().toISOString()
           };
           
           this.addCamera(discoveredCamera);
+        } else {
+          // Update existing camera status
+          const camera = this.cameras.get(pathName);
+          if (camera) {
+            camera.status = pathInfo.ready ? 'online' : 'offline';
+            camera.lastSeen = pathInfo.readyTime || new Date().toISOString();
+          }
         }
       }
     } catch (error) {
@@ -120,8 +143,8 @@ class CameraManager {
       enabled: cameraConfig.enabled !== false,
       position: cameraConfig.position || { x: 0, y: 0, width: 1920, height: 1080 },
       settings: cameraConfig.settings || {},
-      status: 'disconnected',
-      lastSeen: null,
+      status: cameraConfig.status || 'offline',
+      lastSeen: cameraConfig.lastSeen || null,
       bitrate: 0,
       framerate: 0,
       resolution: '',
@@ -149,11 +172,20 @@ class CameraManager {
   }
 
   getCameras() {
-    return Array.from(this.cameras.values());
+    return Array.from(this.cameras.values()).map(camera => ({
+      ...camera,
+      previewUrl: this.getPreviewUrl(camera.id)
+    }));
   }
 
   getCamera(cameraId) {
-    return this.cameras.get(cameraId);
+    const camera = this.cameras.get(cameraId);
+    if (!camera) return null;
+    
+    return {
+      ...camera,
+      previewUrl: this.getPreviewUrl(cameraId)
+    };
   }
 
   async switchCamera(cameraId) {
@@ -188,7 +220,7 @@ class CameraManager {
       case 'webrtc':
         return camera.url;
       case 'rtsp':
-        return camera.rtspUrl;
+        return camera.rtspUrl || camera.url;
       case 'hls':
         return camera.url;
       default:
@@ -204,10 +236,26 @@ class CameraManager {
       // For WebRTC cameras, check if the path exists in MediaMTX
       if (camera.type === 'webrtc') {
         const pathName = camera.url.split('/').slice(-2, -1)[0];
-        const response = await axios.get(`${this.mediamtxUrl}/v3/paths/get/${pathName}`);
-        const isActive = response.data.sourceReady === true;
+        const response = await axios.get(`${this.mediamtxApiUrl}/v3/paths/get/${pathName}`, this.axiosConfig);
+        const isActive = response.data.ready === true;
         
-        camera.status = isActive ? 'connected' : 'disconnected';
+        console.log('webrtc Camera Health Check Response:', response.data);
+
+        camera.status = isActive ? 'online' : 'offline';
+        camera.lastSeen = new Date().toISOString();
+        
+        return isActive;
+      }
+
+      // For RTSP cameras, check MediaMTX API
+      if (camera.type === 'rtsp') {
+        const pathName = camera.url.split('/').pop();
+        const response = await axios.get(`${this.mediamtxApiUrl}/v3/paths/get/${pathName}`, this.axiosConfig);
+        const isActive = response.data.ready === true;
+
+        console.log('RTSP Camera Health Check Response:', response.data);
+        
+        camera.status = isActive ? 'online' : 'offline';
         camera.lastSeen = new Date().toISOString();
         
         return isActive;
@@ -218,6 +266,7 @@ class CameraManager {
       
     } catch (error) {
       camera.status = 'error';
+      console.error(`Health check failed for camera ${cameraId}:`, error.message);
       return false;
     }
   }
@@ -245,8 +294,9 @@ class CameraManager {
     return {
       totalCameras: this.cameras.size,
       activeCameras: this.activeCameras.size,
-      connectedCameras: Array.from(this.cameras.values()).filter(c => c.status === 'connected').length,
-      mediamtxUrl: this.mediamtxUrl
+      connectedCameras: Array.from(this.cameras.values()).filter(c => c.status === 'online').length,
+      mediamtxUrl: this.mediamtxUrl,
+      mediamtxApiUrl: this.mediamtxApiUrl
     };
   }
 
@@ -258,13 +308,13 @@ class CameraManager {
     try {
       if (camera.type === 'webrtc') {
         const pathName = camera.url.split('/').slice(-2, -1)[0];
-        const response = await axios.get(`${this.mediamtxUrl}/v3/paths/get/${pathName}`);
+        const response = await axios.get(`${this.mediamtxApiUrl}/v3/paths/get/${pathName}`, this.axiosConfig);
         const pathData = response.data;
 
         return {
           bitrate: pathData.bytesReceived || 0,
           readers: pathData.readers || 0,
-          sourceReady: pathData.sourceReady || false,
+          ready: pathData.ready || false,
           lastUpdate: new Date().toISOString()
         };
       }

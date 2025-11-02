@@ -55,7 +55,7 @@ authInternalUsers:
   # Username. 'any' means any user, including anonymous ones.
   - user: any
     # Password. Not used in case of 'any' user.
-    pass:
+    pass: 
     # IPs or networks allowed to use this user. An empty list means any IP.
     ips: []
     # List of permissions.
@@ -69,6 +69,8 @@ authInternalUsers:
       - action: read
         path:
       - action: playback
+        path:
+      - action: api
         path:
 
     # Default administrator.
@@ -146,7 +148,7 @@ api: yes
 # Address of the Control API listener.
 apiAddress: :9997
 # Enable TLS/HTTPS on the Control API server.
-apiEncryption: no
+apiEncryption: yes
 # Path to the server key. This is needed only when encryption is yes.
 # This can be generated with:
 # openssl genrsa -out server.key 2048

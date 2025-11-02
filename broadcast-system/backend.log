@@ -1,0 +1,63 @@
+
+> racetrack-broadcast-system@1.0.0 start
+> node server/index.js
+
+🎥 Racetrack Broadcast System running on port 3001
+📡 MediaMTX URL: https://192.168.50.208:8889
+🌐 Admin Dashboard: http://localhost:3001
+🔧 API Base URL: http://localhost:3001/api
+🎛️  WebSocket: http://localhost:3001
+Camera Manager initialized
+Scene Composer initialized
+Stream Manager initialized
+Audio mixer initialized
+Commentary Manager initialized
+Health check failed for camera testsrc: Request failed with status code 404
+webrtc Camera Health Check Response: {
+  name: 'rpicam',
+  confName: 'rpicam',
+  source: { type: 'rtspSession', id: 'ba52acaf-d015-469e-8cef-b3a31954f1fa' },
+  ready: true,
+  readyTime: '2025-11-01T18:26:50.641718258Z',
+  tracks: [ 'H264' ],
+  bytesReceived: 58545896,
+  bytesSent: 0,
+  readers: []
+}
+RTSP Camera Health Check Response: {
+  name: 'rpicam',
+  confName: 'rpicam',
+  source: { type: 'rtspSession', id: 'ba52acaf-d015-469e-8cef-b3a31954f1fa' },
+  ready: true,
+  readyTime: '2025-11-01T18:26:50.641718258Z',
+  tracks: [ 'H264' ],
+  bytesReceived: 58545896,
+  bytesSent: 0,
+  readers: []
+}
+Health check failed for camera testsrc: Request failed with status code 404
+webrtc Camera Health Check Response: {
+  name: 'rpicam',
+  confName: 'rpicam',
+  source: { type: 'rtspSession', id: 'ba52acaf-d015-469e-8cef-b3a31954f1fa' },
+  ready: true,
+  readyTime: '2025-11-01T18:26:50.641718258Z',
+  tracks: [ 'H264' ],
+  bytesReceived: 58546667,
+  bytesSent: 0,
+  readers: []
+}
+RTSP Camera Health Check Response: {
+  name: 'rpicam',
+  confName: 'rpicam',
+  source: { type: 'rtspSession', id: 'ba52acaf-d015-469e-8cef-b3a31954f1fa' },
+  ready: true,
+  readyTime: '2025-11-01T18:26:50.641718258Z',
+  tracks: [ 'H264' ],
+  bytesReceived: 58546667,
+  bytesSent: 0,
+  readers: []
+}
+SIGTERM received
+Shutting down broadcast server...
+Server closed

@@ -1,1 +1,1 @@
-   sudo systemctl start rpicam-stream.service
+   sudo systemctl stop rpicam-stream.service

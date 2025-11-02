@@ -1,12 +1,12 @@
 {
   "scenes": [
     {
-      "id": "single-cam",
-      "name": "Single Camera",
+      "id": "single-cam-local",
+      "name": "Single Camera (Local)",
       "layout": "fullscreen",
       "cameras": [
         {
-          "cameraId": "rpicam",
+          "cameraId": "rpicam-local",
           "position": {
             "x": 0,
             "y": 0,
@@ -21,15 +21,21 @@
         "commentary": true,
         "ambient": false,
         "music": false
-      }
+      },
+      "transitions": {
+        "type": "cut",
+        "duration": 0
+      },
+      "created": "2025-10-31T18:29:05.492Z",
+      "lastUsed": null
     },
     {
-      "id": "picture-in-picture",
-      "name": "Picture in Picture",
-      "layout": "pip",
+      "id": "single-cam-remote",
+      "name": "Single Camera (Remote RPi)",
+      "layout": "fullscreen",
       "cameras": [
         {
-          "cameraId": "rpicam",
+          "cameraId": "rpicam-remote",
           "position": {
             "x": 0,
             "y": 0,
@@ -37,28 +43,18 @@
             "height": 1080
           },
           "zIndex": 1
-        },
-        {
-          "cameraId": "rpicam",
-          "position": {
-            "x": 1440,
-            "y": 80,
-            "width": 400,
-            "height": 225
-          },
-          "zIndex": 2
         }
       ],
       "overlays": [
         {
           "type": "text",
-          "content": "LIVE",
+          "content": "RPi Camera Live",
           "position": {
             "x": 50,
             "y": 50
           },
           "style": {
-            "color": "red",
+            "color": "white",
             "fontSize": "24px",
             "fontWeight": "bold"
           }
@@ -66,50 +62,66 @@
       ],
       "audio": {
         "commentary": true,
-        "ambient": true,
+        "ambient": false,
         "music": false
-      }
+      },
+      "transitions": {
+        "type": "fade",
+        "duration": 500
+      },
+      "created": "2025-10-31T18:29:05.492Z",
+      "lastUsed": null
     },
     {
-      "id": "split-screen",
-      "name": "Split Screen",
-      "layout": "split",
+      "id": "single-cam-cloud",
+      "name": "Single Camera (Cloud)",
+      "layout": "fullscreen",
       "cameras": [
         {
-          "cameraId": "rpicam",
+          "cameraId": "rpicam-cloud",
           "position": {
             "x": 0,
             "y": 0,
-            "width": 960,
-            "height": 1080
-          },
-          "zIndex": 1
-        },
-        {
-          "cameraId": "rpicam",
-          "position": {
-            "x": 960,
-            "y": 0,
-            "width": 960,
+            "width": 1920,
             "height": 1080
           },
           "zIndex": 1
         }
       ],
-      "overlays": [],
+      "overlays": [
+        {
+          "type": "text",
+          "content": "Cloud Stream",
+          "position": {
+            "x": 50,
+            "y": 50
+          },
+          "style": {
+            "color": "cyan",
+            "fontSize": "24px",
+            "fontWeight": "bold"
+          }
+        }
+      ],
       "audio": {
         "commentary": true,
         "ambient": false,
         "music": false
-      }
+      },
+      "transitions": {
+        "type": "slide",
+        "duration": 750
+      },
+      "created": "2025-10-31T18:29:05.492Z",
+      "lastUsed": null
     },
     {
-      "id": "quad-view",
-      "name": "Quad View",
+      "id": "multi-cam",
+      "name": "Multi-Camera View",
       "layout": "quad",
       "cameras": [
         {
-          "cameraId": "rpicam",
+          "cameraId": "rpicam-local",
           "position": {
             "x": 0,
             "y": 0,
@@ -119,7 +131,7 @@
           "zIndex": 1
         },
         {
-          "cameraId": "rpicam",
+          "cameraId": "rpicam-remote",
           "position": {
             "x": 960,
             "y": 0,
@@ -129,7 +141,7 @@
           "zIndex": 1
         },
         {
-          "cameraId": "rpicam",
+          "cameraId": "rpicam-cloud",
           "position": {
             "x": 0,
             "y": 540,
@@ -139,7 +151,7 @@
           "zIndex": 1
         },
         {
-          "cameraId": "rpicam",
+          "cameraId": "rpicam-local",
           "position": {
             "x": 960,
             "y": 540,
@@ -152,7 +164,7 @@
       "overlays": [
         {
           "type": "text",
-          "content": "Multi-Camera View",
+          "content": "Multi-Source Broadcast",
           "position": {
             "x": 960,
             "y": 20
@@ -160,6 +172,46 @@
           "style": {
             "color": "white",
             "fontSize": "20px",
+            "textAlign": "center",
+            "fontWeight": "bold"
+          }
+        },
+        {
+          "type": "text",
+          "content": "Local",
+          "position": {
+            "x": 480,
+            "y": 270
+          },
+          "style": {
+            "color": "yellow",
+            "fontSize": "16px",
+            "textAlign": "center"
+          }
+        },
+        {
+          "type": "text",
+          "content": "Remote",
+          "position": {
+            "x": 1440,
+            "y": 270
+          },
+          "style": {
+            "color": "lime",
+            "fontSize": "16px",
+            "textAlign": "center"
+          }
+        },
+        {
+          "type": "text",
+          "content": "Cloud",
+          "position": {
+            "x": 480,
+            "y": 810
+          },
+          "style": {
+            "color": "cyan",
+            "fontSize": "16px",
             "textAlign": "center"
           }
         }
@@ -168,7 +220,13 @@
         "commentary": true,
         "ambient": false,
         "music": false
-      }
+      },
+      "transitions": {
+        "type": "cut",
+        "duration": 0
+      },
+      "created": "2025-10-31T18:29:05.493Z",
+      "lastUsed": null
     }
   ]
 }

@@ -4,8 +4,8 @@
       "id": "rpicam",
       "name": "Raspberry Pi Camera",
       "type": "webrtc",
-      "url": "http://localhost:8889/rpicam/whep",
-      "rtspUrl": "rtsp://localhost:8554/rpicam",
+      "url": "https://192.168.50.208:8889/rpicam/",
+      "rtspUrl": "rtsp://192.168.50.208:8554/rpicam",
       "enabled": true,
       "position": {
         "x": 0,
@@ -14,10 +14,16 @@
         "height": 1080
       },
       "settings": {
-        "resolution": "1920x1080",
+        "resolution": "1280x720",
         "framerate": 30,
-        "bitrate": 5000
-      }
+        "bitrate": 3000
+      },
+      "status": "online",
+      "lastSeen": "2025-11-01T19:07:07.957Z",
+      "bitrate": 0,
+      "framerate": 0,
+      "resolution": "",
+      "autodiscovered": false
     }
   ]
 }

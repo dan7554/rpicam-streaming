@@ -28,6 +28,7 @@ import {
   Delete,
   Edit
 } from '@mui/icons-material';
+import WebRTCPreview from './WebRTCPreview';
 
 const CameraManager = ({ socket }) => {
   const [cameras, setCameras] = useState([]);
@@ -79,6 +80,9 @@ const CameraManager = ({ socket }) => {
       const response = await fetch('/api/cameras');
       const result = await response.json();
       const data = result.data || result; // Handle both response formats
+
+      console.log('data', data)
+
       setCameras(Array.isArray(data) ? data : []);
     } catch (err) {
       setError('Failed to fetch cameras');
@@ -239,6 +243,8 @@ const CameraManager = ({ socket }) => {
             ...camera
           };
 
+          console.log('safeCamera', safeCamera);
+
           return (
             <Grid item xs={12} sm={6} md={4} key={safeCamera.id}>
               <Card 
@@ -259,13 +265,20 @@ const CameraManager = ({ socket }) => {
 
                   <div className="video-preview-container">
                     {safeCamera.status === 'online' ? (
-                      <video 
-                        className="video-preview"
-                        src={safeCamera.previewUrl}
-                        autoPlay
-                        muted
-                        onError={() => console.log('Video preview error for camera:', safeCamera.id)}
-                      />
+                      safeCamera.type === 'webrtc' ? (
+                        <WebRTCPreview 
+                          url={safeCamera.previewUrl}
+                          className="video-preview"
+                        />
+                      ) : (
+                        <video 
+                          className="video-preview"
+                          src={safeCamera.previewUrl}
+                          autoPlay
+                          muted
+                          onError={() => console.log('Video preview error for camera:', safeCamera.id)}
+                        />
+                      )
                     ) : (
                       <Box sx={{ 
                         display: 'flex', 

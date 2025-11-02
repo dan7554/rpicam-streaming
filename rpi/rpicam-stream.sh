@@ -4,7 +4,8 @@
 # This script runs the rpicam-vid command with automatic retry on failure
 
 # Configuration
-RTSP_SERVER="rtsp.racetrackstreaming.com:8554"  # RTSP endpoint with A record to ECS IP
+# RTSP_SERVER="rtsp.racetrackstreaming.com:8554"  # RTSP endpoint with A record to ECS IP
+RTSP_SERVER="192.168.50.208:8554"
 STREAM_NAME="rpicam"
 MAX_RETRIES=0  # 0 means infinite retries
 RETRY_DELAY=5  # seconds between retries

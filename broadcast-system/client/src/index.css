@@ -136,7 +136,7 @@ code {
   position: relative;
   width: 100%;
   height: 120px;
-  background: #000;
+  background: linear-gradient(135deg, #1a1a1a 0%, #2a2a2a 100%);
   border: 2px solid #333;
   border-radius: 8px;
   overflow: hidden;
@@ -155,14 +155,63 @@ code {
 
 .scene-camera-slot {
   position: absolute;
-  background: #333;
-  border: 1px solid #555;
+  background: rgba(255, 255, 255, 0.1);
+  border: 2px solid #666;
+  border-radius: 4px;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
+  font-size: 10px;
   color: #fff;
   overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+.scene-camera-slot:hover {
+  border-color: #1976d2;
+  background: rgba(25, 118, 210, 0.2);
+  transform: scale(1.02);
+  z-index: 20 !important;
+}
+
+.scene-camera-slot.main-slot {
+  border-color: #4caf50;
+  background: rgba(76, 175, 80, 0.1);
+}
+
+.scene-camera-slot.pip-slot {
+  border-color: #ff9800;
+  background: rgba(255, 152, 0, 0.15);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+
+.scene-camera-slot .slot-label {
+  font-weight: bold;
+  font-size: 9px;
+  color: #fff;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+  margin-bottom: 2px;
+  text-align: center;
+}
+
+.scene-camera-slot .slot-camera {
+  font-size: 8px;
+  color: #ccc;
+  text-align: center;
+  padding: 0 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  width: 100%;
+}
+
+.scene-camera-slot.main-slot .slot-label {
+  color: #4caf50;
+}
+
+.scene-camera-slot.pip-slot .slot-label {
+  color: #ff9800;
 }
 
 /* Camera grid styles */

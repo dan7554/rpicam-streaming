@@ -34,6 +34,7 @@ const SceneComposer = ({ socket }) => {
   const [scenes, setScenes] = useState([]);
   const [activeScene, setActiveScene] = useState(null);
   const [cameras, setCameras] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingScene, setEditingScene] = useState(null);
   const [sceneForm, setSceneForm] = useState({
@@ -46,6 +47,7 @@ const SceneComposer = ({ socket }) => {
 
   const sceneLayouts = [
     { id: 'single', name: 'Single Camera', slots: 1 },
+    { id: 'fullscreen', name: 'Full Screen', slots: 1 },
     { id: 'side-by-side', name: 'Side by Side', slots: 2 },
     { id: 'picture-in-picture', name: 'Picture in Picture', slots: 2 },
     { id: 'quad', name: 'Quad Split', slots: 4 },
@@ -64,7 +66,15 @@ const SceneComposer = ({ socket }) => {
 
   useEffect(() => {
     if (socket) {
-      socket.on('scenes-updated', setScenes);
+      socket.on('scenes-updated', (data) => {
+        if (Array.isArray(data)) {
+          setScenes(data);
+        } else if (data && Array.isArray(data.scenes)) {
+          setScenes(data.scenes);
+        } else {
+          console.error('Invalid scenes update data:', data);
+        }
+      });
       socket.on('active-scene-changed', setActiveScene);
       socket.on('cameras-updated', (data) => setCameras(Array.isArray(data) ? data : []));
       
@@ -83,11 +93,23 @@ const SceneComposer = ({ socket }) => {
 
   const fetchScenes = async () => {
     try {
+      setLoading(true);
       const response = await fetch('/api/scenes');
       const data = await response.json();
-      setScenes(data.data.scenes);
+      if (data.success && data.data && Array.isArray(data.data.scenes)) {
+        setScenes(data.data.scenes);
+        if (data.data.currentScene) {
+          setActiveScene(data.data.currentScene.id);
+        }
+      } else {
+        console.error('Invalid scenes response structure:', data);
+        setScenes([]);
+      }
     } catch (err) {
       console.error('Failed to fetch scenes:', err);
+      setScenes([]);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -185,57 +207,78 @@ const SceneComposer = ({ socket }) => {
     }
   };
 
-  const renderScenePreview = (scene) => {
-    const layout = sceneLayouts.find(l => l.id === scene.layout);
-    const sceneWidth = 240;
-    const sceneHeight = 135;
-
-    const getSlotPosition = (slotIndex, totalSlots, layoutType) => {
-      const positions = {
-        single: [{ x: 0, y: 0, w: 100, h: 100 }],
-        'side-by-side': [
-          { x: 0, y: 0, w: 50, h: 100 },
-          { x: 50, y: 0, w: 50, h: 100 }
-        ],
-        'picture-in-picture': [
-          { x: 0, y: 0, w: 100, h: 100 },
-          { x: 70, y: 70, w: 25, h: 25 }
-        ],
-        quad: [
-          { x: 0, y: 0, w: 50, h: 50 },
-          { x: 50, y: 0, w: 50, h: 50 },
-          { x: 0, y: 50, w: 50, h: 50 },
-          { x: 50, y: 50, w: 50, h: 50 }
-        ],
-        triple: [
-          { x: 0, y: 0, w: 50, h: 100 },
-          { x: 50, y: 0, w: 50, h: 50 },
-          { x: 50, y: 50, w: 50, h: 50 }
-        ]
-      };
-
-      return positions[layoutType]?.[slotIndex] || { x: 0, y: 0, w: 100, h: 100 };
+  // Utility function for slot positioning and labeling
+  const getSlotPosition = (slotIndex, totalSlots, layoutType) => {
+    const positions = {
+      single: [
+        { x: 0, y: 0, w: 100, h: 100 }
+      ],
+      'side-by-side': [
+        { x: 0, y: 0, w: 50, h: 100 },
+        { x: 50, y: 0, w: 50, h: 100 }
+      ],
+      'picture-in-picture': [
+        { x: 0, y: 0, w: 100, h: 100 }, // Main camera (full screen)
+        { x: 75, y: 75, w: 22, h: 22 }  // PiP camera (bottom right corner)
+      ],
+      quad: [
+        { x: 0, y: 0, w: 50, h: 50 },   // Top left
+        { x: 50, y: 0, w: 50, h: 50 },  // Top right
+        { x: 0, y: 50, w: 50, h: 50 },  // Bottom left
+        { x: 50, y: 50, w: 50, h: 50 }  // Bottom right
+      ],
+      triple: [
+        { x: 0, y: 0, w: 50, h: 100 },  // Left side (main)
+        { x: 50, y: 0, w: 50, h: 50 },  // Top right
+        { x: 50, y: 50, w: 50, h: 50 }  // Bottom right
+      ]
     };
+
+    return positions[layoutType]?.[slotIndex] || { x: 0, y: 0, w: 100, h: 100 };
+  };
+
+  const getSlotLabel = (slotIndex, layoutType) => {
+    const labels = {
+      single: ['Main'],
+      'side-by-side': ['Camera A', 'Camera B'],
+      'picture-in-picture': ['Main Camera', 'PiP'],
+      quad: ['Top Left', 'Top Right', 'Bottom Left', 'Bottom Right'],
+      triple: ['Main', 'Top Right', 'Bottom Right']
+    };
+
+    return labels[layoutType]?.[slotIndex] || `Slot ${slotIndex + 1}`;
+  };
+
+  const renderScenePreview = (scene) => {
+    const layout = sceneLayouts.find(l => l.id === scene.layout) || { id: 'single', name: 'Single Camera', slots: 1 };
 
     return (
       <div className="scene-layout-preview">
-        {Array.from({ length: layout?.slots || 1 }).map((_, index) => {
-          const position = getSlotPosition(index, layout?.slots || 1, scene.layout);
+        {Array.from({ length: layout.slots || 1 }).map((_, index) => {
+          const position = getSlotPosition(index, layout.slots || 1, scene.layout);
           const camera = scene.cameras?.[index];
-          const cameraInfo = cameras.find(c => c.id === camera?.cameraId);
+          const cameraInfo = cameras.find(c => c?.id === camera?.cameraId);
+          const isMainSlot = index === 0 && scene.layout === 'picture-in-picture';
+          const isPiPSlot = index === 1 && scene.layout === 'picture-in-picture';
 
           return (
             <div
               key={index}
-              className="scene-camera-slot"
+              className={`scene-camera-slot ${isMainSlot ? 'main-slot' : ''} ${isPiPSlot ? 'pip-slot' : ''}`}
               style={{
                 left: `${position.x}%`,
                 top: `${position.y}%`,
                 width: `${position.w}%`,
                 height: `${position.h}%`,
+                zIndex: isPiPSlot ? 10 : 1, // PiP should be on top
               }}
             >
-              {cameraInfo ? cameraInfo.name : `Slot ${index + 1}`}
+              <div className="slot-label">
+                {getSlotLabel(index, scene.layout)}
+              </div>
+              <div className="slot-camera">
+                {cameraInfo ? cameraInfo.name : 'No Camera'}
+              </div>
             </div>
           );
         })}
@@ -244,6 +287,16 @@ const SceneComposer = ({ socket }) => {
   };
 
   const selectedLayout = sceneLayouts.find(l => l.id === sceneForm.layout);
+  
+  if (loading) {
+    return (
+      <Paper sx={{ p: 2, backgroundColor: '#1d1d1d', border: '1px solid #333' }}>
+        <Typography variant="h6" component="h2" sx={{ color: 'white', textAlign: 'center' }}>
+          Loading scenes...
+        </Typography>
+      </Paper>
+    );
+  }
   
   return (
     <Paper sx={{ p: 2, backgroundColor: '#1d1d1d', border: '1px solid #333' }}>
@@ -262,7 +315,7 @@ const SceneComposer = ({ socket }) => {
       </Box>
 
       <Grid container spacing={2}>
-        {scenes?.map((scene) => (
+        {Array.isArray(scenes) && scenes.map((scene) => (
           <Grid item xs={12} sm={6} md={4} key={scene.id}>
             <Card 
               sx={{ 
@@ -293,7 +346,7 @@ const SceneComposer = ({ socket }) => {
                     {sceneLayouts.find(l => l.id === scene.layout)?.name}
                   </Typography>
                   <Typography variant="body2" sx={{ color: '#ccc', fontSize: '0.75rem' }}>
-                    {scene.cameras?.length || 0} cameras
+                    {scene.cameras?.filter(cam => cam?.cameraId && cam.cameraId !== '').length || 0} cameras assigned
                   </Typography>
                 </Box>
               </CardContent>
@@ -369,7 +422,16 @@ const SceneComposer = ({ socket }) => {
                 <InputLabel sx={{ color: '#ccc' }}>Layout</InputLabel>
                 <Select
                   value={sceneForm.layout}
-                  onChange={(e) => setSceneForm({ ...sceneForm, layout: e.target.value, cameras: [] })}
+                  onChange={(e) => {
+                    const newLayout = e.target.value;
+                    const layout = sceneLayouts.find(l => l.id === newLayout) || { slots: 1 };
+                    const newCameras = Array.from({ length: layout.slots || 1 }).map(() => ({ cameraId: '' }));
+                    setSceneForm({ 
+                      ...sceneForm, 
+                      layout: newLayout, 
+                      cameras: newCameras 
+                    });
+                  }}
                   sx={{
                     color: 'white',
                     '& .MuiOutlinedInput-notchedOutline': { borderColor: '#555' },
@@ -390,17 +452,23 @@ const SceneComposer = ({ socket }) => {
             {selectedLayout && selectedLayout.slots > 0 && (
               <Grid item xs={12}>
                 <Typography variant="h6" sx={{ color: 'white', mb: 2 }}>
-                  Camera Assignment
+                  Camera Assignment ({selectedLayout.slots} slots)
                 </Typography>
                 <Grid container spacing={2}>
                   {Array.from({ length: selectedLayout.slots }).map((_, index) => (
                     <Grid item xs={12} sm={6} key={index}>
                       <FormControl fullWidth>
-                        <InputLabel sx={{ color: '#ccc' }}>Slot {index + 1}</InputLabel>
+                        <InputLabel sx={{ color: '#ccc' }}>
+                          {getSlotLabel(index, sceneForm.layout)}
+                        </InputLabel>
                         <Select
                           value={sceneForm.cameras[index]?.cameraId || ''}
                           onChange={(e) => {
-                            const newCameras = [...sceneForm.cameras];
+                            const newCameras = [...(sceneForm.cameras || [])];
+                            // Ensure array is long enough
+                            while (newCameras.length <= index) {
+                              newCameras.push({ cameraId: '' });
+                            }
                             newCameras[index] = { cameraId: e.target.value };
                             setSceneForm({ ...sceneForm, cameras: newCameras });
                           }}
@@ -412,11 +480,11 @@ const SceneComposer = ({ socket }) => {
                           }}
                         >
                           <MenuItem value="">
-                            <em>None</em>
+                            <em>No Camera</em>
                           </MenuItem>
-                          {cameras.map((camera) => (
-                            <MenuItem key={camera?.id || `camera-${Math.random()}`} value={camera?.id || ''}>
-                              {camera?.name || 'Unknown Camera'}
+                          {Array.isArray(cameras) && cameras.filter(camera => camera && camera.id).map((camera) => (
+                            <MenuItem key={camera.id} value={camera.id}>
+                              {camera.name || `Camera ${camera.id}`}
                             </MenuItem>
                           ))}
                         </Select>
