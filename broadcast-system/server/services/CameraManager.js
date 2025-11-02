@@ -239,8 +239,6 @@ class CameraManager {
         const response = await axios.get(`${this.mediamtxApiUrl}/v3/paths/get/${pathName}`, this.axiosConfig);
         const isActive = response.data.ready === true;
         
-        console.log('webrtc Camera Health Check Response:', response.data);
-
         camera.status = isActive ? 'online' : 'offline';
         camera.lastSeen = new Date().toISOString();
         
@@ -252,8 +250,6 @@ class CameraManager {
         const pathName = camera.url.split('/').pop();
         const response = await axios.get(`${this.mediamtxApiUrl}/v3/paths/get/${pathName}`, this.axiosConfig);
         const isActive = response.data.ready === true;
-
-        console.log('RTSP Camera Health Check Response:', response.data);
         
         camera.status = isActive ? 'online' : 'offline';
         camera.lastSeen = new Date().toISOString();

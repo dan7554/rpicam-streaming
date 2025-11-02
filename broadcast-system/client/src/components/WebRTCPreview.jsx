@@ -13,22 +13,22 @@ const WebRTCPreview = ({ url }) => {
 
     const connect = async () => {
       try {
-       // console.log('WebRTCPreview','🚀 Starting WebRTC connection to:', url);
+        // console.log('WebRTCPreview','🚀 Starting WebRTC connection to:', url);
         setIsLoading(true);
         setError(null);
 
         // Clean up existing connection
         if (pcRef.current) {
-         // console.log('WebRTCPreview','🧹 Cleaning up existing peer connection');
+          // console.log('WebRTCPreview','🧹 Cleaning up existing peer connection');
           pcRef.current.close();
         }
 
         // Create WHEP URL
         const whepUrl = url.endsWith('/') ? url + 'whep' : url + '/whep';
-       // console.log('WebRTCPreview','🔗 WHEP URL:', whepUrl);
+        // console.log('WebRTCPreview','🔗 WHEP URL:', whepUrl);
 
         // Create peer connection
-       // console.log('WebRTCPreview','🌐 Creating RTCPeerConnection');
+        // console.log('WebRTCPreview','🌐 Creating RTCPeerConnection');
         const pc = new RTCPeerConnection({
           iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
           iceCandidatePoolSize: 10
@@ -37,28 +37,28 @@ const WebRTCPreview = ({ url }) => {
 
         // Add connection state logging
         pc.onconnectionstatechange = () => {
-         // console.log('WebRTCPreview','📡 Connection state:', pc.connectionState);
+          // console.log('WebRTCPreview','📡 Connection state:', pc.connectionState);
         };
 
         pc.oniceconnectionstatechange = () => {
-         // console.log('WebRTCPreview','🧊 ICE connection state:', pc.iceConnectionState);
+          // console.log('WebRTCPreview','🧊 ICE connection state:', pc.iceConnectionState);
         };
 
         pc.onicegatheringstatechange = () => {
-         // console.log('WebRTCPreview','🔍 ICE gathering state:', pc.iceGatheringState);
+          // console.log('WebRTCPreview','🔍 ICE gathering state:', pc.iceGatheringState);
         };
 
         // Handle incoming video stream
         pc.ontrack = (event) => {
-         // console.log('WebRTCPreview','📺 Received track:', event.track.kind, event.track.id);
+          // console.log('WebRTCPreview','📺 Received track:', event.track.kind, event.track.id);
           if (event.track.kind === 'video') {
             setIsLoading(false);
 
-           // console.log('WebRTCPreview','✅ Setting video stream to video element', videoRef.current);
+            // console.log('WebRTCPreview','✅ Setting video stream to video element', videoRef.current);
             if (videoRef.current) {
               videoRef.current.srcObject = new MediaStream([event.track]);
             } else {
-              console.warn('WebRTCPreview','⚠️ Video element not ready, will retry...');
+              console.warn('WebRTCPreview', '⚠️ Video element not ready, will retry...');
               // Retry after a short delay
               setTimeout(() => {
                 if (videoRef.current) {
@@ -70,29 +70,29 @@ const WebRTCPreview = ({ url }) => {
         };
 
         // Create and send offer
-       // console.log('WebRTCPreview','📝 Creating WebRTC offer');
+        // console.log('WebRTCPreview','📝 Creating WebRTC offer');
         const offer = await pc.createOffer({
           offerToReceiveVideo: true,
           offerToReceiveAudio: true
         });
-       // console.log('WebRTCPreview','🔧 Setting local description');
+        // console.log('WebRTCPreview','🔧 Setting local description');
         await pc.setLocalDescription(offer);
-       // console.log('WebRTCPreview','📤 SDP offer created, length:', offer.sdp.length);
-       
+        // console.log('WebRTCPreview','📤 SDP offer created, length:', offer.sdp.length);
+
         // Check if our offer has ICE credentials
         const offerHasIceUfrag = offer.sdp.includes('a=ice-ufrag:');
         const offerHasIcePwd = offer.sdp.includes('a=ice-pwd:');
-       // console.log('WebRTCPreview','🔍 Our offer validation - ice-ufrag:', offerHasIceUfrag, 'ice-pwd:', offerHasIcePwd);
-       // console.log('WebRTCPreview','📋 SDP offer:', offer.sdp);
+        // console.log('WebRTCPreview','🔍 Our offer validation - ice-ufrag:', offerHasIceUfrag, 'ice-pwd:', offerHasIcePwd);
+        // console.log('WebRTCPreview','📋 SDP offer:', offer.sdp);
 
-       // console.log('WebRTCPreview','🌐 Sending POST request to WHEP endpoint:', whepUrl);
+        // console.log('WebRTCPreview','🌐 Sending POST request to WHEP endpoint:', whepUrl);
         const response = await fetch(whepUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/sdp' },
           body: offer.sdp
         });
 
-       // console.log('WebRTCPreview','📨 WHEP response status:', response.status, response.statusText);
+        // console.log('WebRTCPreview','📨 WHEP response status:', response.status, response.statusText);
         if (!response.ok) {
           const errorText = await response.text();
           console.error('❌ WHEP request failed:', errorText);
@@ -100,21 +100,21 @@ const WebRTCPreview = ({ url }) => {
         }
 
         const answer = await response.text();
-       // console.log('WebRTCPreview','📥 Received SDP answer, length:', answer.length);
-      //  // console.log('WebRTCPreview','� Full SDP answer:', answer);
-       
+        // console.log('WebRTCPreview','📥 Received SDP answer, length:', answer.length);
+        //  // console.log('WebRTCPreview','� Full SDP answer:', answer);
+
         // Validate SDP answer has ICE credentials
         const hasIceUfrag = answer.includes('a=ice-ufrag:');
         const hasIcePwd = answer.includes('a=ice-pwd:');
-       // console.log('WebRTCPreview','🔍 SDP validation - ice-ufrag:', hasIceUfrag, 'ice-pwd:', hasIcePwd);
-        
+        // console.log('WebRTCPreview','🔍 SDP validation - ice-ufrag:', hasIceUfrag, 'ice-pwd:', hasIcePwd);
+
         if (!hasIceUfrag || !hasIcePwd) {
           throw new Error('Invalid SDP answer: Missing ICE credentials (ice-ufrag or ice-pwd)');
         }
-        
-       // console.log('WebRTCPreview','�🔧 Setting remote description');
+
+        // console.log('WebRTCPreview','�🔧 Setting remote description');
         await pc.setRemoteDescription({ type: 'answer', sdp: answer });
-       // console.log('WebRTCPreview','✅ WebRTC setup complete, waiting for tracks...');
+        // console.log('WebRTCPreview','✅ WebRTC setup complete, waiting for tracks...');
 
       } catch (err) {
         console.error('💥 WebRTC connection error:', err);

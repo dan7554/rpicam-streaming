@@ -6,7 +6,6 @@ import {
   Typography,
   Button,
   IconButton,
-  Slider,
   Chip,
   Grid,
   FormControl,
@@ -15,24 +14,13 @@ import {
   MenuItem
 } from '@mui/material';
 import {
-  PlayArrow,
-  Pause,
-  VolumeUp,
-  VolumeOff,
-  Fullscreen,
-  FullscreenExit,
   Settings,
   Refresh,
-  AspectRatio,
   HighQuality
 } from '@mui/icons-material';
+import WebRTCPreview from './WebRTCPreview';
 
 const LivePreview = ({ socket }) => {
-  const videoRef = useRef(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [volume, setVolume] = useState(80);
-  const [isMuted, setIsMuted] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
   const [streamUrl, setStreamUrl] = useState('');
   const [quality, setQuality] = useState('1080p');
   const [aspectRatio, setAspectRatio] = useState('16:9');
@@ -60,12 +48,18 @@ const LivePreview = ({ socket }) => {
   useEffect(() => {
     if (socket) {
       socket.on('preview-stream-url', (url) => {
+        console.log('📺 LivePreview received preview-stream-url:', url);
         if (url && typeof url === 'string') {
           setStreamUrl(url);
-          if (videoRef.current) {
-            videoRef.current.src = url;
-          }
+          console.log('✅ Stream URL updated to:', url);
         }
+      });
+
+      socket.on('camera-switched', (data) => {
+        console.log('🔄 LivePreview received camera-switched:', data);
+        // When a camera is switched, request the new preview stream
+        console.log('📡 Requesting new preview stream...');
+        socket.emit('get-preview-stream');
       });
 
       socket.on('preview-stats', (streamStats) => {
@@ -81,95 +75,28 @@ const LivePreview = ({ socket }) => {
       });
 
       socket.on('preview-error', (errorMsg) => {
+        console.error('❌ LivePreview received error:', errorMsg);
         if (errorMsg) {
           setError(String(errorMsg));
         }
       });
 
       // Request initial preview stream
+      console.log('🚀 LivePreview requesting initial preview stream...');
       socket.emit('get-preview-stream');
 
       return () => {
         socket.off('preview-stream-url');
+        socket.off('camera-switched');
         socket.off('preview-stats');
         socket.off('preview-error');
       };
     }
   }, [socket]);
 
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
+  // Remove the video-specific useEffect since we're using WebRTCPreview
 
-    const handlePlay = () => setIsPlaying(true);
-    const handlePause = () => setIsPlaying(false);
-    const handleError = (e) => {
-      console.error('Video error:', e);
-      setError('Failed to load video stream');
-      setIsPlaying(false);
-    };
-
-    video.addEventListener('play', handlePlay);
-    video.addEventListener('pause', handlePause);
-    video.addEventListener('error', handleError);
-
-    return () => {
-      video.removeEventListener('play', handlePlay);
-      video.removeEventListener('pause', handlePause);
-      video.removeEventListener('error', handleError);
-    };
-  }, []);
-
-  const handlePlayPause = () => {
-    const video = videoRef.current;
-    if (!video) return;
-
-    if (isPlaying) {
-      video.pause();
-    } else {
-      video.play().catch(e => {
-        console.error('Play failed:', e);
-        setError('Failed to start playback');
-      });
-    }
-  };
-
-  const handleVolumeChange = (event, newValue) => {
-    setVolume(newValue);
-    if (videoRef.current) {
-      videoRef.current.volume = newValue / 100;
-    }
-  };
-
-  const handleMuteToggle = () => {
-    setIsMuted(!isMuted);
-    if (videoRef.current) {
-      videoRef.current.muted = !isMuted;
-    }
-  };
-
-  const handleFullscreenToggle = () => {
-    const video = videoRef.current;
-    if (!video) return;
-
-    if (!isFullscreen) {
-      if (video.requestFullscreen) {
-        video.requestFullscreen();
-      } else if (video.webkitRequestFullscreen) {
-        video.webkitRequestFullscreen();
-      } else if (video.msRequestFullscreen) {
-        video.msRequestFullscreen();
-      }
-    } else {
-      if (document.exitFullscreen) {
-        document.exitFullscreen();
-      } else if (document.webkitExitFullscreen) {
-        document.webkitExitFullscreen();
-      } else if (document.msExitFullscreen) {
-        document.msExitFullscreen();
-      }
-    }
-  };
+  // Remove video-specific control functions since WebRTCPreview handles its own playback
 
   const handleQualityChange = (event) => {
     const newQuality = event.target.value;
@@ -185,26 +112,11 @@ const LivePreview = ({ socket }) => {
       socket.emit('refresh-preview-stream');
     }
     
-    if (videoRef.current) {
-      videoRef.current.load();
-    }
+    // For WebRTC, we'll trigger a reconnection by clearing and resetting the URL
+    const currentUrl = streamUrl;
+    setStreamUrl('');
+    setTimeout(() => setStreamUrl(currentUrl), 100);
   };
-
-  useEffect(() => {
-    const handleFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement);
-    };
-
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
-    document.addEventListener('msfullscreenchange', handleFullscreenChange);
-
-    return () => {
-      document.removeEventListener('fullscreenchange', handleFullscreenChange);
-      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
-      document.removeEventListener('msfullscreenchange', handleFullscreenChange);
-    };
-  }, []);
 
   const formatBytes = (bytes) => {
     if (bytes === 0) return '0 bps';
@@ -229,19 +141,12 @@ const LivePreview = ({ socket }) => {
         }}
       >
         {streamUrl ? (
-          <video
-            ref={videoRef}
+          <WebRTCPreview 
+            url={streamUrl}
             style={{
               width: '100%',
               height: '100%',
               objectFit: 'contain'
-            }}
-            autoPlay
-            muted={isMuted}
-            onLoadedMetadata={() => {
-              if (videoRef.current) {
-                videoRef.current.volume = volume / 100;
-              }
             }}
           />
         ) : (
@@ -274,12 +179,10 @@ const LivePreview = ({ socket }) => {
             right: 8,
             display: 'flex',
             gap: 1,
-            opacity: 0,
-            transition: 'opacity 0.3s',
-            '&:hover': { opacity: 1 },
-            '.video-container:hover &': { opacity: 1 }
+            backgroundColor: 'rgba(0,0,0,0.5)',
+            borderRadius: 1,
+            p: 1
           }}
-          className="video-overlay-controls"
         >
           <Chip 
             label={`${stats?.fps || 0} FPS`} 
@@ -298,78 +201,24 @@ const LivePreview = ({ socket }) => {
           />
         </Box>
 
-        {/* Bottom Controls Overlay */}
+        {/* Refresh Button Overlay */}
         <Box
           sx={{
             position: 'absolute',
-            bottom: 0,
-            left: 0,
-            right: 0,
-            background: 'linear-gradient(transparent, rgba(0,0,0,0.8))',
-            p: 2,
-            opacity: 0,
-            transition: 'opacity 0.3s',
-            '&:hover': { opacity: 1 },
-            '.video-container:hover &': { opacity: 1 }
+            bottom: 8,
+            right: 8
           }}
-          className="video-controls-overlay"
         >
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <IconButton 
-              onClick={handlePlayPause} 
-              sx={{ color: 'white' }}
-              disabled={!streamUrl}
-            >
-              {isPlaying ? <Pause /> : <PlayArrow />}
-            </IconButton>
-
-            <IconButton 
-              onClick={handleMuteToggle} 
-              sx={{ color: 'white' }}
-              disabled={!streamUrl}
-            >
-              {isMuted ? <VolumeOff /> : <VolumeUp />}
-            </IconButton>
-
-            <Box sx={{ width: 100, mx: 1 }}>
-              <Slider
-                value={volume}
-                onChange={handleVolumeChange}
-                disabled={!streamUrl || isMuted}
-                sx={{
-                  color: 'white',
-                  '& .MuiSlider-thumb': {
-                    width: 16,
-                    height: 16,
-                    backgroundColor: 'white'
-                  },
-                  '& .MuiSlider-track': {
-                    backgroundColor: 'white'
-                  },
-                  '& .MuiSlider-rail': {
-                    backgroundColor: 'rgba(255,255,255,0.3)'
-                  }
-                }}
-              />
-            </Box>
-
-            <Box sx={{ flexGrow: 1 }} />
-
-            <IconButton 
-              onClick={handleRefresh} 
-              sx={{ color: 'white' }}
-            >
-              <Refresh />
-            </IconButton>
-
-            <IconButton 
-              onClick={handleFullscreenToggle} 
-              sx={{ color: 'white' }}
-              disabled={!streamUrl}
-            >
-              {isFullscreen ? <FullscreenExit /> : <Fullscreen />}
-            </IconButton>
-          </Box>
+          <IconButton 
+            onClick={handleRefresh} 
+            sx={{ 
+              color: 'white',
+              backgroundColor: 'rgba(0,0,0,0.5)',
+              '&:hover': { backgroundColor: 'rgba(0,0,0,0.7)' }
+            }}
+          >
+            <Refresh />
+          </IconButton>
         </Box>
 
         {/* Error Display */}

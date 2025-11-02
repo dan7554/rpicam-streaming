@@ -62,6 +62,10 @@ const CameraManager = ({ socket }) => {
         ) : []);
       });
 
+      socket.on('camera-switched', (data) => {
+        setSelectedCamera(data.cameraId);
+      });
+
       // Request initial camera list
       fetchCameras();
     }
@@ -70,6 +74,7 @@ const CameraManager = ({ socket }) => {
       if (socket) {
         socket.off('cameras-updated');
         socket.off('camera-status-changed');
+        socket.off('camera-switched');
       }
     };
   }, [socket]);
@@ -176,16 +181,26 @@ const CameraManager = ({ socket }) => {
 
   const handleSwitchCamera = async (cameraId) => {
     try {
-      const response = await fetch(`/api/cameras/${cameraId}/switch`, {
-        method: 'POST',
-      });
+      console.log('🔄 Client switching to camera:', cameraId);
+      // Use WebSocket if available, otherwise fall back to HTTP
+      if (socket) {
+        console.log('📡 Emitting switch-camera event via WebSocket');
+        socket.emit('switch-camera', { cameraId });
+      } else {
+        console.log('🌐 Using HTTP fallback for camera switch');
+        const response = await fetch(`/api/cameras/${cameraId}/switch`, {
+          method: 'POST',
+        });
 
-      if (!response.ok) {
-        throw new Error('Failed to switch camera');
+        if (!response.ok) {
+          throw new Error('Failed to switch camera');
+        }
       }
 
       setSelectedCamera(cameraId);
+      console.log('✅ Selected camera updated to:', cameraId);
     } catch (err) {
+      console.error('❌ Failed to switch camera:', err);
       setError(err.message);
     }
   };
@@ -243,7 +258,7 @@ const CameraManager = ({ socket }) => {
             ...camera
           };
 
-          console.log('safeCamera', safeCamera);
+          // console.log('safeCamera', safeCamera);
 
           return (
             <Grid item xs={12} sm={6} md={4} key={safeCamera.id}>
@@ -306,7 +321,7 @@ const CameraManager = ({ socket }) => {
                   </div>
 
                   <Typography variant="body2" sx={{ color: '#ccc', mt: 1, fontSize: '0.75rem' }}>
-                    {safeCamera.resolution} • {safeCamera.framerate}fps
+                    {safeCamera?.settings?.resolution} • {safeCamera?.settings?.framerate}fps
                   </Typography>
                 </CardContent>
 

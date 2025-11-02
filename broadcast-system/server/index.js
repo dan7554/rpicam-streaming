@@ -96,9 +96,20 @@ class BroadcastServer {
       // Camera controls
       socket.on('switch-camera', async (data) => {
         try {
+          console.log('🔄 Server received switch-camera event:', data);
           await this.cameraManager.switchCamera(data.cameraId);
+          console.log('✅ Camera switched successfully');
+          
           this.io.emit('camera-switched', data);
+          console.log('📡 Emitted camera-switched event:', data);
+          
+          // Also emit the preview URL for the new camera
+          const streamUrl = this.cameraManager.getPreviewUrl(data.cameraId);
+          console.log('🎥 Preview URL for camera', data.cameraId, ':', streamUrl);
+          this.io.emit('preview-stream-url', streamUrl);
+          console.log('📡 Emitted preview-stream-url:', streamUrl);
         } catch (error) {
+          console.error('❌ Failed to switch camera:', error);
           socket.emit('error', { message: 'Failed to switch camera', error: error.message });
         }
       });
@@ -158,9 +169,40 @@ class BroadcastServer {
 
       // Preview controls
       socket.on('preview-camera', (data) => {
-        socket.emit('preview-update', {
-          cameraId: data.cameraId,
-          streamUrl: this.cameraManager.getPreviewUrl(data.cameraId)
+        const streamUrl = this.cameraManager.getPreviewUrl(data.cameraId);
+        socket.emit('preview-stream-url', streamUrl);
+      });
+
+      // Get current preview stream
+      socket.on('get-preview-stream', () => {
+        console.log('🎥 Server received get-preview-stream request');
+        // Get the first active camera or any available camera
+        const cameras = this.cameraManager.getCameras();
+        const activeCamera = cameras.find(cam => cam.status === 'online');
+        
+        if (activeCamera) {
+          const streamUrl = this.cameraManager.getPreviewUrl(activeCamera.id);
+          console.log('✅ Found active camera:', activeCamera.id, 'URL:', streamUrl);
+          socket.emit('preview-stream-url', streamUrl);
+          
+          // Also emit initial stats if available
+          this.getCameraStats(activeCamera.id).then(stats => {
+            if (stats) {
+              socket.emit('preview-stats', stats);
+            }
+          });
+        } else {
+          console.log('❌ No active cameras available');
+          socket.emit('preview-error', 'No active cameras available');
+        }
+      });
+
+      // Request preview stats for current camera
+      socket.on('get-preview-stats', (cameraId) => {
+        this.getCameraStats(cameraId || null).then(stats => {
+          if (stats) {
+            socket.emit('preview-stats', stats);
+          }
         });
       });
 
@@ -198,6 +240,24 @@ class BroadcastServer {
     }
   }
 
+  async getCameraStats(cameraId) {
+    try {
+      if (!cameraId) {
+        // Get stats for the first active camera
+        const cameras = this.cameraManager.getCameras();
+        const activeCamera = cameras.find(cam => cam.status === 'online');
+        if (!activeCamera) return null;
+        cameraId = activeCamera.id;
+      }
+
+      const stats = await this.cameraManager.getCameraStats(cameraId);
+      return stats;
+    } catch (error) {
+      console.error('Failed to get camera stats:', error);
+      return null;
+    }
+  }
+
   startMonitoring() {
     // Monitor camera health every 30 seconds
     setInterval(async () => {
@@ -210,6 +270,18 @@ class BroadcastServer {
       const streamStatus = await this.streamManager.getDetailedStatus();
       this.io.emit('stream-health', streamStatus);
     }, 10000);
+
+    // Monitor preview stats every 5 seconds
+    setInterval(async () => {
+      const cameras = this.cameraManager.getCameras();
+      const activeCamera = cameras.find(cam => cam.status === 'online');
+      if (activeCamera) {
+        const stats = await this.getCameraStats(activeCamera.id);
+        if (stats) {
+          this.io.emit('preview-stats', stats);
+        }
+      }
+    }, 5000);
 
     // Monitor system resources every 60 seconds
     setInterval(() => {
