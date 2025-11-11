@@ -118,7 +118,8 @@ class CameraManager {
             lastSeen: pathInfo.readyTime || new Date().toISOString()
           };
           
-          this.addCamera(discoveredCamera);
+          // Commenting out adding auto-discovered cameras for now
+          // this.addCamera(discoveredCamera);
         } else {
           // Update existing camera status
           const camera = this.cameras.get(pathName);
@@ -283,7 +284,7 @@ class CameraManager {
   startHealthMonitoring() {
     this.healthCheckInterval = setInterval(async () => {
       await this.checkHealth();
-    }, 30000); // Check every 30 seconds
+    }, 10000); // Check every 10 seconds for faster updates
   }
 
   getStatus() {

@@ -2,7 +2,7 @@
 
 # Configuration
 PI_USER="dan7554"
-PI_HOST="192.168.50.96"
+PI_HOST="rpicam3.local"
 PI_PASSWORD="!Dan1007554"  # Set your password here or use environment variable: export PI_PASSWORD="yourpassword"
 
 # Check if password is set

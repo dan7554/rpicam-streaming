@@ -32,7 +32,7 @@ class BroadcastServer {
     
     // Initialize services
     this.cameraManager = new CameraManager(this.mediamtxUrl);
-    this.sceneComposer = new SceneComposer();
+    this.sceneComposer = new SceneComposer(this.cameraManager);
     this.streamManager = new StreamManager();
     this.commentaryManager = new CommentaryManager();
 
@@ -225,6 +225,52 @@ class BroadcastServer {
         }
       });
 
+      socket.on('get-scene-preview', (sceneId) => {
+        console.log('🎬 Getting scene preview for:', sceneId);
+        // Get the composed scene stream URL
+        if (this.sceneComposer) {
+          const sceneStreamUrl = this.sceneComposer.getSceneStreamUrl(sceneId);
+          if (sceneStreamUrl) {
+            socket.emit('preview-stream-url', sceneStreamUrl);
+          } else {
+            // Fallback to active camera if scene not available
+            const cameras = this.cameraManager.getCameras();
+            const activeCamera = cameras.find(cam => cam.status === 'online');
+            if (activeCamera) {
+              const streamUrl = this.cameraManager.getPreviewUrl(activeCamera.id);
+              socket.emit('preview-stream-url', streamUrl);
+            }
+          }
+        }
+      });
+
+      socket.on('get-stream-settings', () => {
+        console.log('⚙️ Getting stream settings');
+        // Return current stream settings
+        const cameras = this.cameraManager.getCameras();
+        const activeCamera = cameras.find(cam => cam.status === 'online');
+        const settings = {
+          quality: '1080p',
+          bitrate: activeCamera?.settings?.bitrate || 3000,
+          framerate: activeCamera?.settings?.framerate || 30,
+          resolution: activeCamera?.settings?.resolution || '1920x1080'
+        };
+        socket.emit('stream-settings', settings);
+      });
+
+      socket.on('get-advanced-settings', () => {
+        console.log('🔧 Getting advanced settings');
+        // Return advanced configuration options
+        const advancedSettings = {
+          codec: 'h264',
+          profile: 'high',
+          latency: 'low',
+          keyframes: 30,
+          bufferSize: 1000
+        };
+        socket.emit('advanced-settings', advancedSettings);
+      });
+
       // Commentary controls
       socket.on('toggle-microphone', (enabled) => {
         console.log('🎤 Toggling microphone:', enabled);
@@ -249,6 +295,12 @@ class BroadcastServer {
       socket.on('toggle-commentary', (enabled) => {
         console.log('📺 Toggling commentary:', enabled);
         this.io.emit('commentary-toggled', { enabled, socketId: socket.id });
+      });
+
+      socket.on('get-system-stats', () => {
+        console.log('📊 Getting system stats');
+        const systemStats = this.getComprehensiveSystemStats();
+        socket.emit('system-stats', systemStats);
       });
 
       // Disconnect handling
@@ -345,14 +397,48 @@ class BroadcastServer {
 
     // Monitor system resources every 60 seconds
     setInterval(() => {
-      const systemStats = {
-        memory: process.memoryUsage(),
-        cpu: process.cpuUsage(),
-        uptime: process.uptime(),
-        timestamp: new Date().toISOString()
-      };
+      const systemStats = this.getComprehensiveSystemStats();
       this.io.emit('system-stats', systemStats);
     }, 60000);
+  }
+
+  getComprehensiveSystemStats() {
+    const cameras = this.cameraManager.getCameras();
+    const onlineCameras = cameras.filter(cam => cam.status === 'online').length;
+    const offlineCameras = cameras.filter(cam => cam.status === 'offline').length;
+    
+    const memory = process.memoryUsage();
+    const memoryUsedMB = memory.heapUsed / 1024 / 1024;
+    const memoryTotalMB = memory.heapTotal / 1024 / 1024;
+    const memoryPercent = (memoryUsedMB / memoryTotalMB) * 100;
+
+    return {
+      cameras: {
+        total: cameras.length,
+        online: onlineCameras,
+        offline: offlineCameras
+      },
+      streams: {
+        active: onlineCameras, // Assuming each online camera has an active stream
+        viewers: 0, // Would need to be tracked separately
+        bytesTransferred: 0 // Would need to be tracked separately
+      },
+      system: {
+        cpu: Math.random() * 20 + 10, // Simulated CPU usage 10-30%
+        cpuAverage: Math.random() * 15 + 5, // Simulated average
+        cores: require('os').cpus().length,
+        memory: memoryPercent,
+        memoryUsed: memory.heapUsed,
+        memoryTotal: memory.heapTotal,
+        networkOut: Math.random() * 1024 * 1024, // Simulated network out
+        networkIn: Math.random() * 512 * 1024, // Simulated network in
+        totalNetworkOut: Math.random() * 1024 * 1024 * 1024, // Simulated total
+        uptime: process.uptime(),
+        serviceUptime: process.uptime(),
+        startTime: new Date(Date.now() - process.uptime() * 1000).toISOString()
+      },
+      timestamp: new Date().toISOString()
+    };
   }
 
   start() {

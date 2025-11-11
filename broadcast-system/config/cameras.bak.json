@@ -1,33 +1,35 @@
 {
   "cameras": [
     {
-      "id": "2378c1d2-a85f-496a-88a8-e9189c3b16ff",
-      "name": "Camera 2",
+      "id": "rpicam",
+      "name": "Raspberry Pi Camera",
       "type": "webrtc",
-      "url": "https://192.168.50.208:8889/rpicam2/",
-      "rtspUrl": "rtsp://192.168.50.208:8554/rpicam2",
+      "url": "https://192.168.50.208:8889/rpicam/",
+      "rtspUrl": "rtsp://192.168.50.208:8554/rpicam",
       "enabled": true,
       "position": {
         "x": 0,
-        "y": 0
+        "y": 0,
+        "width": 1920,
+        "height": 1080
       },
       "settings": {
-        "resolution": "1920x1080",
-        "framerate": 30
+        "resolution": "1280x720",
+        "framerate": 30,
+        "bitrate": 3000
       },
       "status": "online",
-      "lastSeen": "2025-11-06T22:25:04.435Z",
+      "lastSeen": "2025-11-03T02:35:05.108453462Z",
       "bitrate": 0,
       "framerate": 0,
       "resolution": "",
       "autodiscovered": false
     },
     {
-      "id": "7319760a-e9ab-45e4-ab00-93f286ff9590",
-      "name": "Camera 3",
+      "id": "a14670a7-378c-4442-95aa-22930517c64f",
+      "name": "Shit cam",
       "type": "webrtc",
-      "url": "https://192.168.50.208:8889/rpicam3/",
-      "rtspUrl": "rtsp://192.168.50.208:8554/rpicam3",
+      "url": "https://192.168.50.208:8889/rpicam1",
       "enabled": true,
       "position": {
         "x": 0,
@@ -37,8 +39,8 @@
         "resolution": "1920x1080",
         "framerate": 30
       },
-      "status": "online",
-      "lastSeen": "2025-11-06T22:25:04.567Z",
+      "status": "offline",
+      "lastSeen": null,
       "bitrate": 0,
       "framerate": 0,
       "resolution": "",

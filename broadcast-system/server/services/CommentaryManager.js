@@ -539,6 +539,10 @@ class CommentaryManager {
     };
   }
 
+  getStats() {
+    return this.getDetailedStatus();
+  }
+
   // Save commentary configuration
   async saveConfig() {
     try {

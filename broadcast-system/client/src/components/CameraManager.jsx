@@ -42,7 +42,7 @@ const CameraManager = ({ socket }) => {
   const [cameraForm, setCameraForm] = useState({
     name: '',
     url: '',
-    type: 'rtsp',
+    type: 'webrtc',
     enabled: true,
     position: { x: 0, y: 0 },
     resolution: '1920x1080',
@@ -101,7 +101,7 @@ const CameraManager = ({ socket }) => {
     setCameraForm({
       name: '',
       url: '',
-      type: 'rtsp',
+      type: 'webrtc',
       enabled: true,
       position: { x: 0, y: 0 },
       resolution: '1920x1080',
@@ -117,11 +117,11 @@ const CameraManager = ({ socket }) => {
     setCameraForm({
       name: camera.name || '',
       url: camera.url || '',
-      type: camera.type || 'rtsp',
+      type: camera.type || 'webrtc',
       enabled: camera.enabled !== undefined ? camera.enabled : true,
       position: camera.position || { x: 0, y: 0 },
-      resolution: camera.resolution || '1920x1080',
-      framerate: camera.framerate || 30
+      resolution: camera.settings?.resolution || camera.resolution || '1920x1080',
+      framerate: camera.settings?.framerate || camera.framerate || 30
     });
     setDialogOpen(true);
   };
@@ -258,7 +258,7 @@ const CameraManager = ({ socket }) => {
             ...camera
           };
 
-          // console.log('safeCamera', safeCamera);
+          console.log('safeCamera', safeCamera);
 
           return (
             <Grid item xs={12} sm={6} md={4} key={safeCamera.id}>

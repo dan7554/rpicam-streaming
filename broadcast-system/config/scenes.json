@@ -26,7 +26,7 @@
         "type": "cut",
         "duration": 0
       },
-      "created": "2025-10-31T18:29:05.492Z",
+      "created": "2025-11-11T01:30:17.047Z",
       "lastUsed": null
     },
     {
@@ -69,7 +69,7 @@
         "type": "fade",
         "duration": 500
       },
-      "created": "2025-10-31T18:29:05.492Z",
+      "created": "2025-11-11T01:30:17.047Z",
       "lastUsed": null
     },
     {
@@ -112,7 +112,7 @@
         "type": "slide",
         "duration": 750
       },
-      "created": "2025-10-31T18:29:05.492Z",
+      "created": "2025-11-11T01:30:17.047Z",
       "lastUsed": null
     },
     {
@@ -121,44 +121,16 @@
       "layout": "quad",
       "cameras": [
         {
-          "cameraId": "rpicam-local",
-          "position": {
-            "x": 0,
-            "y": 0,
-            "width": 960,
-            "height": 540
-          },
-          "zIndex": 1
+          "cameraId": "2378c1d2-a85f-496a-88a8-e9189c3b16ff"
         },
         {
-          "cameraId": "rpicam-remote",
-          "position": {
-            "x": 960,
-            "y": 0,
-            "width": 960,
-            "height": 540
-          },
-          "zIndex": 1
+          "cameraId": "7319760a-e9ab-45e4-ab00-93f286ff9590"
         },
         {
-          "cameraId": "rpicam-cloud",
-          "position": {
-            "x": 0,
-            "y": 540,
-            "width": 960,
-            "height": 540
-          },
-          "zIndex": 1
+          "cameraId": "7319760a-e9ab-45e4-ab00-93f286ff9590"
         },
         {
-          "cameraId": "rpicam-local",
-          "position": {
-            "x": 960,
-            "y": 540,
-            "width": 960,
-            "height": 540
-          },
-          "zIndex": 1
+          "cameraId": "2378c1d2-a85f-496a-88a8-e9189c3b16ff"
         }
       ],
       "overlays": [
@@ -225,8 +197,10 @@
         "type": "cut",
         "duration": 0
       },
-      "created": "2025-10-31T18:29:05.493Z",
-      "lastUsed": null
+      "created": "2025-11-11T01:30:17.047Z",
+      "lastUsed": null,
+      "transition": "fade",
+      "duration": 1000
     }
   ]
 }

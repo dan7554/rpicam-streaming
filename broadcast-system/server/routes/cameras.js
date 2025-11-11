@@ -45,7 +45,7 @@ module.exports = (cameraManager, io) => {
   // Add new camera
   router.post('/', async (req, res) => {
     try {
-      const { name, type, url, rtspUrl, settings, position } = req.body;
+      const { name, type, url, rtspUrl, enabled, position, resolution, framerate } = req.body;
 
       if (!name || !url) {
         return res.status(400).json({
@@ -59,10 +59,20 @@ module.exports = (cameraManager, io) => {
         type: type || 'webrtc',
         url,
         rtspUrl,
-        settings: settings || {},
+        settings: {
+          resolution: resolution || '1920x1080',
+          framerate: framerate || 30
+        },
         position: position || { x: 0, y: 0, width: 1920, height: 1080 },
-        enabled: true
+        enabled: enabled !== undefined ? enabled : true
       });
+
+      // Immediately check camera health after adding
+      try {
+        await cameraManager.checkCameraHealth(cameraId);
+      } catch (error) {
+        console.log(`Initial health check failed for camera ${cameraId}:`, error.message);
+      }
 
       const camera = cameraManager.getCamera(cameraId);
       
@@ -88,7 +98,29 @@ module.exports = (cameraManager, io) => {
   // Update camera
   router.put('/:id', async (req, res) => {
     try {
-      const updates = req.body;
+      const { name, type, url, rtspUrl, enabled, position, resolution, framerate, ...otherUpdates } = req.body;
+      
+      // Structure the updates properly
+      const updates = {
+        ...otherUpdates,
+        ...(name !== undefined && { name }),
+        ...(type !== undefined && { type }),
+        ...(url !== undefined && { url }),
+        ...(rtspUrl !== undefined && { rtspUrl }),
+        ...(enabled !== undefined && { enabled }),
+        ...(position !== undefined && { position }),
+      };
+
+      // Handle settings separately
+      if (resolution !== undefined || framerate !== undefined) {
+        const existingCamera = cameraManager.getCamera(req.params.id);
+        updates.settings = {
+          ...(existingCamera?.settings || {}),
+          ...(resolution !== undefined && { resolution }),
+          ...(framerate !== undefined && { framerate })
+        };
+      }
+
       const camera = cameraManager.updateCamera(req.params.id, updates);
       
       if (!camera) {

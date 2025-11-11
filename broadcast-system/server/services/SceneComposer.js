@@ -2,13 +2,17 @@ const ffmpeg = require('fluent-ffmpeg');
 const { v4: uuidv4 } = require('uuid');
 
 class SceneComposer {
-  constructor() {
+  constructor(cameraManager) {
     this.scenes = new Map();
     this.currentScene = null;
     this.activeComposition = null;
     this.transitionInProgress = false;
     this.outputStream = null;
     this.compositionProcess = null;
+    this.cameraManager = cameraManager;
+    this.mediamtxHost = '192.168.50.208';
+    this.mediamtxRtmpPort = '1935';
+    this.mediamtxRtspPort = '8554';
   }
 
   async initialize() {
@@ -218,6 +222,33 @@ class SceneComposer {
     return this.scenes.get(sceneId);
   }
 
+  getSceneStreamUrl(sceneId) {
+    const scene = this.scenes.get(sceneId);
+    if (!scene) {
+      return null;
+    }
+
+    // For multicamera scenes, return a composed stream URL
+    if (scene.layout !== 'single' && scene.layout !== 'fullscreen') {
+      // Return the composed scene stream URL from MediaMTX (without /whep - client will append it)
+      return `https://192.168.50.208:8889/scene_${sceneId}`;
+    } else {
+      // For single camera scenes, return the camera's stream URL
+      if (scene.cameras && scene.cameras.length > 0) {
+        const camera = scene.cameras[0];
+        const cameraData = this.cameraManager.getCamera(camera.cameraId || camera.id);
+        if (cameraData && cameraData.url) {
+          // Extract stream path from camera URL
+          const urlParts = cameraData.url.split('/');
+          const streamPath = urlParts[urlParts.length - 2] || urlParts[urlParts.length - 1];
+          return `https://192.168.50.208:8889/${streamPath}`;
+        }
+      }
+    }
+
+    return null;
+  }
+
   getCurrentScene() {
     return this.currentScene;
   }
@@ -327,134 +358,286 @@ class SceneComposer {
   }
 
   async createComposition(scene) {
-    return new Promise((resolve, reject) => {
-      const outputOptions = [
-        '-f', 'flv',
-        '-c:v', 'libx264',
-        '-preset', 'veryfast',
-        '-tune', 'zerolatency',
-        '-c:a', 'aac',
-        '-ar', '44100',
-        '-b:a', '128k',
-        '-pix_fmt', 'yuv420p',
-        '-g', '30',
-        '-keyint_min', '30',
-        '-r', '30',
-        '-b:v', '3000k',
-        '-maxrate', '3500k',
-        '-bufsize', '6000k'
-      ];
-
+    return new Promise(async (resolve, reject) => {
+      const sceneId = scene.id;
+      const outputUrl = `rtmp://${this.mediamtxHost}:${this.mediamtxRtmpPort}/scene_${sceneId}`;
+      
+      console.log(`Creating composition for scene: ${scene.name} (${scene.layout})`);
+      console.log(`RTMP output URL: ${outputUrl}`);
+      
       let command = ffmpeg();
-
-      // Add input sources based on scene cameras
+      
+      // Add input sources from camera streams
+      const activeCameras = [];
       scene.cameras.forEach((camera, index) => {
-        // This would be replaced with actual camera stream URLs
-        const inputUrl = this.getCameraStreamUrl(camera.cameraId);
-        if (inputUrl) {
-          command = command.input(inputUrl);
+        const cameraData = this.cameraManager.getCamera(camera.cameraId || camera.id);
+        console.log(`Processing camera ${index}:`, {
+          sceneCamera: camera,
+          cameraData: cameraData ? {
+            id: cameraData.id,
+            url: cameraData.url,
+            rtspUrl: cameraData.rtspUrl,
+            status: cameraData.status
+          } : null
+        });
+        
+        if (cameraData && cameraData.status === 'online') {
+          // Extract the actual stream path from the camera's URL
+          let streamPath;
+          if (cameraData.rtspUrl) {
+            // Extract path from rtspUrl (e.g., "rtsp://host:8554/rpicam1" -> "rpicam1")
+            streamPath = cameraData.rtspUrl.split('/').pop();
+          } else if (cameraData.url) {
+            // Extract path from webrtc url (e.g., "https://host:8889/rpicam1/" -> "rpicam1")
+            const urlParts = cameraData.url.split('/');
+            streamPath = urlParts[urlParts.length - 2] || urlParts[urlParts.length - 1];
+          } else {
+            console.warn(`No valid stream URL found for camera ${cameraData.id}`);
+            return;
+          }
+          
+          const inputUrl = `rtsp://${this.mediamtxHost}:${this.mediamtxRtspPort}/${streamPath}`;
+          
+          // Add RTSP input with TCP transport to avoid "Unsupported Transport" error
+          command = command.input(inputUrl)
+            .inputOptions([
+              '-rtsp_transport', 'tcp',
+              '-rtsp_flags', 'prefer_tcp',
+              '-fflags', '+genpts+discardcorrupt',
+              '-timeout', '3000000',   // 3 second timeout in microseconds
+              '-max_delay', '100000',  // 0.1 second max delay
+              '-analyzeduration', '1000000',  // 1 second analyze
+              '-probesize', '32768'    // Small probe size for faster startup
+            ]);
+          
+          activeCameras.push({ ...camera, index, cameraData });
+          console.log(`Added input ${index}: ${inputUrl} (stream path: ${streamPath}) with TCP transport`);
         }
       });
 
-      // Build filter complex for layout
-      const filterComplex = this.buildFilterComplex(scene);
-      
-      if (filterComplex) {
-        command = command.complexFilter(filterComplex);
+      if (activeCameras.length === 0) {
+        reject(new Error('No active cameras available for composition'));
+        return;
       }
 
-      // Set output options
-      command = command.outputOptions(outputOptions);
+      console.log(`Found ${activeCameras.length} active cameras for scene composition`);
 
-      // Output to MediaMTX RTMP endpoint or file
-      const outputUrl = process.env.COMPOSITION_OUTPUT || 'rtmp://localhost:1935/composed';
+      // Test connectivity to MediaMTX RTSP port before starting composition
+      console.log(`Testing MediaMTX RTSP connectivity at ${this.mediamtxHost}:${this.mediamtxRtspPort}`);
+
+      // Build filter complex based on layout
+      const filterComplex = this.buildFilterComplex(scene, activeCameras);
+      
+      console.log(`Filter complex result:`, filterComplex);
+      
+      if (filterComplex && filterComplex.length > 0) {
+        console.log(`Using complex filter with ${filterComplex.length} filters`);
+        command = command.complexFilter(filterComplex);
+        command = command.map('[v]').map('[a]');
+      } else {
+        console.log(`Using simple mapping for single camera`);
+        // Single input, no complex filter needed - but we need to add silent audio
+        command = command.map('0:v');
+        // Add silent audio track since cameras likely don't have audio
+        command = command.complexFilter(['anullsrc=channel_layout=stereo:sample_rate=44100[silent_audio]']);
+        command = command.map('[silent_audio]');
+      }
+
+      // Output options for streaming to MediaMTX via RTMP
+      command = command.outputOptions([
+        '-f', 'flv',
+        '-c:v', 'libx264',
+        '-preset', 'superfast',
+        '-tune', 'zerolatency',
+        '-profile:v', 'baseline',
+        '-level', '3.0',
+        '-pix_fmt', 'yuv420p',
+        '-r', '15',
+        '-g', '15',
+        '-keyint_min', '15',
+        '-sc_threshold', '0',
+        '-b:v', '800k',
+        '-maxrate', '1000k',
+        '-bufsize', '800k',
+        '-c:a', 'aac',
+        '-b:a', '64k',
+        '-ar', '22050',
+        '-ac', '1',
+        '-shortest',
+        '-avoid_negative_ts', 'make_zero',
+        '-fflags', '+genpts+flush_packets',
+        '-flush_packets', '1',
+        '-muxdelay', '0',
+        '-muxpreload', '0'
+      ]);
+
       command = command.output(outputUrl);
 
-      // Error handling
+      // Error handling with specific transport error detection
       command.on('error', (err) => {
-        console.error('FFmpeg error:', err);
+        console.error(`FFmpeg error for scene ${sceneId}:`, err);
+        
+        // Check for transport-related errors
+        if (err.message.includes('Unsupported Transport') || 
+            err.message.includes('method SETUP failed')) {
+          console.error(`Transport error detected. Ensure MediaMTX supports TCP and cameras are accessible.`);
+          console.error(`This might be caused by: 1) Cameras not streaming, 2) Network issues, 3) MediaMTX configuration`);
+        }
+        
         reject(err);
       });
 
       command.on('start', (commandLine) => {
-        console.log('Started FFmpeg with command:', commandLine);
+        console.log(`Started FFmpeg composition for scene ${sceneId}:`);
+        console.log(commandLine);
         resolve(command);
       });
 
       command.on('end', () => {
-        console.log('Composition ended');
+        console.log(`Composition ended for scene ${sceneId}`);
       });
 
-      // Start the process
+      command.on('stderr', (stderrLine) => {
+        console.log(`FFmpeg [${sceneId}]: ${stderrLine}`);
+      });
+
+      // Start the composition
       command.run();
     });
   }
 
-  buildFilterComplex(scene) {
+  buildFilterComplex(scene, activeCameras) {
     const filters = [];
     
+    console.log(`Building filter complex for scene layout: ${scene.layout}, active cameras: ${activeCameras.length}`);
+    
     switch (scene.layout) {
+      case 'single':
       case 'fullscreen':
-        // Single camera fullscreen
-        if (scene.cameras.length > 0) {
-          filters.push('[0:v]scale=1920:1080[v]');
-        }
-        break;
+        // Single camera fullscreen - no complex filter needed
+        return null;
         
-      case 'pip':
-        // Picture in picture
-        if (scene.cameras.length >= 2) {
-          const mainCam = scene.cameras[0];
-          const pipCam = scene.cameras[1];
+      case 'multi-cam':
+        // Multi-camera layout - default to quad view if 4+ cameras, otherwise side-by-side
+        console.log(`Multi-cam layout with ${activeCameras.length} cameras`);
+        if (activeCameras.length >= 4) {
+          console.log(`Creating quad layout for 4+ cameras`);
+          const videoFilters = [
+            '[0:v]scale=960:540[top_left]',
+            '[1:v]scale=960:540[top_right]',
+            '[2:v]scale=960:540[bottom_left]',
+            '[3:v]scale=960:540[bottom_right]',
+            '[top_left][top_right]hstack[top]',
+            '[bottom_left][bottom_right]hstack[bottom]',
+            '[top][bottom]vstack[v]'
+          ];
           
-          filters.push(
-            `[0:v]scale=${mainCam.position.width}:${mainCam.position.height}[main]`,
-            `[1:v]scale=${pipCam.position.width}:${pipCam.position.height}[pip]`,
-            `[main][pip]overlay=${pipCam.position.x}:${pipCam.position.y}[v]`
-          );
+          filters.push(...videoFilters);
+          
+          // Only add audio mixing if we have audio streams (most Pi cameras are video-only)
+          // We'll generate a silent audio track instead
+          filters.push('anullsrc=channel_layout=stereo:sample_rate=44100[a]');
+          
+          console.log(`Generated ${filters.length} filters:`, filters);
+          return filters;
+        } else if (activeCameras.length >= 2) {
+          console.log(`Creating side-by-side layout for 2-3 cameras`);
+          const videoFilters = [
+            '[0:v]scale=960:1080[left]',
+            '[1:v]scale=960:1080[right]',
+            '[left][right]hstack[v]'
+          ];
+          
+          filters.push(...videoFilters);
+          
+          // Generate silent audio track
+          filters.push('anullsrc=channel_layout=stereo:sample_rate=44100[a]');
+          
+          console.log(`Generated ${filters.length} filters:`, filters);
+          return filters;
+        } else {
+          console.log(`Single camera - no complex filter needed`);
+          return null;
         }
         break;
         
-      case 'split':
-        // Split screen
-        if (scene.cameras.length >= 2) {
+      case 'side-by-side':
+        // Side by side layout
+        if (activeCameras.length >= 2) {
           filters.push(
             '[0:v]scale=960:1080[left]',
             '[1:v]scale=960:1080[right]',
             '[left][right]hstack=inputs=2[v]'
           );
+          // Generate silent audio track
+          filters.push('anullsrc=channel_layout=stereo:sample_rate=44100[a]');
+          return filters;
         }
         break;
         
       case 'quad':
-        // Quad view
-        if (scene.cameras.length >= 4) {
+        // Quad split layout
+        if (activeCameras.length >= 4) {
           filters.push(
-            '[0:v]scale=960:540[tl]',
-            '[1:v]scale=960:540[tr]',
-            '[2:v]scale=960:540[bl]',
-            '[3:v]scale=960:540[br]',
-            '[tl][tr]hstack=inputs=2[top]',
-            '[bl][br]hstack=inputs=2[bottom]',
-            '[top][bottom]vstack=inputs=2[v]'
+            '[0:v]scale=960:540[top_left]',
+            '[1:v]scale=960:540[top_right]',
+            '[2:v]scale=960:540[bottom_left]',
+            '[3:v]scale=960:540[bottom_right]',
+            '[top_left][top_right]hstack[top]',
+            '[bottom_left][bottom_right]hstack[bottom]',
+            '[top][bottom]vstack[v]'
           );
+          // Generate silent audio track
+          filters.push('anullsrc=channel_layout=stereo:sample_rate=44100[a]');
+          return filters;
+        } else if (activeCameras.length >= 2) {
+          // Fall back to side-by-side for 2 cameras
+          filters.push(
+            '[0:v]scale=960:540[left]',
+            '[1:v]scale=960:540[right]',
+            '[left][right]hstack=inputs=2[v]'
+          );
+          filters.push('anullsrc=channel_layout=stereo:sample_rate=44100[a]');
+          return filters;
         }
         break;
-    }
-
-    // Add overlays (text, graphics, etc.)
-    if (scene.overlays && scene.overlays.length > 0) {
-      scene.overlays.forEach((overlay, index) => {
-        if (overlay.type === 'text') {
-          const textFilter = `drawtext=text='${overlay.content}':x=${overlay.position.x}:y=${overlay.position.y}:fontsize=${overlay.style.fontSize || 24}:fontcolor=${overlay.style.color || 'white'}`;
-          filters.push(`[v]${textFilter}[v${index + 1}]`);
-          // Update reference for next overlay
-          filters[filters.length - 1] = filters[filters.length - 1].replace('[v]', `[v${index}]`);
+        
+      case 'picture-in-picture':
+        // Picture in picture
+        if (activeCameras.length >= 2) {
+          filters.push(
+            '[0:v]scale=1920:1080[main]',
+            '[1:v]scale=384:216[pip]',
+            '[main][pip]overlay=W-w-20:20[v]'
+          );
+          // Generate silent audio track
+          filters.push('anullsrc=channel_layout=stereo:sample_rate=44100[a]');
+          return filters;
         }
-      });
+        break;
+        
+      case 'triple':
+        // Triple layout - one large, two small
+        if (activeCameras.length >= 3) {
+          filters.push(
+            '[0:v]scale=1280:1080[main]',
+            '[1:v]scale=640:360[small1]',
+            '[2:v]scale=640:360[small2]',
+            '[small1][small2]vstack[side]',
+            '[main][side]hstack[v]'
+          );
+          filters.push('anullsrc=channel_layout=stereo:sample_rate=44100[a]');
+          return filters;
+        }
+        break;
+        
+      default:
+        // Single camera fallback
+        return null;
     }
-
-    return filters.join(';');
+    
+    // Single camera fallback
+    return null;
   }
 
   getCameraStreamUrl(cameraId) {

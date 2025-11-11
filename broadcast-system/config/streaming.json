@@ -19,42 +19,6 @@
       }
     },
     {
-      "id": "youtube-backup",
-      "name": "YouTube Live Backup",
-      "type": "rtmp",
-      "url": "rtmp://a.rtmp.youtube.com/live2/",
-      "streamKey": "",
-      "enabled": false,
-      "settings": {
-        "resolution": "1280x720",
-        "framerate": 30,
-        "videoBitrate": 3000,
-        "audioBitrate": 128,
-        "audioSampleRate": 44100,
-        "preset": "fast",
-        "profile": "main",
-        "level": "3.1"
-      }
-    },
-    {
-      "id": "facebook-live",
-      "name": "Facebook Live",
-      "type": "rtmp",
-      "url": "rtmps://live-api-s.facebook.com:443/rtmp/",
-      "streamKey": "",
-      "enabled": false,
-      "settings": {
-        "resolution": "1920x1080",
-        "framerate": 30,
-        "videoBitrate": 4000,
-        "audioBitrate": 128,
-        "audioSampleRate": 44100,
-        "preset": "fast",
-        "profile": "main",
-        "level": "4.0"
-      }
-    },
-    {
       "id": "mediamtx-output",
       "name": "MediaMTX Re-stream",
       "type": "rtmp",

@@ -62,6 +62,13 @@ const LivePreview = ({ socket }) => {
         socket.emit('get-preview-stream');
       });
 
+      socket.on('scene-switched', (data) => {
+        console.log('🎬 LivePreview received scene-switched:', data);
+        // When a scene is switched (multicamera view), request the composed stream
+        console.log('📡 Requesting scene preview stream...');
+        socket.emit('get-scene-preview', data.sceneId);
+      });
+
       socket.on('preview-stats', (streamStats) => {
         if (streamStats && typeof streamStats === 'object') {
           setStats(prevStats => ({
@@ -86,6 +93,16 @@ const LivePreview = ({ socket }) => {
         setQuality(quality);
       });
 
+      socket.on('stream-settings', (settings) => {
+        console.log('⚙️ Received stream settings:', settings);
+        // You can update UI with these settings or show a modal
+      });
+
+      socket.on('advanced-settings', (settings) => {
+        console.log('🔧 Received advanced settings:', settings);
+        // You can update UI with these settings or show a modal
+      });
+
       // Request initial preview stream
       console.log('🚀 LivePreview requesting initial preview stream...');
       socket.emit('get-preview-stream');
@@ -93,9 +110,12 @@ const LivePreview = ({ socket }) => {
       return () => {
         socket.off('preview-stream-url');
         socket.off('camera-switched');
+        socket.off('scene-switched');
         socket.off('preview-stats');
         socket.off('preview-error');
         socket.off('preview-quality-changed');
+        socket.off('stream-settings');
+        socket.off('advanced-settings');
       };
     }
   }, [socket]);
@@ -105,23 +125,56 @@ const LivePreview = ({ socket }) => {
   // Remove video-specific control functions since WebRTCPreview handles its own playback
 
   const handleQualityChange = (event) => {
+    console.log('🎛️ Quality change clicked:', event.target.value);
     const newQuality = event.target.value;
     setQuality(newQuality);
     
     if (socket) {
+      console.log('📡 Emitting change-preview-quality:', newQuality);
       socket.emit('change-preview-quality', newQuality);
+    } else {
+      console.warn('❌ No socket available for quality change');
     }
   };
 
   const handleRefresh = () => {
+    console.log('🔄 Refresh button clicked');
     if (socket) {
+      console.log('📡 Emitting refresh-preview-stream');
       socket.emit('refresh-preview-stream');
+    } else {
+      console.warn('❌ No socket available for refresh');
     }
     
     // For WebRTC, we'll trigger a reconnection by clearing and resetting the URL
     const currentUrl = streamUrl;
+    console.log('🔄 Resetting stream URL:', currentUrl);
     setStreamUrl('');
     setTimeout(() => setStreamUrl(currentUrl), 100);
+  };
+
+  const handleStreamSettings = () => {
+    console.log('⚙️ Stream settings button clicked');
+    alert('Stream Settings clicked! Check console for details.');
+    // You can add a modal or navigate to settings page
+    if (socket) {
+      console.log('📡 Emitting get-stream-settings');
+      socket.emit('get-stream-settings');
+    } else {
+      console.warn('❌ No socket available for stream settings');
+    }
+  };
+
+  const handleAdvanced = () => {
+    console.log('🔧 Advanced button clicked');
+    alert('Advanced Settings clicked! Check console for details.');
+    // You can add advanced configuration modal
+    if (socket) {
+      console.log('📡 Emitting get-advanced-settings');
+      socket.emit('get-advanced-settings');
+    } else {
+      console.warn('❌ No socket available for advanced settings');
+    }
   };
 
   const formatBytes = (bytes) => {
@@ -281,7 +334,7 @@ const LivePreview = ({ socket }) => {
           </FormControl>
         </Grid>
 
-        <Grid item xs={12} sm={6} md={3}>
+        {/* <Grid item xs={12} sm={6} md={3}>
           <FormControl fullWidth size="small">
             <InputLabel sx={{ color: '#ccc' }}>Aspect Ratio</InputLabel>
             <Select
@@ -309,6 +362,7 @@ const LivePreview = ({ socket }) => {
             fullWidth
             variant="outlined"
             startIcon={<Settings />}
+            onClick={handleStreamSettings}
             sx={{ height: '40px' }}
           >
             Stream Settings
@@ -320,15 +374,16 @@ const LivePreview = ({ socket }) => {
             fullWidth
             variant="outlined"
             startIcon={<HighQuality />}
+            onClick={handleAdvanced}
             sx={{ height: '40px' }}
           >
             Advanced
           </Button>
-        </Grid>
+        </Grid> */}
       </Grid>
 
       {/* Stream Statistics */}
-      <Card sx={{ mt: 2, backgroundColor: '#2d2d30', border: '1px solid #444' }}>
+      {/* <Card sx={{ mt: 2, backgroundColor: '#2d2d30', border: '1px solid #444' }}>
         <CardContent>
           <Typography variant="h6" sx={{ color: 'white', mb: 2 }}>
             Stream Statistics
@@ -368,7 +423,7 @@ const LivePreview = ({ socket }) => {
             </Grid>
           </Grid>
         </CardContent>
-      </Card>
+      </Card> */}
     </Box>
   );
 };

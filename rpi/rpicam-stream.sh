@@ -6,7 +6,7 @@
 # Configuration
 # RTSP_SERVER="rtsp.racetrackstreaming.com:8554"  # RTSP endpoint with A record to ECS IP
 RTSP_SERVER="192.168.50.208:8554"
-STREAM_NAME="rpicam"
+STREAM_NAME="rpicam3"
 MAX_RETRIES=0  # 0 means infinite retries
 RETRY_DELAY=5  # seconds between retries
 CONNECTION_TIMEOUT=30  # seconds to wait for RTSP server
