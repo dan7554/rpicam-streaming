@@ -408,9 +408,66 @@ class BroadcastServer {
     const offlineCameras = cameras.filter(cam => cam.status === 'offline').length;
     
     const memory = process.memoryUsage();
-    const memoryUsedMB = memory.heapUsed / 1024 / 1024;
-    const memoryTotalMB = memory.heapTotal / 1024 / 1024;
-    const memoryPercent = (memoryUsedMB / memoryTotalMB) * 100;
+    const os = require('os');
+    const { execSync } = require('child_process');
+    
+    // Get system memory based on OS
+    let totalSystemMemory = os.totalmem();
+    let freeSystemMemory = os.freemem();
+    let usedSystemMemory = totalSystemMemory - freeSystemMemory;
+    let systemMemoryPercent = (usedSystemMemory / totalSystemMemory) * 100;
+    
+    try {
+      const platform = os.platform();
+      
+      if (platform === 'darwin') {
+        // macOS - use vm_stat for more accurate memory info
+        const vmStat = execSync('vm_stat').toString();
+        const pageSize = 16384; // macOS uses 16KB pages on Apple Silicon, 4KB on Intel
+        
+        // Parse vm_stat output
+        const freePages = parseInt(vmStat.match(/Pages free:\s+(\d+)/)?.[1] || '0');
+        const activePages = parseInt(vmStat.match(/Pages active:\s+(\d+)/)?.[1] || '0');
+        const inactivePages = parseInt(vmStat.match(/Pages inactive:\s+(\d+)/)?.[1] || '0');
+        const speculativePages = parseInt(vmStat.match(/Pages speculative:\s+(\d+)/)?.[1] || '0');
+        const wiredPages = parseInt(vmStat.match(/Pages wired down:\s+(\d+)/)?.[1] || '0');
+        const compressedPages = parseInt(vmStat.match(/Pages stored in compressor:\s+(\d+)/)?.[1] || '0');
+        
+        // Calculate memory usage
+        const totalPages = freePages + activePages + inactivePages + speculativePages + wiredPages + compressedPages;
+        const usedPages = activePages + inactivePages + wiredPages + compressedPages;
+        
+        totalSystemMemory = totalPages * pageSize;
+        usedSystemMemory = usedPages * pageSize;
+        freeSystemMemory = freePages * pageSize;
+        systemMemoryPercent = (usedSystemMemory / totalSystemMemory) * 100;
+        
+      } else if (platform === 'linux') {
+        // Linux - use /proc/meminfo for accurate memory info
+        const meminfo = execSync('cat /proc/meminfo').toString();
+        
+        const totalKB = parseInt(meminfo.match(/MemTotal:\s+(\d+)/)?.[1] || '0');
+        const freeKB = parseInt(meminfo.match(/MemFree:\s+(\d+)/)?.[1] || '0');
+        const buffersKB = parseInt(meminfo.match(/Buffers:\s+(\d+)/)?.[1] || '0');
+        const cachedKB = parseInt(meminfo.match(/Cached:\s+(\d+)/)?.[1] || '0');
+        const availableKB = parseInt(meminfo.match(/MemAvailable:\s+(\d+)/)?.[1] || '0');
+        
+        // Calculate actual used memory (excluding buffers/cache)
+        totalSystemMemory = totalKB * 1024;
+        const actuallyFreeMemory = availableKB > 0 ? availableKB * 1024 : (freeKB + buffersKB + cachedKB) * 1024;
+        usedSystemMemory = totalSystemMemory - actuallyFreeMemory;
+        freeSystemMemory = actuallyFreeMemory;
+        systemMemoryPercent = (usedSystemMemory / totalSystemMemory) * 100;
+      }
+      // For other platforms (Windows, etc.), fall back to os.totalmem()/os.freemem()
+      
+    } catch (error) {
+      console.warn('Failed to get OS-specific memory info, using Node.js os module:', error.message);
+      // Fallback to os module values already calculated above
+    }
+    
+    // Node.js process memory info for debugging
+    const nodeMemoryUsedMB = memory.rss / 1024 / 1024; // RSS = Resident Set Size (actual memory used by Node.js)
 
     return {
       cameras: {
@@ -424,12 +481,16 @@ class BroadcastServer {
         bytesTransferred: 0 // Would need to be tracked separately
       },
       system: {
+        platform: os.platform(),
+        arch: os.arch(),
         cpu: Math.random() * 20 + 10, // Simulated CPU usage 10-30%
         cpuAverage: Math.random() * 15 + 5, // Simulated average
         cores: require('os').cpus().length,
-        memory: memoryPercent,
-        memoryUsed: memory.heapUsed,
-        memoryTotal: memory.heapTotal,
+        memory: Math.round(systemMemoryPercent * 100) / 100, // Round to 2 decimal places
+        memoryUsed: usedSystemMemory, // System memory used
+        memoryTotal: totalSystemMemory, // Total system memory
+        memoryFree: freeSystemMemory, // Free system memory
+        nodeMemoryMB: Math.round(nodeMemoryUsedMB * 100) / 100, // Node.js process memory for debugging
         networkOut: Math.random() * 1024 * 1024, // Simulated network out
         networkIn: Math.random() * 512 * 1024, // Simulated network in
         totalNetworkOut: Math.random() * 1024 * 1024 * 1024, // Simulated total
