@@ -16,24 +16,71 @@ show_usage() {
 show_status() {
     echo "=== Current Network Status ==="
     echo ""
-    echo "Active connections:"
-    nmcli connection show --active
-    echo ""
-    echo "Current routes:"
-    ip route | head -5
-    echo ""
-    echo "Internet test:"
-    if ping -c 1 8.8.8.8 >/dev/null 2>&1; then
-        echo "✅ Internet connectivity: OK"
-        echo "Current public IP:"
-        curl -s ifconfig.me 2>/dev/null || echo "Could not get public IP"
+    
+    # Show Tailscale status first (most important for remote access)
+    echo "🔵 Tailscale VPN Status:"
+    if command -v tailscale >/dev/null 2>&1; then
+        TAILSCALE_STATUS=$(tailscale status --json 2>/dev/null | jq -r '.BackendState // "unknown"' 2>/dev/null || echo "unknown")
+        TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "unavailable")
+        
+        case $TAILSCALE_STATUS in
+            "Running")
+                echo "   ✅ Connected - IP: $TAILSCALE_IP"
+                echo "   🌐 Remote access: ssh dan7554@$TAILSCALE_IP"
+                ;;
+            "NeedsLogin")
+                echo "   🔑 Authentication required"
+                echo "   💡 Run: sudo tailscale up --ssh --accept-routes"
+                ;;
+            "Stopped")
+                echo "   ⏹️  Stopped"
+                ;;
+            *)
+                echo "   ❓ Status: $TAILSCALE_STATUS"
+                ;;
+        esac
     else
-        echo "❌ Internet connectivity: FAILED"
+        echo "   📦 Not installed (run: sudo ./setup-tailscale.sh)"
     fi
     echo ""
-    echo "Interfaces:"
-    ip addr show rmnet_mhi0 | grep -E "(rmnet_mhi0|inet)" || echo "Cellular: DOWN"
-    ip addr show wlan0 | grep -E "(wlan0|inet)" || echo "WiFi: DOWN"
+    
+    echo "📡 Network Connections:"
+    nmcli connection show --active
+    echo ""
+    echo "🛣️  Current routes:"
+    ip route | head -5
+    echo ""
+    
+    # Show IP addresses for all interfaces
+    echo "📍 IP Addresses:"
+    CELLULAR_IP=$(ip route get 1.1.1.1 2>/dev/null | grep rmnet_mhi0 | awk '{print $7}' | head -1 || echo "unavailable")
+    WIFI_IP=$(ip route get 1.1.1.1 2>/dev/null | grep wlan0 | awk '{print $7}' | head -1 || echo "unavailable")
+    
+    echo "   📱 Cellular:  $CELLULAR_IP"
+    echo "   📶 WiFi:      $WIFI_IP"
+    echo "   🔵 Tailscale: $TAILSCALE_IP"
+    echo ""
+    
+    echo "🌐 Internet connectivity test:"
+    if ping -c 1 8.8.8.8 >/dev/null 2>&1; then
+        echo "   ✅ Internet connectivity: OK"
+        echo "   🌍 Current public IP:"
+        PUBLIC_IP=$(curl -s --max-time 5 ifconfig.me 2>/dev/null || echo "Could not determine")
+        echo "      $PUBLIC_IP"
+    else
+        echo "   ❌ Internet connectivity: FAILED"
+    fi
+    echo ""
+    
+    echo "🔧 Interface Details:"
+    ip addr show rmnet_mhi0 | grep -E "(rmnet_mhi0|inet)" 2>/dev/null || echo "   Cellular: DOWN"
+    ip addr show wlan0 | grep -E "(wlan0|inet)" 2>/dev/null || echo "   WiFi: DOWN"
+    
+    # Show reverse tunnel status if available
+    if [ -f "/home/dan7554/reverse-tunnel-manager.sh" ] && systemctl is-active --quiet reverse-ssh-tunnel 2>/dev/null; then
+        echo ""
+        echo "🔄 Reverse Tunnel: Active (backup access available)"
+    fi
 }
 
 switch_to_cellular() {

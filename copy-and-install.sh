@@ -56,6 +56,10 @@ eval $SCP_CMD rpi/fix-qmi-transport.sh $PI_USER@$PI_HOST:/home/dan7554/
 eval $SCP_CMD rpi/fix-modemmanager-sim8262a.sh $PI_USER@$PI_HOST:/home/dan7554/
 eval $SCP_CMD rpi/advanced-qmi-fix.sh $PI_USER@$PI_HOST:/home/dan7554/
 
+# Remote access scripts (Tailscale & backup tunnel)
+eval $SCP_CMD rpi/setup-tailscale.sh $PI_USER@$PI_HOST:/home/dan7554/
+eval $SCP_CMD rpi/reverse-ssh-tunnel.sh $PI_USER@$PI_HOST:/home/dan7554/
+
 
 echo "Installing and starting service..."
 eval $SSH_CMD $PI_USER@$PI_HOST << 'EOF'
@@ -82,6 +86,10 @@ chmod +x /home/dan7554/test-mintmobile-sim.sh
 chmod +x /home/dan7554/fix-qmi-transport.sh
 chmod +x /home/dan7554/fix-modemmanager-sim8262a.sh
 chmod +x /home/dan7554/advanced-qmi-fix.sh
+
+# Make remote access scripts executable
+chmod +x /home/dan7554/setup-tailscale.sh
+chmod +x /home/dan7554/reverse-ssh-tunnel.sh
 
 # Install and start RPi camera service
 sudo cp /home/dan7554/rpicam-stream.service /etc/systemd/system/
@@ -115,6 +123,10 @@ echo "- network-switcher.sh                (Switch between WiFi/cellular)"
 echo "- extract-sim-info.sh                (Extract SIM activation info)"
 echo "- README-SIM8262A.md                 (Complete documentation)"
 echo ""
+echo "🔵 REMOTE ACCESS SCRIPTS:"
+echo "- setup-tailscale.sh                 (🌐 Install Tailscale VPN - FREE)"
+echo "- reverse-ssh-tunnel.sh              (🔄 Backup tunnel via VPS)"
+echo ""
 echo "🌊 RECOMMENDED: Start with Waveshare setup for best compatibility"
 echo "📱 Supported Carriers: Verizon, eiotclub/1NCE, Mint Mobile"
 echo "Quick start: ./sim8262a-summary.sh"
@@ -128,3 +140,8 @@ echo "2. 🔧 TRANSPORT FIX: sudo ./advanced-qmi-fix.sh"
 echo "3. Or auto-fix: sudo ./sim8262a-diagnostic-and-fix.sh"
 echo "4. For Waveshare setup: sudo ./waveshare-sim8262a-setup.sh"
 echo "5. Configure carrier: sudo ./setup-cellular-connection.sh"
+echo ""
+echo "🔵 REMOTE ACCESS SETUP (for mobile network access):"
+echo "6. Install Tailscale: sudo ./setup-tailscale.sh"
+echo "7. Check connection: ./tailscale-status.sh"
+echo "8. Optional backup: ./reverse-ssh-tunnel.sh config"
