@@ -55,10 +55,16 @@ connect_starlink() {
     echo -e "${YELLOW}🌟 Connecting to $STARLINK_SSID...${NC}"
     
     # First, disconnect from any active connection
-    nmcli connection down id "$REGULAR_SSID" 2>/dev/null || true
+    sudo nmcli connection down id "$REGULAR_SSID" 2>/dev/null || true
     
-    # Connect to Starlink
-    if sudo nmcli device wifi connect "$STARLINK_SSID" password "$STARLINK_PASS"; then
+    # Check if connection profile exists, if not create it
+    if ! nmcli connection show "$STARLINK_SSID" &>/dev/null; then
+        echo -e "${YELLOW}📝 Creating connection profile for $STARLINK_SSID...${NC}"
+        sudo nmcli connection add type wifi con-name "$STARLINK_SSID" ifname wlan0 ssid "$STARLINK_SSID" -- wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$STARLINK_PASS"
+    fi
+    
+    # Connect using the profile
+    if sudo nmcli connection up "$STARLINK_SSID"; then
         echo -e "${GREEN}✅ Successfully connected to $STARLINK_SSID${NC}"
         sleep 2
         echo -e "${BLUE}📍 New IP Address:${NC}"
@@ -74,29 +80,27 @@ connect_regular() {
     echo -e "${YELLOW}🌐 Connecting to $REGULAR_SSID...${NC}"
     
     # First, disconnect from Starlink
-    nmcli connection down id "$STARLINK_SSID" 2>/dev/null || true
+    sudo nmcli connection down id "$STARLINK_SSID" 2>/dev/null || true
     
-    # Connect to regular WiFi
-    if [ -z "$REGULAR_PASS" ]; then
-        if sudo nmcli device wifi connect "$REGULAR_SSID"; then
-            echo -e "${GREEN}✅ Successfully connected to $REGULAR_SSID${NC}"
-            sleep 2
-            echo -e "${BLUE}📍 New IP Address:${NC}"
-            hostname -I
+    # Check if connection profile exists, if not create it
+    if ! nmcli connection show "$REGULAR_SSID" &>/dev/null; then
+        echo -e "${YELLOW}📝 Creating connection profile for $REGULAR_SSID...${NC}"
+        if [ -z "$REGULAR_PASS" ]; then
+            sudo nmcli connection add type wifi con-name "$REGULAR_SSID" ifname wlan0 ssid "$REGULAR_SSID" -- wifi-sec.key-mgmt none
         else
-            echo -e "${RED}❌ Failed to connect to $REGULAR_SSID${NC}"
-            exit 1
+            sudo nmcli connection add type wifi con-name "$REGULAR_SSID" ifname wlan0 ssid "$REGULAR_SSID" -- wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$REGULAR_PASS"
         fi
+    fi
+    
+    # Connect using the profile
+    if sudo nmcli connection up "$REGULAR_SSID"; then
+        echo -e "${GREEN}✅ Successfully connected to $REGULAR_SSID${NC}"
+        sleep 2
+        echo -e "${BLUE}📍 New IP Address:${NC}"
+        hostname -I
     else
-        if sudo nmcli device wifi connect "$REGULAR_SSID" password "$REGULAR_PASS"; then
-            echo -e "${GREEN}✅ Successfully connected to $REGULAR_SSID${NC}"
-            sleep 2
-            echo -e "${BLUE}📍 New IP Address:${NC}"
-            hostname -I
-        else
-            echo -e "${RED}❌ Failed to connect to $REGULAR_SSID${NC}"
-            exit 1
-        fi
+        echo -e "${RED}❌ Failed to connect to $REGULAR_SSID${NC}"
+        exit 1
     fi
 }
 
