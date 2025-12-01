@@ -1,0 +1,25 @@
+version: '3.8'
+
+# Development overrides for docker-compose.yml
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+  broadcast-system:
+    build:
+      context: ./broadcast-system
+      dockerfile: Dockerfile
+    environment:
+      - NODE_ENV=development
+      - PORT=3001
+      - MEDIAMTX_URL=https://mediamtx:8889
+    # Use self-signed certs in development
+    volumes:
+      - ./broadcast-system/certs:/etc/nginx/certs
+      - ./broadcast-system/server:/app/server
+      - ./broadcast-system/client/src:/app/client/src
+    ports:
+      - "80:80"
+      - "443:443"
+    # Keep container running for debugging
+    tty: true
+    stdin_open: true

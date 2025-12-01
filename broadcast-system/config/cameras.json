@@ -4,8 +4,8 @@
       "id": "2378c1d2-a85f-496a-88a8-e9189c3b16ff",
       "name": "Camera 2",
       "type": "webrtc",
-      "url": "https://192.168.50.208:8889/rpicam2/",
-      "rtspUrl": "rtsp://192.168.50.208:8554/rpicam2",
+      "url": "https://rtsp.racetrackstreaming.com:8889/rpicam2/",
+      "rtspUrl": "rtsp://rtsp.racetrackstreaming.com:8554/rpicam2",
       "enabled": true,
       "position": {
         "x": 0,

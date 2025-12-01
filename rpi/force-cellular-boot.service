@@ -1,0 +1,17 @@
+[Unit]
+Description=Force Cellular Connection on Boot
+After=network.target
+Before=tailscaled.service
+Wants=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/force-cellular-boot.sh
+RemainAfterExit=yes
+TimeoutStartSec=600
+User=root
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

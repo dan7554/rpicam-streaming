@@ -1,0 +1,22 @@
+[Unit]
+Description=Cellular Data Connection Manager - Waveshare SIM8262A
+After=network-online.target
+After=ModemManager.service
+Wants=network-online.target
+ConditionFileNotEmpty=/dev/mhi_QMI0
+
+[Service]
+Type=simple
+User=root
+Restart=on-failure
+RestartSec=10
+ExecStartPre=/bin/sleep 3
+ExecStart=/usr/local/bin/waveshare-CM -s 3gnet
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cellular-waveshare-cm
+# Allow 30 seconds to establish connection
+TimeoutStartSec=40
+
+[Install]
+WantedBy=multi-user.target

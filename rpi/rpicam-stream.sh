@@ -4,34 +4,59 @@
 # This script runs the rpicam-vid command with automatic retry on failure
 
 # Configuration
-# RTSP_SERVER="rtsp.racetrackstreaming.com:8554"  # RTSP endpoint with A record to ECS IP
-RTSP_SERVER="192.168.50.208:8554"
-STREAM_NAME="rpicam3"
+RTSP_SERVER_DOMAIN="rtsp.racetrackstreaming.com"  # Domain pointing to ECS task public IP
+RTSP_SERVER_PORT="8554"
+STREAM_NAME="rpicam2"
 MAX_RETRIES=0  # 0 means infinite retries
 RETRY_DELAY=5  # seconds between retries
 CONNECTION_TIMEOUT=30  # seconds to wait for RTSP server
+DNS_SERVER="8.8.8.8"  # Google DNS - works on cellular when carrier DNS fails
 
 # Logging function
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1"
 }
 
+# Function to resolve hostname - bypasses cache by always using fresh lookup
+resolve_hostname() {
+    local hostname=$1
+    # Use Python for fresh DNS resolution
+    local ip=$(python3 -c "import socket; print(socket.gethostbyname('$hostname'))" 2>/dev/null)
+    # If python3 fails, try getent
+    if [ -z "$ip" ] || [ "$ip" = "127.0.0.1" ]; then
+        ip=$(getent hosts "$hostname" 2>/dev/null | awk '{print $1}' | head -1)
+    fi
+    if [ -n "$ip" ] && [ "$ip" != "127.0.0.1" ]; then
+        echo "$ip"
+        return 0
+    fi
+    return 1
+}
+
 # Function to check if RTSP server is reachable
 check_rtsp_server() {
-    # Extract hostname and port from RTSP_SERVER
-    IFS=':' read -r hostname port <<< "$RTSP_SERVER"
-    if [ -z "$port" ]; then
-        port=8554  # default RTSP port
+    local hostname=$1
+    local port=$2
+    
+    # Resolve hostname to IP
+    local ip=$(resolve_hostname "$hostname")
+    if [ -z "$ip" ]; then
+        log "Failed to resolve $hostname"
+        return 1
     fi
     
-    # Test connection to RTSP server
-    timeout $CONNECTION_TIMEOUT bash -c "</dev/tcp/$hostname/$port" 2>/dev/null
+    log "Resolved $hostname to $ip"
+    
+    # Test connection to RTSP server using resolved IP
+    timeout $CONNECTION_TIMEOUT bash -c "</dev/tcp/$ip/$port" 2>/dev/null
     return $?
 }
 
 # Function to run the streaming command
 run_stream() {
-    log "Starting RPiCam stream to rtsp://$RTSP_SERVER/$STREAM_NAME"
+    local ip=$1
+    local rtsp_url="rtsp://$ip:$RTSP_SERVER_PORT/$STREAM_NAME"
+    log "Starting RPiCam stream to $rtsp_url"
     
 
 #                                      number
@@ -44,7 +69,7 @@ run_stream() {
 
     # Your streaming command here
     rpicam-vid -t 0 --camera 0 --nopreview --codec yuv420 --brightness 0 --contrast 1 --saturation 1 --width 1280 --height 720 --framerate 30 --inline -o - | \
-    ffmpeg -f rawvideo -pix_fmt yuv420p -s:v 1280x720 -r 30 -i - -c:v libx264 -preset veryfast -tune zerolatency -f rtsp -rtsp_transport tcp rtsp://$RTSP_SERVER/$STREAM_NAME
+    ffmpeg -f rawvideo -pix_fmt yuv420p -s:v 1280x720 -r 30 -i - -c:v libx264 -preset veryfast -tune zerolatency -f rtsp -rtsp_transport tcp "$rtsp_url"
 }
 
 # Main loop with retry logic
@@ -59,15 +84,18 @@ while true; do
     
     # Wait for RTSP server to be available
     log "Checking RTSP server availability..."
-    while ! check_rtsp_server; do
-        log "RTSP server at $RTSP_SERVER not reachable. Waiting $RETRY_DELAY seconds..."
+    while ! check_rtsp_server "$RTSP_SERVER_DOMAIN" "$RTSP_SERVER_PORT"; do
+        log "RTSP server at $RTSP_SERVER_DOMAIN:$RTSP_SERVER_PORT not reachable. Waiting $RETRY_DELAY seconds..."
         sleep $RETRY_DELAY
     done
     
     log "RTSP server is reachable. Starting stream (attempt $((retry_count + 1)))"
     
+    # Get resolved IP for streaming
+    resolved_ip=$(resolve_hostname "$RTSP_SERVER_DOMAIN")
+    
     # Run the streaming command
-    run_stream
+    run_stream "$resolved_ip"
     
     # If we reach here, the command failed
     exit_code=$?

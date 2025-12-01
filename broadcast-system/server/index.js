@@ -55,14 +55,14 @@ class BroadcastServer {
   }
 
   setupRoutes() {
-    // API Routes
-    this.app.use('/api/cameras', cameraRoutes(this.cameraManager, this.io));
-    this.app.use('/api/scenes', sceneRoutes(this.sceneComposer, this.io));
-    this.app.use('/api/streaming/streams', streamRoutes(this.streamManager, this.io));
-    this.app.use('/api/config', configRoutes());
+    // API Routes (nginx handles /api prefix via rewrite)
+    this.app.use('/cameras', cameraRoutes(this.cameraManager, this.io));
+    this.app.use('/scenes', sceneRoutes(this.sceneComposer, this.io));
+    this.app.use('/streaming/streams', streamRoutes(this.streamManager, this.io));
+    this.app.use('/config', configRoutes());
 
     // Health check
-    this.app.get('/api/health', (req, res) => {
+    this.app.get('/health', (req, res) => {
       res.json({
         status: 'healthy',
         timestamp: new Date().toISOString(),
@@ -77,7 +77,7 @@ class BroadcastServer {
 
     // Serve React app for all other routes
     this.app.get('*', (req, res) => {
-      res.sendFile(path.join(__dirname, '../client/build/index.html'));
+      res.sendFile(path.join(__dirname, '../client/dist/index.html'));
     });
   }
 

@@ -1,0 +1,19 @@
+[Unit]
+Description=Modem Reset and Initialization via GPIO5
+# Run BEFORE the pcie_mhi driver gets loaded by other services
+Before=ModemManager.service
+Before=systemd-modules-load.service
+Before=network-pre.target
+DefaultDependencies=no
+Wants=systemd-tmpfiles-setup.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/modem-reset-init.sh
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=modem-reset-init
+
+[Install]
+WantedBy=sysinit.target

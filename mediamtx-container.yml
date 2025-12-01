@@ -43,7 +43,7 @@ apiAddress: :9997
 apiEncryption: no
 apiServerKey: /app/server.key
 apiServerCert: /app/server.crt
-apiAllowOrigin: "*"
+apiAllowOrigins: ["*"]
 
 ###############################################
 # Global settings -> Metrics
@@ -53,7 +53,7 @@ metricsAddress: :9998
 metricsEncryption: no
 metricsServerKey: /app/server.key
 metricsServerCert: /app/server.crt
-metricsAllowOrigin: "*"
+metricsAllowOrigins: ["*"]
 
 ###############################################
 # Global settings -> PPROF
@@ -63,7 +63,7 @@ pprofAddress: :9999
 pprofEncryption: no
 pprofServerKey: /app/server.key
 pprofServerCert: /app/server.crt
-pprofAllowOrigin: "*"
+pprofAllowOrigins: ["*"]
 
 ###############################################
 # Global settings -> Playback server
@@ -73,7 +73,7 @@ playbackAddress: :9996
 playbackEncryption: no
 playbackServerKey: /app/server.key
 playbackServerCert: /app/server.crt
-playbackAllowOrigin: "*"
+playbackAllowOrigins: ["*"]
 
 ###############################################
 # Global settings -> RTSP server
@@ -114,7 +114,7 @@ hlsAddress: :8888
 hlsEncryption: no
 hlsServerKey: /app/server.key
 hlsServerCert: /app/server.crt
-hlsAllowOrigin: "*"
+hlsAllowOrigins: ["*"]
 hlsAlwaysRemux: no
 hlsVariant: lowLatency
 hlsSegmentCount: 7
@@ -132,14 +132,14 @@ webrtcAddress: :8889
 webrtcEncryption: no
 webrtcServerKey: /app/server.key
 webrtcServerCert: /app/server.crt
-webrtcAllowOrigin: "*"
+webrtcAllowOrigins: ["*"]
 webrtcLocalUDPAddress: :8189
 webrtcLocalTCPAddress: ""
-webrtcIPsFromInterfaces: yes
-webrtcAdditionalHosts: []
+webrtcIPsFromInterfaces: no
+webrtcAdditionalHosts: [rtsp.racetrackstreaming.com]
 webrtcICEServers2: []
 webrtcHandshakeTimeout: 10s
-webrtcTrackGatherTimeout: 2s
+webrtcTrackGatherTimeout: 5s
 
 ###############################################
 # Global settings -> SRT server
@@ -151,7 +151,6 @@ srtAddress: :8890
 # Default path settings
 
 pathDefaults:
-  source: publisher
   sourceOnDemand: no
   sourceOnDemandStartTimeout: 10s
   sourceOnDemandCloseAfter: 10s
@@ -165,16 +164,17 @@ pathDefaults:
   recordMaxPartSize: 50M
   recordSegmentDuration: 1h
   recordDeleteAfter: 6h
-  
-  overridePublisher: yes
 
 ###############################################
 # Specific paths
 
 paths:
+  rpicam2:
+    source: publisher
+    record: yes
+    sourceOnDemandStartTimeout: 20s
+    
   rpicam:
     source: publisher
     record: yes
-    playback: yes
-    
-  all_others:
+    sourceOnDemandStartTimeout: 20s

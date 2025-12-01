@@ -9,7 +9,7 @@ set -e
 # Configuration
 PI_USER="dan7554"
 PI_WIFI_HOST="rpicam2.local"  # or 192.168.50.96
-PI_PASSWORD="!Dan1007554"
+# Using SSH key-based authentication
 CONNECTION_TIMEOUT=10
 
 # Colors for output
@@ -28,24 +28,18 @@ print_status() {
 
 # Function to check if sshpass is available
 check_sshpass() {
-    if [ -n "$PI_PASSWORD" ] && ! command -v sshpass >/dev/null 2>&1; then
-        print_status $YELLOW "⚠️  sshpass not found - you'll need to enter password manually"
-        return 1
-    fi
+    # Using SSH keys - no password needed
     return 0
 }
 
 # Function to get Tailscale IP from local machine (if available)
 get_local_tailscale_status() {
     if command -v tailscale >/dev/null 2>&1; then
-        # Get connected devices and look for our Pi
-        TAILSCALE_DEVICES=$(tailscale status 2>/dev/null | grep -E "(rpicam|dan7554)" | grep -v "^#" || echo "")
-        if [ -n "$TAILSCALE_DEVICES" ]; then
-            # Extract IP from first matching device
-            echo "$TAILSCALE_DEVICES" | awk '{print $1}' | head -1
-        fi
+        # Get Pi's Tailscale IP directly from status
+        tailscale status 2>/dev/null | grep -E "(rpicam|dan7554.*linux)" | awk '{print $1}' | head -1 | grep "^100\." || echo ""
+    else
+        echo ""
     fi
-    echo ""
 }
 
 # Function to test SSH connection
@@ -55,14 +49,8 @@ test_ssh_connection() {
     
     print_status $BLUE "🧪 Testing $method connection to $host..."
     
-    if [ -n "$PI_PASSWORD" ] && check_sshpass; then
-        if timeout $CONNECTION_TIMEOUT sshpass -p "$PI_PASSWORD" ssh -o ConnectTimeout=$CONNECTION_TIMEOUT -o BatchMode=no -o StrictHostKeyChecking=accept-new "$PI_USER@$host" "echo 'Connection successful'" 2>/dev/null; then
-            return 0
-        fi
-    else
-        if timeout $CONNECTION_TIMEOUT ssh -o ConnectTimeout=$CONNECTION_TIMEOUT -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$PI_USER@$host" "echo 'Connection successful'" 2>/dev/null; then
-            return 0
-        fi
+    if timeout $CONNECTION_TIMEOUT ssh -o ConnectTimeout=$CONNECTION_TIMEOUT -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$PI_USER@$host" "echo 'Connection successful'" 2>/dev/null; then
+        return 0
     fi
     return 1
 }
@@ -73,12 +61,7 @@ connect_ssh() {
     local method=$2
     
     print_status $GREEN "🔗 Connecting to Pi via $method ($host)..."
-    
-    if [ -n "$PI_PASSWORD" ] && check_sshpass; then
-        exec sshpass -p "$PI_PASSWORD" ssh "$PI_USER@$host"
-    else
-        exec ssh "$PI_USER@$host"
-    fi
+    exec ssh "$PI_USER@$host"
 }
 
 # Function to show connection info

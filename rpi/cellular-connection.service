@@ -1,0 +1,19 @@
+[Unit]
+Description=Cellular Data Connection - Waveshare CM
+After=modem-reset-init.service
+After=ModemManager.service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Restart=on-failure
+RestartSec=5
+ExecStartPre=/bin/sleep 3
+ExecStart=/usr/local/bin/waveshare-CM -s 3gnet
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cellular-cm
+
+[Install]
+WantedBy=multi-user.target

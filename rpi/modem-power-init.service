@@ -1,0 +1,14 @@
+[Unit]
+Description=Modem Power Initialization - GPIO Control for SIM8262A
+Before=sysinit.target
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/modem-power-init.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=sysinit.target

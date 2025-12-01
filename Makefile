@@ -592,7 +592,8 @@ ecs-create-task: ## 📋 Create ECS task definition
 	@echo '}' >> task-definition.json
 	aws ecs register-task-definition \
 		--cli-input-json file://task-definition.json \
-		--region $(AWS_REGION)
+		--region $(AWS_REGION) \
+		--no-cli-pager > /dev/null
 	@rm -f task-definition.json
 	@echo "✅ Task definition registered!"
 
@@ -638,7 +639,8 @@ ecs-create-task-no-healthcheck: ## 📋 Create ECS task definition without healt
 	@echo '}' >> task-definition.json
 	aws ecs register-task-definition \
 		--cli-input-json file://task-definition.json \
-		--region $(AWS_REGION)
+		--region $(AWS_REGION) \
+		--no-cli-pager > /dev/null
 	@rm -f task-definition.json
 	@echo "✅ Task definition registered (no health check)!"
 
@@ -679,7 +681,8 @@ ecs-create-service: ## ⚙️ Create ECS service (requires VPC setup)
 			--launch-type FARGATE \
 			--deployment-configuration "maximumPercent=100,minimumHealthyPercent=0,deploymentCircuitBreaker={enable=true,rollback=false}" \
 			--network-configuration "awsvpcConfiguration={subnets=[$(SUBNET_IDS)],securityGroups=[$(SG_ID)],assignPublicIp=ENABLED}" \
-			--region $(AWS_REGION); \
+			--region $(AWS_REGION) \
+			--no-cli-pager > /dev/null; \
 	fi
 	@echo "✅ ECS service ready!"
 	@echo "⏳ Service is starting up. This may take a few minutes..."
@@ -693,9 +696,10 @@ ecs-update: ## 🔄 Update ECS service with latest image
 	aws ecs update-service \
 		--cluster $(ECS_CLUSTER_NAME) \
 		--service $(ECS_SERVICE_NAME) \
-		--deployment-configuration "maximumPercent=100,minimumHealthyPercent=0,deploymentCircuitBreaker={enable=true,rollback=false}" \
+		--deployment-configuration "maximumPercent=200,minimumHealthyPercent=100,deploymentCircuitBreaker={enable=false,rollback=false}" \
 		--force-new-deployment \
-		--region $(AWS_REGION)
+		--region $(AWS_REGION) \
+		--no-cli-pager > /dev/null
 	@echo "✅ Service update initiated!"
 
 ecs-update-security-group: ## 🛡️ Update ECS service to use MediaMTX security group
@@ -717,7 +721,8 @@ ecs-update-security-group: ## 🛡️ Update ECS service to use MediaMTX securit
 		--network-configuration "awsvpcConfiguration={subnets=[$$SUBNET_IDS],securityGroups=[$$SG_ID],assignPublicIp=ENABLED}" \
 		--deployment-configuration "maximumPercent=100,minimumHealthyPercent=0,deploymentCircuitBreaker={enable=true,rollback=false}" \
 		--force-new-deployment \
-		--region $(AWS_REGION)
+		--region $(AWS_REGION) \
+		--no-cli-pager > /dev/null
 	@echo "✅ Service security group updated!"
 
 ecs-status: ## 📊 Show ECS service status
@@ -1180,7 +1185,7 @@ alb-add-listeners: ## 🎧 Add ALB listeners for all MediaMTX ports
 		echo "❌ ALB not found - create it first with 'make alb-create'"; \
 		exit 1; \
 	fi; \
-	TARGET_GROUP_ARN=$$(aws elbv2 describe-target-groups --names $(ALB_TARGET_GROUP_NAME) --region $(AWS_REGION) --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null); \
+	TARGET_GROUP_ARN=$$(aws elbv2 describe-target-groups --names $(TARGET_GROUP_NAME) --region $(AWS_REGION) --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null); \
 	if [ "$$TARGET_GROUP_ARN" = "None" ] || [ -z "$$TARGET_GROUP_ARN" ]; then \
 		echo "❌ Target group not found - create it first with 'make alb-create'"; \
 		exit 1; \
@@ -1223,15 +1228,40 @@ alb-add-listeners: ## 🎧 Add ALB listeners for all MediaMTX ports
 
 dns-create-rtsp-record: ## 🎯 Create A record for RTSP pointing to current ECS task IP
 	@echo "🎯 Creating RTSP A record..."
-	@TASK_ARN=$$(aws ecs list-tasks --cluster $(ECS_CLUSTER_NAME) --service-name $(ECS_SERVICE_NAME) --region $(AWS_REGION) --query 'taskArns[0]' --output text); \
+	@echo "⏳ Waiting for ECS tasks to be running (max 120 seconds)..."; \
+	TASK_ARN=""; \
+	for i in {1..24}; do \
+		TASK_ARN=$$(aws ecs list-tasks --cluster $(ECS_CLUSTER_NAME) --desired-status RUNNING --region $(AWS_REGION) --query 'taskArns[0]' --output text); \
+		if [ "$$TASK_ARN" != "None" ] && [ -n "$$TASK_ARN" ]; then \
+			echo "✅ Task found: $$TASK_ARN"; \
+			break; \
+		fi; \
+		echo "⏳ Waiting... ($$(($$i * 5)) seconds elapsed)"; \
+		sleep 5; \
+	done; \
 	if [ "$$TASK_ARN" = "None" ] || [ -z "$$TASK_ARN" ]; then \
-		echo "❌ No running tasks found"; \
+		echo "❌ No running tasks found after waiting"; \
 		exit 1; \
 	fi; \
-	NETWORK_INTERFACE_ID=$$(aws ecs describe-tasks --cluster $(ECS_CLUSTER_NAME) --tasks $$TASK_ARN --region $(AWS_REGION) --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' --output text); \
-	PUBLIC_IP=$$(aws ec2 describe-network-interfaces --network-interface-ids $$NETWORK_INTERFACE_ID --region $(AWS_REGION) --query 'NetworkInterfaces[0].Association.PublicIp' --output text); \
+	echo "⏳ Waiting for task to get public IP (max 30 seconds)..."; \
+	NETWORK_INTERFACE_ID=""; \
+	PUBLIC_IP=""; \
+	for j in {1..6}; do \
+		NETWORK_INTERFACE_ID=$$(aws ecs describe-tasks --cluster $(ECS_CLUSTER_NAME) --tasks $$TASK_ARN --region $(AWS_REGION) --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' --output text); \
+		if [ "$$NETWORK_INTERFACE_ID" != "None" ] && [ -n "$$NETWORK_INTERFACE_ID" ]; then \
+			PUBLIC_IP=$$(aws ec2 describe-network-interfaces --network-interface-ids $$NETWORK_INTERFACE_ID --region $(AWS_REGION) --query 'NetworkInterfaces[0].Association.PublicIp' --output text 2>/dev/null); \
+			if [ "$$PUBLIC_IP" != "None" ] && [ -n "$$PUBLIC_IP" ]; then \
+				echo "✅ Public IP acquired: $$PUBLIC_IP"; \
+				break; \
+			fi; \
+		fi; \
+		if [ $$j -lt 6 ]; then \
+			echo "⏳ Waiting for public IP... (attempt $$j/6)"; \
+			sleep 5; \
+		fi; \
+	done; \
 	if [ "$$PUBLIC_IP" = "None" ] || [ -z "$$PUBLIC_IP" ]; then \
-		echo "❌ No public IP found for task"; \
+		echo "❌ No public IP found for task after waiting"; \
 		exit 1; \
 	fi; \
 	echo "📍 ECS Task Public IP: $$PUBLIC_IP"; \
@@ -1256,7 +1286,7 @@ dns-create-rtsp-record: ## 🎯 Create A record for RTSP pointing to current ECS
 		}] \
 	}' --region $(AWS_REGION); \
 	echo "✅ RTSP A record created!"; \
-	echo "🎯 RTSP endpoint: rtsp://rtsp.$$BASE_DOMAIN:8554/cam"
+	echo "🎯 RTSP endpoint: rtsp://rtsp.$$BASE_DOMAIN:8554/rpicam2"
 
 ###############################################
 # DNS/Domain Setup targets
@@ -1351,40 +1381,23 @@ dns-create-cname: ## 🚀 Create CNAME record (Route53 only)
 		exit 1; \
 	fi
 	@ALB_DNS=$$(aws elbv2 describe-load-balancers --names $(ALB_NAME) --region $(AWS_REGION) --query 'LoadBalancers[0].DNSName' --output text 2>/dev/null); \
-	if [ "$$ALB_DNS" = "None" ] || [ -z "$$ALB_DNS" ]; then \
+	if [ -z "$$ALB_DNS" ] || [ "$$ALB_DNS" = "None" ]; then \
 		echo "❌ ALB not found. Create it first: make alb-create"; \
 		exit 1; \
 	fi; \
-	echo "🔍 Looking for Route53 hosted zone for $(DOMAIN_NAME)..."; \
-	ZONE_ID=$$(aws route53 list-hosted-zones --query "HostedZones[?contains(Name, '$(DOMAIN_NAME)')].Id" --output text | sed 's|/hostedzone/||' | head -n1); \
+	BASE_DOMAIN=$$(echo "$(DOMAIN_NAME)" | sed 's/^[^.]*\.//' | tr -d ' '); \
+	echo "🔍 Looking for Route53 hosted zone for $$BASE_DOMAIN..."; \
+	ZONE_ID=$$(aws route53 list-hosted-zones --query "HostedZones[?Name=='$$BASE_DOMAIN.'].Id" --output text | sed 's|/hostedzone/||'); \
 	if [ -z "$$ZONE_ID" ] || [ "$$ZONE_ID" = "None" ]; then \
-		echo "❌ No Route53 hosted zone found for $(DOMAIN_NAME)"; \
-		echo "💡 Options:"; \
-		echo "   1. Create hosted zone: aws route53 create-hosted-zone --name $(DOMAIN_NAME) --caller-reference $$(date +%s)"; \
-		echo "   2. Use manual DNS setup: make dns-setup"; \
+		echo "❌ No Route53 hosted zone found for $$BASE_DOMAIN"; \
+		echo "💡 Available zones:"; \
+		aws route53 list-hosted-zones --query 'HostedZones[].{Name:Name,Id:Id}' --output table; \
 		exit 1; \
-	else \
-		echo "✅ Found hosted zone: $$ZONE_ID"; \
-		echo "🔧 Creating CNAME record..."; \
-		cat > /tmp/dns-change.json << EOF; \
-{ \
-  "Changes": [{ \
-    "Action": "UPSERT", \
-    "ResourceRecordSet": { \
-      "Name": "$(DOMAIN_NAME)", \
-      "Type": "CNAME", \
-      "TTL": 300, \
-      "ResourceRecords": [{"Value": "$$ALB_DNS"}] \
-    } \
-  }] \
-}; \
-EOF \
-		aws route53 change-resource-record-sets --hosted-zone-id $$ZONE_ID --change-batch file:///tmp/dns-change.json; \
-		rm -f /tmp/dns-change.json; \
-		echo "✅ CNAME record created: $(DOMAIN_NAME) → $$ALB_DNS"; \
-		echo "⏳ DNS propagation may take 5-30 minutes"; \
-		echo "🧪 Test with: make dns-check"; \
-	fi
+	fi; \
+	echo "✅ Found hosted zone: $$ZONE_ID"; \
+	echo "🔧 Creating CNAME record: $(DOMAIN_NAME) → $$ALB_DNS"; \
+	bash setup-dns-cname.sh "$(DOMAIN_NAME)" "$$ALB_DNS" "$$ZONE_ID"; \
+	echo "✅ CNAME record created successfully!"
 
 dns-check: ## 🧪 Test domain resolution and connectivity
 	@echo "🧪 Testing Domain Resolution and Connectivity"
@@ -1521,168 +1534,41 @@ dns-setup-subdomain: ## 🌐 Complete subdomain setup (Option 2)
 
 .PHONY: full-deploy quick-deploy deploy-and-monitor
 
-full-deploy: ## 🚀 Complete deployment pipeline (build → ECR → ECS → ALB → DNS → Pi)
+full-deploy: ## 🚀 Complete deployment pipeline (build → ECR → ECS → DNS → Pi)
 	@echo "🚀 Starting full deployment pipeline..."
-	@echo "========================================"
-	@echo "📋 This will:"
-	@echo "   1. Build Docker image"
-	@echo "   2. Push to ECR (create repo if needed)"
-	@echo "   3. Set up ECS infrastructure"
-	@echo "   4. Deploy to ECS"
-	@echo "   5. Set up ALB with domain access"
-	@echo "   6. Fix ALB security groups and listeners"
-	@echo "   7. Configure DNS/subdomain + RTSP record"
-	@echo "   8. Deploy to Raspberry Pi with domain"
-	@echo "   9. Show deployment status and URLs"
-	@echo ""
 	@echo "🏗️  Step 1: Building and pushing to ECR..."
 	$(MAKE) ecr-deploy
-	@echo ""
 	@echo "🏗️  Step 2: Setting up ECS infrastructure..."
 	$(MAKE) ecs-setup
-	@echo ""
-	@echo "🏗️  Step 3: Updating ECS service with new image..."
-	$(MAKE) ecs-update
-	@echo ""
-	@echo "🔗 Step 4: Setting up ALB and domain access..."
-	@echo "=============================================="
-	@if [ "$(DOMAIN_NAME)" = "mediamtx.yourdomain.com" ]; then \
-		echo "⚠️  Using default domain name: $(DOMAIN_NAME)"; \
-		echo "💡 To use your own domain, edit DOMAIN_NAME in Makefile"; \
-		echo "🔄 Proceeding with ALB setup anyway..."; \
-	else \
-		echo "🌐 Setting up domain: $(DOMAIN_NAME)"; \
-	fi
-	@echo "🎯 Creating ALB infrastructure..."
-	-$(MAKE) alb-create 2>/dev/null || echo "⚠️  ALB creation skipped (may not be supported on this account)"
-	@echo "🔄 Updating ECS service to use ALB..."
-	-$(MAKE) alb-update-service 2>/dev/null || echo "ℹ️  ALB service update skipped"
-	@echo ""
-	@echo "🛡️  Step 5: Fixing ALB Security Groups and Listeners..."
-	@echo "====================================================="
-	@ALB_STATUS=$$(aws elbv2 describe-load-balancers --names $(ALB_NAME) --region $(AWS_REGION) --query 'LoadBalancers[0].State.Code' --output text 2>/dev/null); \
-	if [ "$$ALB_STATUS" = "active" ]; then \
-		echo "✅ ALB is active, configuring security groups..."; \
-		$(MAKE) alb-fix-security-group 2>/dev/null || echo "⚠️  Security group update failed"; \
-		echo "🎧 Adding listeners for all MediaMTX ports..."; \
-		$(MAKE) alb-add-listeners 2>/dev/null || echo "⚠️  Listener creation failed"; \
-		sleep 10; \
-		echo "✅ ALB configuration complete!"; \
-	else \
-		echo "⚠️  ALB not active - skipping security group and listener setup"; \
-	fi
-	@echo ""
-	@echo "🌐 Step 6: Setting up DNS configuration..."
-	@echo "=========================================="
-	@ALB_STATUS=$$(aws elbv2 describe-load-balancers --names $(ALB_NAME) --region $(AWS_REGION) --query 'LoadBalancers[0].State.Code' --output text 2>/dev/null); \
-	if [ "$$ALB_STATUS" = "active" ] && [ "$(DOMAIN_NAME)" != "mediamtx.yourdomain.com" ]; then \
-		echo "✅ ALB is active, setting up DNS for $(DOMAIN_NAME)..."; \
-		if echo "$(DOMAIN_NAME)" | grep -q "\."; then \
-			echo "🔧 Creating CNAME record for subdomain..."; \
-			$(MAKE) dns-create-cname 2>/dev/null || echo "⚠️  DNS creation failed - may need manual setup"; \
-			echo "🎯 Creating RTSP A record for direct streaming..."; \
-			$(MAKE) dns-create-rtsp-record 2>/dev/null || echo "⚠️  RTSP DNS creation failed"; \
-			sleep 15; \
-			echo "🧪 Testing DNS resolution..."; \
-			$(MAKE) dns-test-domain 2>/dev/null || echo "⚠️  DNS may still be propagating"; \
-		else \
-			echo "⚠️  Root domain detected - DNS setup may require manual configuration"; \
-			echo "💡 Run 'make dns-setup' for instructions"; \
+	@echo "🏗️  Step 3: Waiting for ECS tasks to start..."
+	@for i in {1..30}; do \
+		RUNNING=$$(aws ecs describe-services --cluster $(ECS_CLUSTER_NAME) --services $(ECS_SERVICE_NAME) --region $(AWS_REGION) --query 'services[0].runningCount' --output text 2>/dev/null); \
+		if [ "$$RUNNING" != "None" ] && [ "$$RUNNING" -gt 0 ]; then \
+			echo "✅ ECS service has $$RUNNING running task(s)"; \
+			break; \
 		fi; \
-	else \
-		echo "ℹ️  DNS setup skipped (ALB not active or default domain)"; \
-	fi
-	@echo ""
-	@echo "📱 Step 7: Deploying to Raspberry Pi..."
-	@echo "======================================="
-	@if [ -f "./copy-and-install.sh" ]; then \
-		echo "🚀 Found Pi deployment script, deploying..."; \
-		if ping -c 1 -W 2 rpicam2.local > /dev/null 2>&1 || ping -c 1 -W 2 192.168.50.96 > /dev/null 2>&1; then \
-			echo "✅ Pi is reachable, deploying updated configuration..."; \
-			echo "⏳ Waiting for DNS propagation before Pi deployment..."; \
-			sleep 20; \
-			PI_PASSWORD="" ./copy-and-install.sh 2>/dev/null || echo "⚠️  Pi deployment failed - may need manual setup or password"; \
-			echo "🔄 Restarting Pi service with new domain configuration..."; \
-			ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 dan7554@rpicam2.local "sudo systemctl restart rpicam-stream.service" 2>/dev/null || \
-			ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 dan7554@192.168.50.96 "sudo systemctl restart rpicam-stream.service" 2>/dev/null || \
-			echo "⚠️  Pi service restart failed - restart manually"; \
-		else \
-			echo "⚠️  Pi not reachable at rpicam2.local or 192.168.50.96"; \
-			echo "💡 Deploy manually later: ./copy-and-install.sh"; \
-		fi; \
-	else \
-		echo "ℹ️  Pi deployment script not found"; \
-		echo "💡 Deploy manually: ./copy-and-install.sh"; \
-	fi
+		echo "⏳ Waiting for tasks to start... ($$i/30)"; \
+		sleep 5; \
+	done
+	@echo "🌐 Step 4: Setting up DNS with ECS IP..."
+	@$(MAKE) dns-create-rtsp-record || (echo "⚠️  DNS update may have had issues, but continuing..."; true)
+	@sleep 15
+	@echo "📱 Step 5: Deploying to Raspberry Pi..."
+	@./copy-and-install.sh 2>/dev/null || true
+	@echo "🔄 Restarting Pi streaming service..."
+	@ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 dan7554@rpicam2.local "sudo systemctl restart rpicam-stream.service" 2>/dev/null || ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 dan7554@192.168.50.96 "sudo systemctl restart rpicam-stream.service" 2>/dev/null || true
 	@echo ""
 	@echo "✅ Full deployment complete!"
-	@echo "============================"
 	@echo "🔍 Checking deployment status..."
 	$(MAKE) ecs-status
 	@echo ""
-	@echo "� Step 8: Updating RTSP DNS to current ECS task IP..."
-	@echo "====================================================="
-	@ECS_RUNNING=$$(aws ecs describe-services --cluster $(ECS_CLUSTER_NAME) --services $(ECS_SERVICE_NAME) --region $(AWS_REGION) --query 'services[0].runningCount' --output text 2>/dev/null); \
-	if [ "$$ECS_RUNNING" != "None" ] && [ "$$ECS_RUNNING" -gt 0 ]; then \
-		echo "✅ ECS service is running, updating RTSP DNS record..."; \
-		$(MAKE) dns-create-rtsp-record 2>/dev/null || echo "⚠️  RTSP DNS update failed"; \
-		echo "⏳ Waiting for DNS propagation..."; \
-		sleep 10; \
-		echo "🧪 Testing RTSP DNS resolution..."; \
-		RTSP_IP=$$(dig +short rtsp.racetrackstreaming.com 2>/dev/null); \
-		if [ -n "$$RTSP_IP" ]; then \
-			echo "✅ RTSP DNS resolves to: $$RTSP_IP"; \
-		else \
-			echo "⚠️  RTSP DNS may still be propagating"; \
-		fi; \
-	else \
-		echo "⚠️  ECS service not running - skipping RTSP DNS update"; \
-	fi
-	@echo ""
-	@echo "�🌐 Getting service URLs..."
-	@ALB_STATUS=$$(aws elbv2 describe-load-balancers --names $(ALB_NAME) --region $(AWS_REGION) --query 'LoadBalancers[0].State.Code' --output text 2>/dev/null); \
-	if [ "$$ALB_STATUS" = "active" ]; then \
-		echo "🔗 ALB is active - showing domain URLs..."; \
-		$(MAKE) alb-get-dns; \
-	else \
-		echo "🔗 ALB not available - showing direct ECS URLs..."; \
-		$(MAKE) ecs-get-url; \
-	fi
-	@echo ""
-	@echo "📱 Pi Status Check:"
-	@echo "==================="
-	@if ping -c 1 -W 2 rpicam2.local > /dev/null 2>&1 || ping -c 1 -W 2 192.168.50.96 > /dev/null 2>&1; then \
-		echo "✅ Pi is reachable"; \
-		echo "💡 Check Pi streaming: ssh dan7554@rpicam2.local 'journalctl -u rpicam-stream.service -n 5'"; \
-		echo "💡 Check Pi status: ssh dan7554@rpicam2.local 'systemctl status rpicam-stream.service'"; \
-	else \
-		echo "⚠️  Pi not reachable - check if it's powered on"; \
-	fi
+	@echo "🌐 Getting service URLs..."
+	$(MAKE) ecs-get-url
 	@echo ""
 	@echo "💡 Next steps:"
-	@echo "   make ecs-logs        # View live logs"
-	@echo "   make ecs-status      # Check ECS status"
-	@echo "   make alb-info        # Check ALB status"
-	@echo "   make dns-check       # Verify DNS setup"
-	@echo "   make aws-cost-estimate # Show monthly costs"
-	@echo "   make quick-deploy    # Future updates"
-	@echo ""
-	@if [ "$(DOMAIN_NAME)" != "mediamtx.yourdomain.com" ]; then \
-		echo "🎯 Your MediaMTX URLs:"; \
-		echo "   📺 Web UI: http://$(DOMAIN_NAME):8888/"; \
-		echo "   📡 RTSP Stream: rtsp://rtsp.racetrackstreaming.com:8554/rpicam"; \
-		echo "   🎮 WebRTC: http://$(DOMAIN_NAME):8889/"; \
-		echo "   📹 RTMP: rtmp://$(DOMAIN_NAME):1935/"; \
-		echo ""; \
-		echo "🧪 Test your setup:"; \
-		echo "   curl -I http://$(DOMAIN_NAME):8888/  # Test web interface"; \
-		echo "   make dns-validate                     # Complete validation"; \
-		echo ""; \
-		echo "💰 Cost Management:"; \
-		echo "   make aws-cost-estimate  # Show monthly costs"; \
-		echo "   make aws-stop-services  # Pause billing"; \
-		echo "   make aws-cleanup        # Delete everything"; \
-	fi
+	@echo "   make ecs-logs              # View live MediaMTX logs"
+	@echo "   make ecs-status            # Check ECS status"
+	@echo "   make quick-deploy          # Future updates"
 
 quick-deploy: ## ⚡ Quick deployment (build → ECR → update ECS)
 	@echo "⚡ Starting quick deployment..."
@@ -1704,7 +1590,9 @@ quick-deploy: ## ⚡ Quick deployment (build → ECR → update ECS)
 		sleep 5; \
 	done
 	@echo "🎯 Updating RTSP DNS record to point to the new task's IP address..."
-	@$(MAKE) dns-create-rtsp-record
+	@$(MAKE) dns-create-rtsp-record || (echo "⚠️  DNS update may have had issues, but continuing..."; true)
+	@echo "⏳ Waiting for DNS to propagate (15 seconds)..."
+	@sleep 15
 	@echo ""
 	@echo "✅ Quick deployment complete!"
 	@echo "============================="
@@ -2212,3 +2100,152 @@ recording-clean: ## 🧹 Clean up recording files and test containers
 	@-docker stop $(CONTAINER_NAME)-recording-test 2>/dev/null || true
 	@-docker rm $(CONTAINER_NAME)-recording-test 2>/dev/null || true
 	@echo "✅ Recording cleanup complete"
+
+###############################################
+# Broadcast System Containerization
+###############################################
+
+broadcast-build: ## Build broadcast system Docker image
+	@echo "🏗️  Building broadcast system Docker image..."
+	docker build -f broadcast-system/Dockerfile -t broadcast-system:latest .
+	@echo "✅ Broadcast system build complete!"
+
+broadcast-build-nc: ## Build broadcast system Docker image (no cache)
+	@echo "🏗️  Building broadcast system Docker image (no cache)..."
+	docker build --no-cache -f broadcast-system/Dockerfile -t broadcast-system:latest .
+	@echo "✅ Broadcast system build complete!"
+
+broadcast-run: broadcast-build ## Build and run broadcast system container
+	@echo "🚀 Starting broadcast system container..."
+	docker run -d \
+		--name broadcast-system \
+		--restart unless-stopped \
+		-p 80:80 \
+		-p 443:443 \
+		-v $(PWD)/broadcast-system/certs:/etc/nginx/certs \
+		broadcast-system:latest
+	@echo "✅ Broadcast system started!"
+	@echo ""
+	@echo "🌐 Access points:"
+	@echo "   • Web UI:  https://localhost"
+	@echo "   • API:     https://localhost/api"
+	@echo "   • Health:  http://localhost/health"
+
+broadcast-stop: ## Stop broadcast system container
+	@echo "🛑 Stopping broadcast system container..."
+	@-docker stop broadcast-system 2>/dev/null || true
+	@-docker rm broadcast-system 2>/dev/null || true
+	@echo "✅ Broadcast system stopped!"
+
+broadcast-logs: ## View broadcast system logs
+	@docker logs -f broadcast-system
+
+broadcast-shell: ## Open shell in broadcast system container
+	@docker exec -it broadcast-system sh
+
+broadcast-health: ## Check broadcast system health
+	@echo "🏥 Checking broadcast system health..."
+	@curl -f http://localhost/health && echo "" && echo "✅ Broadcast system is healthy!" || echo "❌ Broadcast system is not responding"
+
+broadcast-compose-up: ## Start broadcast system and MediaMTX with docker-compose
+	@echo "🚀 Starting broadcast system and MediaMTX with docker-compose..."
+	docker-compose up -d broadcast-system mediamtx
+	@echo "✅ Services started!"
+	@docker-compose ps
+	@echo ""
+	@echo "🌐 Access points:"
+	@echo "   • Web UI:  https://localhost"
+	@echo "   • API:     https://localhost/api"
+	@echo "   • RTSP:    rtsp://localhost:8554/rpicam2"
+	@echo "   • HLS:     http://localhost:8888/rpicam2/index.m3u8"
+
+broadcast-compose-down: ## Stop broadcast system and MediaMTX services
+	@echo "🛑 Stopping docker-compose services..."
+	docker-compose down
+	@echo "✅ Services stopped!"
+
+broadcast-compose-build: ## Build broadcast system and MediaMTX with docker-compose
+	@echo "🏗️  Building services with docker-compose..."
+	docker-compose build broadcast-system mediamtx
+	@echo "✅ Build complete!"
+
+broadcast-compose-logs: ## View docker-compose logs
+	@docker-compose logs -f
+
+broadcast-compose-logs-broadcast: ## View broadcast system logs only
+	@docker-compose logs -f broadcast-system
+
+broadcast-compose-logs-mediamtx: ## View MediaMTX logs only
+	@docker-compose logs -f mediamtx
+
+broadcast-compose-rebuild: ## Rebuild and restart broadcast system and MediaMTX
+	@echo "🔄 Rebuilding and restarting services..."
+	docker-compose up --build -d broadcast-system mediamtx
+	@echo "✅ Services rebuilt and restarted!"
+	@docker-compose ps
+
+broadcast-test: ## Test broadcast system connectivity
+	@echo "🧪 Testing broadcast system..."
+	@echo "  1. Testing health endpoint..."
+	@curl -s http://localhost/health && echo "   ✅ Health check passed" || echo "   ❌ Health check failed"
+	@echo ""
+	@echo "  2. Testing API endpoint..."
+	@curl -s -k https://localhost/api/cameras | head -20 && echo "   ✅ API check passed" || echo "   ❌ API check failed"
+	@echo ""
+	@echo "  3. Checking services..."
+	@docker-compose ps | grep -E "broadcast-system|mediamtx"
+
+broadcast-dev: ## Run broadcast system in development mode (interactive)
+	@echo "🔧 Running broadcast system in development mode..."
+	docker run -it \
+		--name broadcast-system-dev \
+		--rm \
+		-p 80:80 \
+		-p 443:443 \
+		-v $(PWD)/broadcast-system/server:/app/server \
+		-v $(PWD)/broadcast-system/client/src:/app/client/src \
+		-e NODE_ENV=development \
+		broadcast-system:latest
+
+broadcast-certs-generate: ## Generate self-signed SSL certificates for local.broadcast.com
+	@echo "🔐 Generating self-signed SSL certificates for local.broadcast.com..."
+	@mkdir -p broadcast-system/certs
+	@openssl req -x509 -newkey rsa:4096 \
+		-keyout broadcast-system/certs/server.key \
+		-out broadcast-system/certs/server.crt \
+		-days 365 -nodes \
+		-subj "/C=US/ST=State/L=City/O=Organization/CN=local.broadcast.com"
+	@chmod 600 broadcast-system/certs/server.key
+	@chmod 644 broadcast-system/certs/server.crt
+	@echo "✅ SSL certificates generated!"
+	@echo "   • Certificate: broadcast-system/certs/server.crt"
+	@echo "   • Private Key: broadcast-system/certs/server.key"
+	@echo "   • Valid for: 365 days"
+
+broadcast-full-deploy: broadcast-build broadcast-compose-up ## Build and deploy full broadcast system stack
+	@echo ""
+	@echo "✨ Broadcast system deployment complete!"
+	@echo ""
+	@echo "📊 Service Status:"
+	@docker-compose ps
+	@echo ""
+	@echo "🌐 Access Points:"
+	@echo "   • Web UI:  https://localhost"
+	@echo "   • API:     https://localhost/api"
+	@echo "   • RTSP:    rtsp://localhost:8554"
+	@echo "   • HLS:     http://localhost:8888"
+	@echo ""
+	@echo "📖 Documentation:"
+	@echo "   • Quick Start:  broadcast-system/QUICKSTART.md"
+	@echo "   • Full Guide:   broadcast-system/CONTAINERIZATION.md"
+
+broadcast-push-registry: ## Push broadcast system image to Docker registry
+	@echo "📤 Pushing broadcast system image to registry..."
+	@echo "Set DOCKER_REGISTRY in Makefile to enable this"
+	@if [ -z "$(DOCKER_REGISTRY)" ]; then \
+		echo "❌ DOCKER_REGISTRY not configured"; \
+		exit 1; \
+	fi
+	docker tag broadcast-system:latest $(DOCKER_REGISTRY)/broadcast-system:latest
+	docker push $(DOCKER_REGISTRY)/broadcast-system:latest
+	@echo "✅ Image pushed to $(DOCKER_REGISTRY)/broadcast-system:latest"
