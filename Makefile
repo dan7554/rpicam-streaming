@@ -102,9 +102,9 @@ run: build stop ## Build and run the container (stops existing first)
 	@echo "🌐 Web UI: http://localhost:8888"
 	@echo "📺 WebRTC: http://localhost:8889"
 
-run-compose: ## Run using docker-compose
-	@echo "Starting MediaMTX with docker-compose..."
-	docker-compose up -d
+run-compose: ## Run using docker compose
+	@echo "Starting MediaMTX with docker compose..."
+	docker compose up -d
 	@echo "✅ Service started!"
 
 run-dev: ## Run in development mode (interactive, remove on exit)
@@ -127,17 +127,17 @@ stop: ## Stop the running container
 	-docker rm $(CONTAINER_NAME) 2>/dev/null || true
 	@echo "✅ Container stopped!"
 
-stop-compose: ## Stop docker-compose services
-	@echo "Stopping docker-compose services..."
-	docker-compose down
+stop-compose: ## Stop docker compose services
+	@echo "Stopping docker compose services..."
+	docker compose down
 	@echo "✅ Services stopped!"
 
 restart: stop run ## Restart the container
 	@echo "✅ Container restarted!"
 
-restart-compose: ## Restart docker-compose services
-	@echo "Restarting docker-compose services..."
-	docker-compose restart
+restart-compose: ## Restart docker compose services
+	@echo "Restarting docker compose services..."
+	docker compose restart
 	@echo "✅ Services restarted!"
 
 # Force commands for troubleshooting
@@ -158,8 +158,8 @@ force-clean: ## Force clean everything related to this project
 logs: ## Show container logs
 	docker logs -f $(CONTAINER_NAME)
 
-logs-compose: ## Show docker-compose logs
-	docker-compose logs -f
+logs-compose: ## Show docker compose logs
+	docker compose logs -f
 
 status: ## Show container status
 	@echo "Container Status:"
@@ -2147,11 +2147,11 @@ broadcast-health: ## Check broadcast system health
 	@echo "🏥 Checking broadcast system health..."
 	@curl -f http://localhost/health && echo "" && echo "✅ Broadcast system is healthy!" || echo "❌ Broadcast system is not responding"
 
-broadcast-compose-up: ## Start broadcast system and MediaMTX with docker-compose
-	@echo "🚀 Starting broadcast system and MediaMTX with docker-compose..."
-	docker-compose up -d broadcast-system mediamtx
+broadcast-compose-up: ## Start broadcast system and MediaMTX with docker compose
+	@echo "🚀 Starting broadcast system and MediaMTX with docker compose..."
+	docker compose up -d broadcast-system mediamtx
 	@echo "✅ Services started!"
-	@docker-compose ps
+	@docker compose ps
 	@echo ""
 	@echo "🌐 Access points:"
 	@echo "   • Web UI:  https://localhost"
@@ -2160,29 +2160,29 @@ broadcast-compose-up: ## Start broadcast system and MediaMTX with docker-compose
 	@echo "   • HLS:     http://localhost:8888/rpicam2/index.m3u8"
 
 broadcast-compose-down: ## Stop broadcast system and MediaMTX services
-	@echo "🛑 Stopping docker-compose services..."
-	docker-compose down
+	@echo "🛑 Stopping docker compose services..."
+	docker compose down
 	@echo "✅ Services stopped!"
 
-broadcast-compose-build: ## Build broadcast system and MediaMTX with docker-compose
-	@echo "🏗️  Building services with docker-compose..."
-	docker-compose build broadcast-system mediamtx
+broadcast-compose-build: ## Build broadcast system and MediaMTX with docker compose
+	@echo "🏗️  Building services with docker compose..."
+	docker compose build broadcast-system mediamtx
 	@echo "✅ Build complete!"
 
-broadcast-compose-logs: ## View docker-compose logs
-	@docker-compose logs -f
+broadcast-compose-logs: ## View docker compose logs
+	@docker compose logs -f
 
 broadcast-compose-logs-broadcast: ## View broadcast system logs only
-	@docker-compose logs -f broadcast-system
+	@docker compose logs -f broadcast-system
 
 broadcast-compose-logs-mediamtx: ## View MediaMTX logs only
-	@docker-compose logs -f mediamtx
+	@docker compose logs -f mediamtx
 
 broadcast-compose-rebuild: ## Rebuild and restart broadcast system and MediaMTX
 	@echo "🔄 Rebuilding and restarting services..."
-	docker-compose up --build -d broadcast-system mediamtx
+	docker compose up --build -d broadcast-system mediamtx
 	@echo "✅ Services rebuilt and restarted!"
-	@docker-compose ps
+	@docker compose ps
 
 broadcast-test: ## Test broadcast system connectivity
 	@echo "🧪 Testing broadcast system..."
@@ -2193,7 +2193,7 @@ broadcast-test: ## Test broadcast system connectivity
 	@curl -s -k https://localhost/api/cameras | head -20 && echo "   ✅ API check passed" || echo "   ❌ API check failed"
 	@echo ""
 	@echo "  3. Checking services..."
-	@docker-compose ps | grep -E "broadcast-system|mediamtx"
+	@docker compose ps | grep -E "broadcast-system|mediamtx"
 
 broadcast-dev: ## Run broadcast system in development mode (interactive)
 	@echo "🔧 Running broadcast system in development mode..."
@@ -2227,7 +2227,7 @@ broadcast-full-deploy: broadcast-build broadcast-compose-up ## Build and deploy 
 	@echo "✨ Broadcast system deployment complete!"
 	@echo ""
 	@echo "📊 Service Status:"
-	@docker-compose ps
+	@docker compose ps
 	@echo ""
 	@echo "🌐 Access Points:"
 	@echo "   • Web UI:  https://localhost"
