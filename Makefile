@@ -1288,6 +1288,68 @@ dns-create-rtsp-record: ## 🎯 Create A record for RTSP pointing to current ECS
 	echo "✅ RTSP A record created!"; \
 	echo "🎯 RTSP endpoint: rtsp://rtsp.$$BASE_DOMAIN:8554/rpicam2"
 
+dns-create-admin-record: ## 🎯 Create A record for admin.racetrackstreaming.com pointing to broadcast ECS task
+	@echo "🎯 Creating admin broadcast A record..."
+	@echo "⏳ Waiting for ECS tasks to be running (max 120 seconds)..."; \
+	TASK_ARN=""; \
+	for i in {1..24}; do \
+		TASK_ARN=$$(aws ecs list-tasks --cluster $(BROADCAST_ECS_CLUSTER) --desired-status RUNNING --region $(AWS_REGION) --query 'taskArns[0]' --output text); \
+		if [ "$$TASK_ARN" != "None" ] && [ -n "$$TASK_ARN" ]; then \
+			echo "✅ Task found: $$TASK_ARN"; \
+			break; \
+		fi; \
+		echo "⏳ Waiting... ($$(($$i * 5)) seconds elapsed)"; \
+		sleep 5; \
+	done; \
+	if [ "$$TASK_ARN" = "None" ] || [ -z "$$TASK_ARN" ]; then \
+		echo "❌ No running tasks found after waiting"; \
+		exit 1; \
+	fi; \
+	echo "⏳ Waiting for task to get public IP (max 30 seconds)..."; \
+	NETWORK_INTERFACE_ID=""; \
+	PUBLIC_IP=""; \
+	for j in {1..6}; do \
+		NETWORK_INTERFACE_ID=$$(aws ecs describe-tasks --cluster $(BROADCAST_ECS_CLUSTER) --tasks $$TASK_ARN --region $(AWS_REGION) --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' --output text); \
+		if [ "$$NETWORK_INTERFACE_ID" != "None" ] && [ -n "$$NETWORK_INTERFACE_ID" ]; then \
+			PUBLIC_IP=$$(aws ec2 describe-network-interfaces --network-interface-ids $$NETWORK_INTERFACE_ID --region $(AWS_REGION) --query 'NetworkInterfaces[0].Association.PublicIp' --output text 2>/dev/null); \
+			if [ "$$PUBLIC_IP" != "None" ] && [ -n "$$PUBLIC_IP" ]; then \
+				echo "✅ Public IP acquired: $$PUBLIC_IP"; \
+				break; \
+			fi; \
+		fi; \
+		if [ $$j -lt 6 ]; then \
+			echo "⏳ Waiting for public IP... (attempt $$j/6)"; \
+			sleep 5; \
+		fi; \
+	done; \
+	if [ "$$PUBLIC_IP" = "None" ] || [ -z "$$PUBLIC_IP" ]; then \
+		echo "❌ No public IP found for task after waiting"; \
+		exit 1; \
+	fi; \
+	echo "📍 Broadcast Task Public IP: $$PUBLIC_IP"; \
+	BASE_DOMAIN=$$(echo "$(BROADCAST_DOMAIN)" | sed 's/^[^.]*\.//' | tr -d ' '); \
+	echo "🌐 Base domain: $$BASE_DOMAIN"; \
+	HOSTED_ZONE_ID=$$(aws route53 list-hosted-zones --query "HostedZones[?Name=='$$BASE_DOMAIN.'].Id" --output text | sed 's/.*\///'); \
+	if [ "$$HOSTED_ZONE_ID" = "None" ] || [ -z "$$HOSTED_ZONE_ID" ]; then \
+		echo "❌ Hosted zone for $$BASE_DOMAIN not found"; \
+		exit 1; \
+	fi; \
+	echo "🌐 Using hosted zone: $$HOSTED_ZONE_ID"; \
+	echo "🔗 Creating A record: admin.$$BASE_DOMAIN → $$PUBLIC_IP"; \
+	aws route53 change-resource-record-sets --hosted-zone-id $$HOSTED_ZONE_ID --change-batch '{ \
+		"Changes": [{ \
+			"Action": "UPSERT", \
+			"ResourceRecordSet": { \
+				"Name": "admin.'$$BASE_DOMAIN'", \
+				"Type": "A", \
+				"TTL": 60, \
+				"ResourceRecords": [{"Value": "'$$PUBLIC_IP'"}] \
+			} \
+		}] \
+	}' --region $(AWS_REGION); \
+	echo "✅ Admin A record created!"; \
+	echo "🎯 Admin endpoint: https://admin.$$BASE_DOMAIN"
+
 ###############################################
 # DNS/Domain Setup targets
 
@@ -2329,6 +2391,22 @@ broadcast-aws-create-task: ## 📋 Create broadcast ECS task definition
 		--no-cli-pager > /dev/null
 	@echo "✅ Task definition created!"
 
+broadcast-aws-create-cluster: ## 🏢 Create broadcast ECS cluster
+	@echo "🏢 Creating broadcast ECS cluster..."
+	@aws ecs create-cluster \
+		--cluster-name $(BROADCAST_ECS_CLUSTER) \
+		--region $(AWS_REGION) \
+		--no-cli-pager > /dev/null 2>&1 || echo "ℹ️  Cluster already exists"
+	@echo "✅ Cluster ready!"
+
+broadcast-aws-create-logs: ## 📝 Create CloudWatch log group
+	@echo "📝 Creating CloudWatch log group..."
+	@aws logs create-log-group \
+		--log-group-name $(BROADCAST_LOG_GROUP) \
+		--region $(AWS_REGION) \
+		--no-cli-pager > /dev/null 2>&1 || echo "ℹ️  Log group already exists"
+	@echo "✅ Log group ready!"
+
 broadcast-aws-create-service: ## 🚀 Create broadcast ECS service
 	@echo "🚀 Creating broadcast ECS service..."
 	@VPC_ID=$$(aws ec2 describe-vpcs --filters "Name=isDefault,Values=true" --query 'Vpcs[0].VpcId' --output text --region $(AWS_REGION)); \
@@ -2355,11 +2433,22 @@ broadcast-aws-update: ## 🔄 Update broadcast ECS service with latest image
 		--no-cli-pager > /dev/null
 	@echo "✅ Service updated!"
 
-broadcast-aws-deploy: broadcast-aws-push broadcast-aws-update ## 🚀 Full broadcast system deployment to AWS
-	@echo "🚀 Broadcast system deployment complete!"
-	@echo "🌐 Access at: https://$(BROADCAST_DOMAIN)"
+broadcast-aws-deploy: broadcast-aws-create-cluster broadcast-aws-create-logs broadcast-aws-create-task broadcast-aws-create-service broadcast-aws-push broadcast-aws-update dns-create-admin-record ## 🚀 Full broadcast system deployment to AWS
+	@echo ""
+	@echo "✨ Broadcast system deployment complete!"
+	@echo ""
+	@echo "🌐 Access your broadcast admin panel:"
+	@echo "   https://$(BROADCAST_DOMAIN)"
+	@echo ""
+	@echo "📡 Connected to MediaMTX:"
+	@echo "   WebRTC: https://rtsp.racetrackstreaming.com:8889"
+	@echo "   RTSP: rtsp://rtsp.racetrackstreaming.com:8554"
+	@echo ""
+	@echo "📊 Monitor deployment:"
+	@echo "   make broadcast-aws-status"
+	@echo "   make broadcast-aws-logs"
 
-broadcast-aws-quick-deploy: broadcast-aws-push broadcast-aws-update ## ⚡ Quick broadcast system update (build → push → update)
+broadcast-aws-quick-deploy: broadcast-aws-push broadcast-aws-update dns-create-admin-record ## ⚡ Quick broadcast system update (build → push → update → DNS)
 	@echo "⚡ Quick broadcast deployment initiated..."
 	@echo "⏳ Waiting for new task to start (max 2 minutes)..."
 	@for i in $$(seq 1 24); do \
