@@ -69,6 +69,10 @@ RUN mkdir -p /etc/nginx/certs /var/cache/nginx /var/log/nginx && \
 COPY broadcast-system/nginx.conf /etc/nginx/nginx.conf
 COPY broadcast-system/nginx-ssl.conf /etc/nginx/conf.d/default.conf
 
+# Copy SSL certificates (will be overridden by volume in dev, used in production)
+COPY broadcast-system/certs/server.crt /etc/nginx/certs/server.crt
+COPY broadcast-system/certs/server.key /etc/nginx/certs/server.key
+
 # Create entrypoint script
 RUN mkdir -p /app/scripts
 COPY broadcast-system/docker-entrypoint.sh /app/scripts/entrypoint.sh

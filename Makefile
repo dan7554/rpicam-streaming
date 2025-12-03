@@ -2249,3 +2249,147 @@ broadcast-push-registry: ## Push broadcast system image to Docker registry
 	docker tag broadcast-system:latest $(DOCKER_REGISTRY)/broadcast-system:latest
 	docker push $(DOCKER_REGISTRY)/broadcast-system:latest
 	@echo "✅ Image pushed to $(DOCKER_REGISTRY)/broadcast-system:latest"
+
+###############################################
+# Broadcast System AWS ECS Deployment
+
+.PHONY: broadcast-aws-login broadcast-aws-build broadcast-aws-push broadcast-aws-create-task broadcast-aws-create-service broadcast-aws-update broadcast-aws-deploy broadcast-aws-quick-deploy broadcast-aws-logs broadcast-aws-status broadcast-aws-cleanup
+
+# Configuration for Broadcast System
+BROADCAST_REPO_NAME ?= broadcast-system
+BROADCAST_ECR_URI := $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(BROADCAST_REPO_NAME)
+BROADCAST_ECS_CLUSTER := broadcast-cluster
+BROADCAST_ECS_SERVICE := broadcast-service
+BROADCAST_ECS_TASK_FAMILY := broadcast-task
+BROADCAST_LOG_GROUP := /ecs/broadcast
+BROADCAST_DOMAIN := admin.racetrackstreaming.com
+BROADCAST_PORT := 443
+
+broadcast-aws-login: ## 🔐 Login to AWS ECR for broadcast system
+	@echo "🔐 Logging into AWS ECR..."
+	aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(BROADCAST_ECR_URI)
+	@echo "✅ ECR login successful!"
+
+broadcast-aws-build: ## 🏗️ Build broadcast system for AWS (AMD64)
+	@echo "🏗️ Building broadcast system Docker image for AWS..."
+	docker build --platform linux/amd64 -f broadcast-system/Dockerfile -t $(BROADCAST_REPO_NAME):latest .
+	@echo "✅ Build complete!"
+
+broadcast-aws-push: broadcast-aws-login broadcast-aws-build ## 📤 Build and push broadcast system to ECR
+	@echo "📤 Pushing broadcast system image to ECR..."
+	@TIMESTAMP=$$(date +%Y%m%d-%H%M%S); \
+	docker tag $(BROADCAST_REPO_NAME):latest $(BROADCAST_ECR_URI):latest; \
+	docker tag $(BROADCAST_REPO_NAME):latest $(BROADCAST_ECR_URI):$$TIMESTAMP; \
+	docker push $(BROADCAST_ECR_URI):latest; \
+	docker push $(BROADCAST_ECR_URI):$$TIMESTAMP; \
+	echo "✅ Pushed: $(BROADCAST_ECR_URI):latest"; \
+	echo "✅ Pushed: $(BROADCAST_ECR_URI):$$TIMESTAMP"
+
+broadcast-aws-create-task: ## 📋 Create broadcast ECS task definition
+	@echo "📋 Creating broadcast ECS task definition..."
+	@aws ecs register-task-definition \
+		--family $(BROADCAST_ECS_TASK_FAMILY) \
+		--network-mode awsvpc \
+		--requires-compatibilities FARGATE \
+		--cpu 512 \
+		--memory 1024 \
+		--container-definitions '[ \
+			{ \
+				"name": "broadcast-system", \
+				"image": "$(BROADCAST_ECR_URI):latest", \
+				"portMappings": [ \
+					{"containerPort": 80, "hostPort": 80, "protocol": "tcp"}, \
+					{"containerPort": 443, "hostPort": 443, "protocol": "tcp"} \
+				], \
+				"environment": [ \
+					{"name": "NODE_ENV", "value": "production"}, \
+					{"name": "PORT", "value": "3001"}, \
+					{"name": "MEDIAMTX_URL", "value": "https://rtsp.racetrackstreaming.com:8889"}, \
+					{"name": "BROADCAST_HOSTNAME", "value": "$(BROADCAST_DOMAIN)"}, \
+					{"name": "BROADCAST_PORT", "value": "$(BROADCAST_PORT)"} \
+				], \
+				"logConfiguration": { \
+					"logDriver": "awslogs", \
+					"options": { \
+						"awslogs-group": "$(BROADCAST_LOG_GROUP)", \
+						"awslogs-region": "$(AWS_REGION)", \
+						"awslogs-stream-prefix": "broadcast" \
+					} \
+				}, \
+				"healthCheck": { \
+					"command": ["CMD-SHELL", "curl -f http://localhost:3001/health || exit 1"], \
+					"interval": 30, \
+					"timeout": 5, \
+					"retries": 2, \
+					"startPeriod": 60 \
+				} \
+			} \
+		]' \
+		--region $(AWS_REGION) \
+		--no-cli-pager > /dev/null
+	@echo "✅ Task definition created!"
+
+broadcast-aws-create-service: ## 🚀 Create broadcast ECS service
+	@echo "🚀 Creating broadcast ECS service..."
+	@VPC_ID=$$(aws ec2 describe-vpcs --filters "Name=isDefault,Values=true" --query 'Vpcs[0].VpcId' --output text --region $(AWS_REGION)); \
+	SUBNET_IDS=$$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$$VPC_ID" --query 'Subnets[0:2].SubnetId' --output text --region $(AWS_REGION) | tr '\t' ','); \
+	SG_ID=$$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$$VPC_ID" "Name=group-name,Values=default" --query 'SecurityGroups[0].GroupId' --output text --region $(AWS_REGION)); \
+	aws ecs create-service \
+		--cluster $(BROADCAST_ECS_CLUSTER) \
+		--service-name $(BROADCAST_ECS_SERVICE) \
+		--task-definition $(BROADCAST_ECS_TASK_FAMILY) \
+		--desired-count 1 \
+		--launch-type FARGATE \
+		--network-configuration "awsvpcConfiguration={subnets=[$$SUBNET_IDS],securityGroups=[$$SG_ID],assignPublicIp=ENABLED}" \
+		--region $(AWS_REGION) \
+		--no-cli-pager > /dev/null
+	@echo "✅ Service created!"
+
+broadcast-aws-update: ## 🔄 Update broadcast ECS service with latest image
+	@echo "🔄 Updating broadcast ECS service..."
+	aws ecs update-service \
+		--cluster $(BROADCAST_ECS_CLUSTER) \
+		--service $(BROADCAST_ECS_SERVICE) \
+		--force-new-deployment \
+		--region $(AWS_REGION) \
+		--no-cli-pager > /dev/null
+	@echo "✅ Service updated!"
+
+broadcast-aws-deploy: broadcast-aws-push broadcast-aws-update ## 🚀 Full broadcast system deployment to AWS
+	@echo "🚀 Broadcast system deployment complete!"
+	@echo "🌐 Access at: https://$(BROADCAST_DOMAIN)"
+
+broadcast-aws-quick-deploy: broadcast-aws-push broadcast-aws-update ## ⚡ Quick broadcast system update (build → push → update)
+	@echo "⚡ Quick broadcast deployment initiated..."
+	@echo "⏳ Waiting for new task to start (max 2 minutes)..."
+	@for i in $$(seq 1 24); do \
+		TASK_STATUS=$$(aws ecs describe-services --cluster $(BROADCAST_ECS_CLUSTER) --services $(BROADCAST_ECS_SERVICE) --region $(AWS_REGION) --query 'services[0].deployments[0].runningCount' --output text 2>/dev/null); \
+		if [ "$$TASK_STATUS" -ge "1" ]; then \
+			echo "✅ New task is RUNNING."; \
+			break; \
+		fi; \
+		echo "⏳ Waiting for task to start... (attempt $$i/24)"; \
+		sleep 5; \
+	done
+	@echo "✅ Quick deployment complete!"
+	@echo "🌐 Access at: https://$(BROADCAST_DOMAIN)"
+
+broadcast-aws-logs: ## 📋 View broadcast system logs
+	@echo "📋 Getting broadcast system logs..."
+	aws logs tail $(BROADCAST_LOG_GROUP) --follow --region $(AWS_REGION) 2>/dev/null || echo "⚠️ No logs available yet"
+
+broadcast-aws-status: ## 📊 Show broadcast ECS service status
+	@echo "📊 Broadcast ECS Service Status:"
+	@echo "================================"
+	@aws ecs describe-services \
+		--cluster $(BROADCAST_ECS_CLUSTER) \
+		--services $(BROADCAST_ECS_SERVICE) \
+		--region $(AWS_REGION) \
+		--query 'services[0].{Status:status,Running:runningCount,Desired:desiredCount}' \
+		--output table 2>/dev/null || echo "❌ Service not found"
+
+broadcast-aws-cleanup: ## 🧹 Delete broadcast ECS service and task definition
+	@echo "🧹 Cleaning up broadcast system..."
+	aws ecs delete-service --cluster $(BROADCAST_ECS_CLUSTER) --service $(BROADCAST_ECS_SERVICE) --force --region $(AWS_REGION) 2>/dev/null || true
+	aws ecs deregister-task-definition --task-definition $(BROADCAST_ECS_TASK_FAMILY) --region $(AWS_REGION) 2>/dev/null || true
+	@echo "✅ Cleanup complete!"
