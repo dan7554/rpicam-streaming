@@ -60,6 +60,9 @@ COPY --from=server-builder /build/config ./config
 # Copy package.json for reference
 COPY broadcast-system/package.json ./
 
+# Copy public assets (including HLS player)
+COPY broadcast-system/public ./public
+
 # Create nginx directories
 RUN mkdir -p /etc/nginx/certs /var/cache/nginx /var/log/nginx && \
     touch /var/log/nginx/access.log /var/log/nginx/error.log && \
