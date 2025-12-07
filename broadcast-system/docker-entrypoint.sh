@@ -95,12 +95,12 @@ MEDIAMTX_TASK=$(aws ecs list-tasks \
     --output text 2>/dev/null)
 
 if [ -n "$MEDIAMTX_TASK" ] && [ "$MEDIAMTX_TASK" != "None" ]; then
-    # Get the private IP from the task's network interface
+    # Get the private IP from the container's network interface
     MEDIAMTX_IP=$(aws ecs describe-tasks \
         --cluster broadcast-cluster \
         --tasks "$MEDIAMTX_TASK" \
         --region us-east-2 \
-        --query 'tasks[0].attachments[0].details[] | [?name==`privateIPv4Address`].value | [0]' \
+        --query 'tasks[0].containers[0].networkInterfaces[0].privateIpv4Address' \
         --output text 2>/dev/null)
 fi
 
