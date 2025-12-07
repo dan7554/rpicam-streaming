@@ -81,56 +81,33 @@ if ! wait_for_service "Express server" 3001; then
     exit 1
 fi
 
-# Step 4: Get MediaMTX task IP from ECS and update nginx configuration
+# Step 4: Configure MediaMTX upstream and update nginx configuration
 echo "🔍 Configuring MediaMTX upstream..."
 
-# Try to query ECS for the MediaMTX task IP
-# The broadcast task now has the broadcast-task-role with ECS permissions
-MEDIAMTX_IP="127.0.0.1"
+# Use ECS service discovery for inter-service communication
+# Format: service-name.cluster-name.ecs.local
+# This works because both services are in ECS and can resolve each other via Route 53
+MEDIAMTX_SERVICE="mediamtx-service.mediamtx-cluster.ecs.local"
 
-if command -v aws >/dev/null 2>&1; then
-    echo "   🔧 Querying ECS for MediaMTX service..."
-    
-    # Query with longer timeout - first list tasks
-    MEDIAMTX_TASK=$(timeout 15 aws ecs list-tasks \
-        --cluster broadcast-cluster \
-        --service-name mediamtx-service \
-        --desired-status RUNNING \
-        --region us-east-2 \
-        --query 'taskArns[0]' \
-        --output text 2>&1 || echo "ERROR")
-    
-    echo "   Task ARN: $MEDIAMTX_TASK"
-    
-    # Then get the IP if we got a valid task
-    if [ -n "$MEDIAMTX_TASK" ] && [ "$MEDIAMTX_TASK" != "None" ] && [ "$MEDIAMTX_TASK" != "ERROR" ]; then
-        MEDIAMTX_IP_QUERY=$(timeout 15 aws ecs describe-tasks \
-            --cluster broadcast-cluster \
-            --tasks "$MEDIAMTX_TASK" \
-            --region us-east-2 \
-            --query 'tasks[0].containers[0].networkInterfaces[0].privateIpv4Address' \
-            --output text 2>&1 || echo "ERROR")
-        
-        echo "   IP result: $MEDIAMTX_IP_QUERY"
-        
-        if [ -n "$MEDIAMTX_IP_QUERY" ] && [ "$MEDIAMTX_IP_QUERY" != "None" ] && [ "$MEDIAMTX_IP_QUERY" != "ERROR" ]; then
-            MEDIAMTX_IP="$MEDIAMTX_IP_QUERY"
-            echo "   ✅ MediaMTX resolved to: $MEDIAMTX_IP"
-        else
-            echo "   ⚠️  Failed to get IP from task description"
-        fi
-    else
-        echo "   ⚠️  No running MediaMTX task found"
-    fi
+echo "   🔧 Using ECS Service Discovery: $MEDIAMTX_SERVICE"
+
+# Substitute the service name/IP in nginx configuration
+# nginx will resolve the DNS name on each request, providing dynamic discovery
+ESCAPED_SERVICE=$(printf '%s\n' "$MEDIAMTX_SERVICE" | sed -e 's/[\/&]/\\&/g')
+echo "   📝 Configuring nginx to use: $ESCAPED_SERVICE"
+sed -i "s/MEDIAMTX_IP_PLACEHOLDER/$ESCAPED_SERVICE/g" /etc/nginx/conf.d/default.conf
+
+# Verify the substitution worked
+if grep -q "MEDIAMTX_IP_PLACEHOLDER" /etc/nginx/conf.d/default.conf; then
+    echo "   ❌ Error: MEDIAMTX_IP_PLACEHOLDER still found in configuration"
+    kill $SERVER_PID 2>/dev/null || true
+    exit 1
 else
-    echo "   ⚠️  AWS CLI not available"
+    echo "   ✅ nginx configuration updated successfully"
+    # Show a sample of what was substituted
+    echo "   📋 Sample nginx config:"
+    grep -m 1 "proxy_pass.*mediamtx" /etc/nginx/conf.d/default.conf | sed 's/^/      /'
 fi
-
-if [ "$MEDIAMTX_IP" = "127.0.0.1" ]; then
-    echo "   💡 Using localhost:8888 (configure MediaMTX connection manually if needed)"
-fi
-
-sed -i "s/MEDIAMTX_IP_PLACEHOLDER/$MEDIAMTX_IP/g" /etc/nginx/conf.d/default.conf
 
 # Step 5: Start nginx in foreground (for container logging)
 echo "🔒 Starting nginx with SSL..."
@@ -146,10 +123,6 @@ if ! nginx -t; then
     exit 1
 fi
 
-# Start nginx in foreground
-nginx -g 'daemon off;' &
-NGINX_PID=$!
-
 # Show startup info
 echo "✨ Broadcast system is ready!"
 echo ""
@@ -158,5 +131,5 @@ echo "   🔌 API Base:   https://$BROADCAST_HOSTNAME/api"
 echo "   🎥 MediaMTX:   $MEDIAMTX_URL"
 echo ""
 
-# Wait for both processes
-wait $NGINX_PID
+# Start nginx in foreground (this will be PID 1 in container and keep it alive)
+exec nginx -g 'daemon off;'
