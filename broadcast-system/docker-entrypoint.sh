@@ -81,39 +81,36 @@ if ! wait_for_service "Express server" 3001; then
     exit 1
 fi
 
-# Step 4: Resolve MediaMTX service IP and update nginx configuration
-echo "🔍 Resolving MediaMTX service..."
+# Step 4: Get MediaMTX task IP from ECS and update nginx configuration
+echo "🔍 Finding MediaMTX task IP from ECS..."
 MEDIAMTX_IP=""
-RESOLVE_ATTEMPTS=0
-MAX_RESOLVE_ATTEMPTS=60
 
-while [ -z "$MEDIAMTX_IP" ] && [ $RESOLVE_ATTEMPTS -lt $MAX_RESOLVE_ATTEMPTS ]; do
-    # Try nslookup first (most reliable for this use case)
-    if command -v nslookup > /dev/null 2>&1; then
-        MEDIAMTX_IP=$(nslookup mediamtx 2>/dev/null | grep "^Address: " | grep -v "127.0.0.1" | awk '{print $2}' | head -1)
-    fi
-    
-    # Try getent as fallback
-    if [ -z "$MEDIAMTX_IP" ] && command -v getent > /dev/null 2>&1; then
-        MEDIAMTX_IP=$(getent hosts mediamtx 2>/dev/null | awk '{print $1}' | grep -v "::1" | head -1)
-    fi
-    
-    if [ -z "$MEDIAMTX_IP" ]; then
-        RESOLVE_ATTEMPTS=$((RESOLVE_ATTEMPTS + 1))
-        if [ $((RESOLVE_ATTEMPTS % 10)) -eq 1 ]; then
-            echo "⏳ MediaMTX DNS resolution... (attempt $RESOLVE_ATTEMPTS/$MAX_RESOLVE_ATTEMPTS)"
-        fi
-        sleep 1
-    fi
-done
+# Get the task ARN for MediaMTX service
+MEDIAMTX_TASK=$(aws ecs list-tasks \
+    --cluster broadcast-cluster \
+    --service-name mediamtx-service \
+    --desired-status RUNNING \
+    --region us-east-2 \
+    --query 'taskArns[0]' \
+    --output text 2>/dev/null)
 
-if [ -n "$MEDIAMTX_IP" ]; then
-    echo "✅ MediaMTX resolved to: $MEDIAMTX_IP"
+if [ -n "$MEDIAMTX_TASK" ] && [ "$MEDIAMTX_TASK" != "None" ]; then
+    # Get the private IP from the task's network interface
+    MEDIAMTX_IP=$(aws ecs describe-tasks \
+        --cluster broadcast-cluster \
+        --tasks "$MEDIAMTX_TASK" \
+        --region us-east-2 \
+        --query 'tasks[0].attachments[0].details[] | [?name==`privateIPv4Address`].value | [0]' \
+        --output text 2>/dev/null)
+fi
+
+if [ -n "$MEDIAMTX_IP" ] && [ "$MEDIAMTX_IP" != "None" ]; then
+    echo "✅ MediaMTX task found at: $MEDIAMTX_IP"
     # Update nginx config with the resolved IP
     sed -i "s/MEDIAMTX_IP_PLACEHOLDER/$MEDIAMTX_IP/g" /etc/nginx/conf.d/default.conf
-    echo "✅ Nginx upstream configured for MediaMTX"
+    echo "✅ Nginx upstream configured"
 else
-    echo "❌ Could not resolve MediaMTX after $MAX_RESOLVE_ATTEMPTS attempts"
+    echo "❌ Could not find MediaMTX task in ECS"
     echo "⚠️  Using 127.0.0.1 as fallback (HLS will not work)"
     sed -i "s/MEDIAMTX_IP_PLACEHOLDER/127.0.0.1/g" /etc/nginx/conf.d/default.conf
 fi
