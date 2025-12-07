@@ -75,13 +75,15 @@ build-no-cache: ## Build the Docker image without cache
 
 build-cloud: ## Build the Docker image for cloud deployment (AMD64)
 	@echo "Building MediaMTX Docker image for cloud deployment (AMD64)..."
-	docker build --platform linux/amd64 -t $(IMAGE_NAME):$(VERSION) .
+	DOCKER_BUILDKIT=1 docker buildx build --platform linux/amd64 -t $(IMAGE_NAME):$(VERSION) .
 	@echo "✅ Cloud build complete!"
 
-build-rpi: ## Build the Docker image for Raspberry Pi (ARM)
-	@echo "Building MediaMTX Docker image for Raspberry Pi (ARM)..."
-	docker build --platform linux/arm64 -f Dockerfile.rpi -t $(IMAGE_NAME):$(VERSION)-rpi .
+build-rpi: ## Build the Docker image for Raspberry Pi (ARM64)
+	@echo "Building MediaMTX Docker image for Raspberry Pi (ARM64)..."
+	DOCKER_BUILDKIT=1 docker buildx build --platform linux/arm64 -f Dockerfile.rpi -t $(IMAGE_NAME):$(VERSION)-rpi .
 	@echo "✅ Raspberry Pi build complete!"
+
+build-all: build build-cloud build-rpi ## Build for all platforms (local, cloud, and RPi)
 
 # Run targets
 run: build stop ## Build and run the container (stops existing first)
@@ -2196,6 +2198,11 @@ broadcast-build-nc: ## Build broadcast system Docker image (no cache)
 	docker build --no-cache -f broadcast-system/Dockerfile -t broadcast-system:latest .
 	@echo "✅ Broadcast system build complete!"
 
+broadcast-build-cloud: ## Build broadcast system for cloud deployment (AMD64)
+	@echo "🏗️  Building broadcast system for cloud deployment (AMD64)..."
+	DOCKER_BUILDKIT=1 docker buildx build --platform linux/amd64 -f broadcast-system/Dockerfile -t broadcast-system:latest .
+	@echo "✅ Cloud build complete!"
+
 broadcast-run: broadcast-build ## Build and run broadcast system container
 	@echo "🚀 Starting broadcast system container..."
 	docker run -d \
@@ -2354,8 +2361,8 @@ broadcast-aws-login: ## 🔐 Login to AWS ECR for broadcast system
 	@echo "✅ ECR login successful!"
 
 broadcast-aws-build: ## 🏗️ Build broadcast system for AWS (AMD64)
-	@echo "🏗️ Building broadcast system Docker image for AWS..."
-	docker build --platform linux/amd64 -f broadcast-system/Dockerfile -t $(BROADCAST_REPO_NAME):latest .
+	@echo "🏗️ Building broadcast system Docker image for AWS (AMD64)..."
+	DOCKER_BUILDKIT=1 docker buildx build --platform linux/amd64 -f broadcast-system/Dockerfile -t $(BROADCAST_REPO_NAME):latest .
 	@echo "✅ Build complete!"
 
 broadcast-aws-push: broadcast-aws-login broadcast-aws-build ## 📤 Build and push broadcast system to ECR
@@ -2747,6 +2754,6 @@ cloudflare-update-dns: ## 🔗 Update Cloudflare DNS with current ECS IP (requir
 	fi
 	@bash scripts/cloudflare-dns-update.sh
 
-deploy-all: full-deploy broadcast-aws-deploy
+deploy-deploy: full-deploy broadcast-aws-deploy
 
 clean-clean: aws-cleanup-all broadcast-aws-cleanup 

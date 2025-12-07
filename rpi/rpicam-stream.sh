@@ -4,8 +4,11 @@
 # This script runs the rpicam-vid command with automatic retry on failure
 
 # Configuration
-RTSP_SERVER_DOMAIN="rtsp.racetrackstreaming.com"  # Domain pointing to ECS task public IP
-RTSP_SERVER_PORT="8554"
+# NOTE: Use direct IP address to bypass CloudFlare proxy (CloudFlare doesn't support RTMP/RTSP)
+# When MediaMTX ECS task is redeployed, update IP using:
+# aws ecs describe-tasks --cluster mediamtx-cluster --tasks $(aws ecs list-tasks --cluster mediamtx-cluster --region us-east-2 --query 'taskArns[0]' --output text) --region us-east-2 --query 'tasks[0].attachments[?type==`ElasticNetworkInterface`].details[?name==`primaryPublicIpv4Address`].value' --output text
+RTSP_SERVER_DOMAIN="13.59.160.208"  # Direct public IP of MediaMTX ECS task (bypasses CloudFlare proxy)
+RTSP_SERVER_PORT="1935"  # RTMP port (not RTSP 8554)
 STREAM_NAME="rpicam2"
 MAX_RETRIES=0  # 0 means infinite retries
 RETRY_DELAY=5  # seconds between retries
@@ -33,21 +36,23 @@ resolve_hostname() {
     return 1
 }
 
-# Function to check if RTSP server is reachable
+# Function to check if RTMP server is reachable
 check_rtsp_server() {
     local hostname=$1
     local port=$2
     
-    # Resolve hostname to IP
-    local ip=$(resolve_hostname "$hostname")
-    if [ -z "$ip" ]; then
-        log "Failed to resolve $hostname"
-        return 1
+    # If hostname is already an IP, use it directly; otherwise resolve it
+    local ip=$hostname
+    if [[ ! $hostname =~ ^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$ ]]; then
+        ip=$(resolve_hostname "$hostname")
+        if [ -z "$ip" ]; then
+            log "Failed to resolve $hostname"
+            return 1
+        fi
+        log "Resolved $hostname to $ip"
     fi
     
-    log "Resolved $hostname to $ip"
-    
-    # Test connection to RTSP server using resolved IP
+    # Test connection to RTMP server using resolved IP
     timeout $CONNECTION_TIMEOUT bash -c "</dev/tcp/$ip/$port" 2>/dev/null
     return $?
 }
@@ -55,8 +60,8 @@ check_rtsp_server() {
 # Function to run the streaming command
 run_stream() {
     local ip=$1
-    local rtsp_url="rtsp://$ip:$RTSP_SERVER_PORT/$STREAM_NAME"
-    log "Starting RPiCam stream to $rtsp_url"
+    local rtmp_url="rtmp://$ip:$RTSP_SERVER_PORT/$STREAM_NAME"
+    log "Starting RPiCam RTMP stream to $rtmp_url"
     
 
 #                                      number
@@ -67,9 +72,9 @@ run_stream() {
 #   --sharpness arg (=1)                  Adjust the sharpness of the output image, where 1.0 = normal sharpening
 #   --framerate arg (=-1)                 Set the fixed framerate for preview and video modes
 
-    # Your streaming command here
+    # Stream to MediaMTX via RTMP (uses FLV container format for RTMP compatibility)
     rpicam-vid -t 0 --camera 0 --nopreview --codec yuv420 --brightness 0 --contrast 1 --saturation 1 --width 1280 --height 720 --framerate 30 --inline -o - | \
-    ffmpeg -f rawvideo -pix_fmt yuv420p -s:v 1280x720 -r 30 -i - -c:v libx264 -preset veryfast -tune zerolatency -f rtsp -rtsp_transport tcp "$rtsp_url"
+    ffmpeg -f rawvideo -pix_fmt yuv420p -s:v 1280x720 -r 30 -i - -c:v libx264 -preset veryfast -tune zerolatency -f flv "$rtmp_url"
 }
 
 # Main loop with retry logic
@@ -82,14 +87,14 @@ while true; do
         exit 1
     fi
     
-    # Wait for RTSP server to be available
-    log "Checking RTSP server availability..."
+    # Wait for RTMP server to be available
+    log "Checking RTMP server availability..."
     while ! check_rtsp_server "$RTSP_SERVER_DOMAIN" "$RTSP_SERVER_PORT"; do
-        log "RTSP server at $RTSP_SERVER_DOMAIN:$RTSP_SERVER_PORT not reachable. Waiting $RETRY_DELAY seconds..."
+        log "RTMP server at $RTSP_SERVER_DOMAIN:$RTSP_SERVER_PORT not reachable. Waiting $RETRY_DELAY seconds..."
         sleep $RETRY_DELAY
     done
     
-    log "RTSP server is reachable. Starting stream (attempt $((retry_count + 1)))"
+    log "RTMP server is reachable. Starting stream (attempt $((retry_count + 1)))"
     
     # Get resolved IP for streaming
     resolved_ip=$(resolve_hostname "$RTSP_SERVER_DOMAIN")

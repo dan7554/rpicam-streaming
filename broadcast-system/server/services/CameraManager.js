@@ -5,8 +5,15 @@ const { v4: uuidv4 } = require('uuid');
 class CameraManager {
   constructor(mediamtxUrl) {
     this.mediamtxUrl = mediamtxUrl;
-    this.mediamtxApiUrl = 'https://192.168.50.208:9997'; // Use HTTPS for API
-    this.mediamtxHost = '192.168.50.208'; // Host for URLs
+    
+    // Resolve MediaMTX API and host from environment or derived from mediamtxUrl
+    const mediaUrl = new URL(mediamtxUrl);
+    const mediaHost = process.env.MEDIAMTX_HOST || mediaUrl.hostname;
+    const mediaPort = process.env.MEDIAMTX_API_PORT || '9997';
+    const mediaProtocol = process.env.MEDIAMTX_API_PROTOCOL || 'https';
+    
+    this.mediamtxApiUrl = process.env.MEDIAMTX_API_URL || `${mediaProtocol}://${mediaHost}:${mediaPort}`;
+    this.mediamtxHost = mediaHost;
     this.cameras = new Map();
     this.activeCameras = new Set();
     this.previewCache = new Map();

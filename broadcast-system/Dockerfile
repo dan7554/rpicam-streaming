@@ -1,8 +1,9 @@
 # Multi-stage Dockerfile for broadcast system with nginx reverse proxy
-# Build from repository root: docker build -f broadcast-system/Dockerfile -t broadcast-system:latest .
+# Build from repository root: docker buildx build --platform linux/amd64 -f broadcast-system/Dockerfile -t broadcast-system:latest .
+# For development: docker build -f broadcast-system/Dockerfile -t broadcast-system:latest .
 
 # Stage 1: Build the client (React/Vite app)
-FROM --platform=linux/amd64 node:20-alpine AS client-builder
+FROM node:20-alpine AS client-builder
 
 WORKDIR /build/client
 
@@ -12,8 +13,8 @@ COPY broadcast-system/client/package*.json ./
 # Install dependencies
 RUN npm install
 
-# Fix rollup bindings issue
-RUN rm -rf node_modules/.bin/@rollup && npm install @rollup/rollup-linux-x64-musl || true
+# Fix rollup bindings issue for the target platform
+RUN rm -rf node_modules/.bin/@rollup && npm install --no-save @rollup/rollup-linux-x64-musl 2>/dev/null || true
 
 # Copy client source
 COPY broadcast-system/client/src ./src
@@ -22,11 +23,11 @@ COPY broadcast-system/client/index.html ./
 COPY broadcast-system/client/vite.config.js ./
 COPY broadcast-system/client/vitest.config.js ./
 
-# Build the client (rebuild rollup bindings for ARM64 if needed)
+# Build the client
 RUN npm run build
 
 # Stage 2: Build the server (Express.js)
-FROM --platform=linux/amd64 node:20-alpine AS server-builder
+FROM node:20-alpine AS server-builder
 
 WORKDIR /build
 
@@ -79,8 +80,12 @@ COPY broadcast-system/certs/server.key /etc/nginx/certs/server.key
 
 # Create entrypoint script
 RUN mkdir -p /app/scripts
-COPY broadcast-system/docker-entrypoint.sh /app/scripts/entrypoint.sh
-RUN chmod +x /app/scripts/entrypoint.sh
+
+# Copy with explicit line ending handling for Alpine Linux compatibility
+COPY broadcast-system/docker-entrypoint.sh /tmp/entrypoint.tmp
+RUN tr -d '\r' < /tmp/entrypoint.tmp > /app/scripts/entrypoint.sh && \
+    rm /tmp/entrypoint.tmp && \
+    chmod +x /app/scripts/entrypoint.sh
 
 # Expose ports
 EXPOSE 80 443
