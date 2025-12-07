@@ -84,49 +84,47 @@ fi
 # Step 4: Get MediaMTX task IP from ECS and update nginx configuration
 echo "🔍 Configuring MediaMTX upstream..."
 
-# Strategy: Try AWS CLI to get MediaMTX IP from ECS
-# If that fails, we'll wait and try network-based detection
+# Simple approach: just use localhost:8888 and let nginx handle it
+# In ECS Fargate with awsvpc network mode, tasks in the same cluster
+# cannot easily reach each other via service discovery without explicit configuration.
+# So for now, use 127.0.0.1 as a placeholder that can be manually updated.
+MEDIAMTX_IP="127.0.0.1"
 
-MEDIAMTX_IP=""
-max_retries=30
-attempt=0
-
-while [ -z "$MEDIAMTX_IP" ] && [ $attempt -lt $max_retries ]; do
-    if command -v aws >/dev/null 2>&1; then
-        MEDIAMTX_TASK=$(aws ecs list-tasks \
+# If AWS CLI is available and works, try to get the real IP
+if command -v aws >/dev/null 2>&1; then
+    echo "   🔧 Querying ECS for MediaMTX task (timeout: 10s)..."
+    
+    # Single attempt with short timeout
+    MEDIAMTX_TASK=$(timeout 5 aws ecs list-tasks \
+        --cluster broadcast-cluster \
+        --service-name mediamtx-service \
+        --desired-status RUNNING \
+        --region us-east-2 \
+        --query 'taskArns[0]' \
+        --output text 2>/dev/null || echo "")
+    
+    if [ -n "$MEDIAMTX_TASK" ] && [ "$MEDIAMTX_TASK" != "None" ]; then
+        MEDIAMTX_IP_QUERY=$(timeout 5 aws ecs describe-tasks \
             --cluster broadcast-cluster \
-            --service-name mediamtx-service \
-            --desired-status RUNNING \
+            --tasks "$MEDIAMTX_TASK" \
             --region us-east-2 \
-            --query 'taskArns[0]' \
+            --query 'tasks[0].containers[0].networkInterfaces[0].privateIpv4Address' \
             --output text 2>/dev/null || echo "")
         
-        if [ -n "$MEDIAMTX_TASK" ] && [ "$MEDIAMTX_TASK" != "None" ]; then
-            MEDIAMTX_IP=$(aws ecs describe-tasks \
-                --cluster broadcast-cluster \
-                --tasks "$MEDIAMTX_TASK" \
-                --region us-east-2 \
-                --query 'tasks[0].containers[0].networkInterfaces[0].privateIpv4Address' \
-                --output text 2>/dev/null || echo "")
+        if [ -n "$MEDIAMTX_IP_QUERY" ] && [ "$MEDIAMTX_IP_QUERY" != "None" ]; then
+            MEDIAMTX_IP="$MEDIAMTX_IP_QUERY"
+            echo "   ✅ MediaMTX found at: $MEDIAMTX_IP"
         fi
     fi
-    
-    if [ -z "$MEDIAMTX_IP" ] || [ "$MEDIAMTX_IP" = "None" ]; then
-        attempt=$((attempt + 1))
-        if [ $attempt -lt $max_retries ]; then
-            echo "   ⏳ Waiting for MediaMTX... (attempt $attempt/$max_retries)"
-            sleep 1
-        else
-            # Fallback: use localhost and hope MediaMTX is on this container or accessible via DNS
-            MEDIAMTX_IP="127.0.0.1"
-            echo "   ⚠️  Could not resolve MediaMTX after $max_retries attempts"
-        fi
-    else
-        echo "✅ MediaMTX resolved to: $MEDIAMTX_IP"
-    fi
-done
+fi
 
-sed -i "s/MEDIAMTX_IP_PLACEHOLDER/$MEDIAMTX_IP/g" /etc/nginx/conf.d/default.conf# Step 5: Start nginx in foreground (for container logging)
+if [ "$MEDIAMTX_IP" = "127.0.0.1" ]; then
+    echo "   ⚠️  Using localhost (MediaMTX must be on same container or accessible via DNS)"
+fi
+
+sed -i "s/MEDIAMTX_IP_PLACEHOLDER/$MEDIAMTX_IP/g" /etc/nginx/conf.d/default.conf
+
+# Step 5: Start nginx in foreground (for container logging)
 echo "🔒 Starting nginx with SSL..."
 echo "   HTTP:  http://$BROADCAST_HOSTNAME:80 → https://$BROADCAST_HOSTNAME:$BROADCAST_PORT"
 echo "   Client: https://$BROADCAST_HOSTNAME/"
