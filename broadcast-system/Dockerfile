@@ -44,8 +44,9 @@ COPY broadcast-system/scripts ./scripts
 # Stage 3: Runtime - nginx + Node server
 FROM node:20-alpine
 
-# Install nginx and other tools for SSL support
-RUN apk add --no-cache nginx openssl ca-certificates curl
+# Install nginx, AWS CLI, and other tools for SSL support
+RUN apk add --no-cache nginx openssl ca-certificates curl python3 py3-pip && \
+    pip3 install awscli-local awscli --break-system-packages || pip3 install awscli
 
 WORKDIR /app
 
