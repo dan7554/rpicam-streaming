@@ -337,12 +337,14 @@ ecr-clean: ## 🧹 Delete old ECR images (keeps latest 5)
 		--region $(AWS_REGION) \
 		--filter tagStatus=TAGGED \
 		--query 'imageIds[?imageTag!=`latest`]' \
-		--output json | \
+		--output json \
+		--no-cli-pager | \
 	jq '.[5:] | map(select(.imageTag != "latest"))' | \
 	aws ecr batch-delete-image \
 		--repository-name $(REPO_NAME) \
 		--region $(AWS_REGION) \
-		--image-ids file:///dev/stdin || echo "No old images to clean"
+		--image-ids file:///dev/stdin \
+		--no-cli-pager || echo "No old images to clean"
 	@echo "✅ ECR cleanup complete!"
 
 ###############################################
@@ -835,7 +837,7 @@ ecs-get-url: ## 🌐 Get public URL of ECS service
 ecs-cleanup: ## 🧹 Delete ECS service and cluster
 	@echo "🧹 Cleaning up ECS resources..."
 	@echo "🛑 Stopping all tasks..."
-	-aws ecs list-tasks --cluster $(ECS_CLUSTER_NAME) --region $(AWS_REGION) --query 'taskArns[]' --output text | xargs -n1 -I {} aws ecs stop-task --cluster $(ECS_CLUSTER_NAME) --task {} --region $(AWS_REGION) 2>/dev/null || true
+	-aws ecs list-tasks --cluster $(ECS_CLUSTER_NAME) --region $(AWS_REGION) --query 'taskArns[]' --output text | xargs -n1 -I {} aws ecs stop-task --cluster $(ECS_CLUSTER_NAME) --task {} --region $(AWS_REGION) --no-cli-pager 2>/dev/null || true
 	@echo "⏳ Waiting for tasks to stop..."
 	@for i in $$(seq 1 30); do \
 		TASK_COUNT=$$(aws ecs list-tasks --cluster $(ECS_CLUSTER_NAME) --region $(AWS_REGION) --query 'length(taskArns)' --output text 2>/dev/null || echo "0"); \
@@ -847,11 +849,11 @@ ecs-cleanup: ## 🧹 Delete ECS service and cluster
 		sleep 2; \
 	done
 	@echo "🗑️  Scaling down service..."
-	-aws ecs update-service --cluster $(ECS_CLUSTER_NAME) --service $(ECS_SERVICE_NAME) --desired-count 0 --region $(AWS_REGION)
+	-aws ecs update-service --cluster $(ECS_CLUSTER_NAME) --service $(ECS_SERVICE_NAME) --desired-count 0 --region $(AWS_REGION) --no-cli-pager
 	@echo "🗑️  Deleting service..."
-	-aws ecs delete-service --cluster $(ECS_CLUSTER_NAME) --service $(ECS_SERVICE_NAME) --region $(AWS_REGION)
+	-aws ecs delete-service --cluster $(ECS_CLUSTER_NAME) --service $(ECS_SERVICE_NAME) --region $(AWS_REGION) --no-cli-pager
 	@echo "🗑️  Deleting cluster..."
-	-aws ecs delete-cluster --cluster $(ECS_CLUSTER_NAME) --region $(AWS_REGION)
+	-aws ecs delete-cluster --cluster $(ECS_CLUSTER_NAME) --region $(AWS_REGION) --no-cli-pager
 	@echo "🗑️  Deleting log group..."
 	-aws logs delete-log-group --log-group-name $(ECS_LOG_GROUP) --region $(AWS_REGION)
 	@echo "✅ ECS cleanup complete!"
@@ -1085,14 +1087,14 @@ alb-cleanup: ## 🧹 Delete ALB and related resources
 	@echo "🗑️ Deleting listeners..."
 	-ALB_ARN=$$(aws elbv2 describe-load-balancers --names $(ALB_NAME) --region $(AWS_REGION) --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null); \
 	if [ "$$ALB_ARN" != "None" ] && [ -n "$$ALB_ARN" ]; then \
-		aws elbv2 describe-listeners --load-balancer-arn $$ALB_ARN --region $(AWS_REGION) --query 'Listeners[].ListenerArn' --output text | xargs -n1 -I {} aws elbv2 delete-listener --listener-arn {} --region $(AWS_REGION) 2>/dev/null || true; \
+		aws elbv2 describe-listeners --load-balancer-arn $$ALB_ARN --region $(AWS_REGION) --query 'Listeners[].ListenerArn' --output text --no-cli-pager | xargs -n1 -I {} aws elbv2 delete-listener --listener-arn {} --region $(AWS_REGION) --no-cli-pager 2>/dev/null || true; \
 	fi
 	@echo "🗑️ Deleting load balancer..."
-	-aws elbv2 delete-load-balancer --load-balancer-arn $$ALB_ARN --region $(AWS_REGION) 2>/dev/null || true
+	-aws elbv2 delete-load-balancer --load-balancer-arn $$ALB_ARN --region $(AWS_REGION) --no-cli-pager 2>/dev/null || true
 	@echo "🗑️ Deleting target group..."
 	-TG_ARN=$$(aws elbv2 describe-target-groups --names $(TARGET_GROUP_NAME) --region $(AWS_REGION) --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null); \
 	if [ "$$TG_ARN" != "None" ] && [ -n "$$TG_ARN" ]; then \
-		aws elbv2 delete-target-group --target-group-arn $$TG_ARN --region $(AWS_REGION) 2>/dev/null || true; \
+		aws elbv2 delete-target-group --target-group-arn $$TG_ARN --region $(AWS_REGION) --no-cli-pager 2>/dev/null || true; \
 	fi
 	@echo "✅ ALB cleanup complete!"
 
@@ -1779,12 +1781,16 @@ aws-cleanup-all: ## 🗑️  Force cleanup all AWS resources (no confirmation)
 	@echo "========================================"
 	-$(MAKE) ecs-cleanup 2>/dev/null || echo "ECS cleanup completed (some resources may not exist)"
 	@echo ""
+	@echo "📺 Step 2b: Cleaning up Broadcast System..."
+	@echo "============================================"
+	-$(MAKE) broadcast-aws-cleanup 2>/dev/null || echo "Broadcast cleanup completed (some resources may not exist)"
+	@echo ""
 	@echo "🛡️  Step 3: Cleaning up Security Groups..."
 	@echo "==========================================="
 	@VPC_ID=$$(aws ec2 describe-vpcs --filters "Name=isDefault,Values=true" --query 'Vpcs[0].VpcId' --output text --region $(AWS_REGION) 2>/dev/null); \
 	if [ "$$VPC_ID" != "None" ] && [ -n "$$VPC_ID" ]; then \
 		echo "🔍 Cleaning up MediaMTX security groups..."; \
-		for SG_NAME in "mediamtx-security-group" "mediamtx-alb-security-group"; do \
+		for SG_NAME in "mediamtx-security-group" "mediamtx-alb-security-group" "broadcast-sg"; do \
 			SG_ID=$$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$$VPC_ID" "Name=group-name,Values=$$SG_NAME" --query 'SecurityGroups[0].GroupId' --output text --region $(AWS_REGION) 2>/dev/null); \
 			if [ "$$SG_ID" != "None" ] && [ -n "$$SG_ID" ]; then \
 				echo "🗑️  Deleting security group: $$SG_NAME ($$SG_ID)"; \
@@ -1808,14 +1814,22 @@ aws-cleanup-all: ## 🗑️  Force cleanup all AWS resources (no confirmation)
 	@echo "📦 Step 5: Cleaning up ECR repository..."
 	@echo "========================================"
 	@echo "🗑️  Deleting all images in repository..."
-	-aws ecr list-images --repository-name $(REPO_NAME) --region $(AWS_REGION) --query 'imageIds[]' --output json 2>/dev/null | \
-		aws ecr batch-delete-image --repository-name $(REPO_NAME) --region $(AWS_REGION) --image-ids file:///dev/stdin 2>/dev/null || echo "No images to delete"
+	-aws ecr list-images --repository-name $(REPO_NAME) --region $(AWS_REGION) --query 'imageIds[]' --output json --no-cli-pager 2>/dev/null | \
+		aws ecr batch-delete-image --repository-name $(REPO_NAME) --region $(AWS_REGION) --image-ids file:///dev/stdin --no-cli-pager 2>/dev/null || echo "No images to delete"
 	@echo "🗑️  Deleting ECR repository..."
-	-aws ecr delete-repository --repository-name $(REPO_NAME) --region $(AWS_REGION) --force 2>/dev/null || echo "Repository might not exist"
+	-aws ecr delete-repository --repository-name $(REPO_NAME) --region $(AWS_REGION) --force --no-cli-pager 2>/dev/null || echo "Repository might not exist"
 	@echo ""
-	@echo "🔐 Step 6: Cleaning up IAM role (optional)..."
-	@echo "============================================="
-	@echo "⚠️  Checking if IAM role is used by other services..."
+	@echo "📦 Step 5b: Cleaning up Broadcast ECR repository..."
+	@echo "=================================================="
+	@echo "🗑️  Deleting all images in broadcast repository..."
+	-aws ecr list-images --repository-name $(BROADCAST_REPO_NAME) --region $(AWS_REGION) --query 'imageIds[]' --output json --no-cli-pager 2>/dev/null | \
+		aws ecr batch-delete-image --repository-name $(BROADCAST_REPO_NAME) --region $(AWS_REGION) --image-ids file:///dev/stdin --no-cli-pager 2>/dev/null || echo "No broadcast images to delete"
+	@echo "🗑️  Deleting broadcast ECR repository..."
+	-aws ecr delete-repository --repository-name $(BROADCAST_REPO_NAME) --region $(AWS_REGION) --force --no-cli-pager 2>/dev/null || echo "Broadcast repository might not exist"
+	@echo ""
+	@echo "🔐 Step 6: Cleaning up IAM roles (optional)..."
+	@echo "=============================================="
+	@echo "⚠️  Checking if IAM roles are used by other services..."
 	@ROLE_USAGE=$$(aws iam list-entities-for-policy --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy --region $(AWS_REGION) --query 'PolicyRoles[?RoleName==`ecsTaskExecutionRole`]' --output text 2>/dev/null); \
 	if [ -n "$$ROLE_USAGE" ]; then \
 		echo "ℹ️  IAM role 'ecsTaskExecutionRole' exists but might be used by other services."; \
@@ -1825,6 +1839,9 @@ aws-cleanup-all: ## 🗑️  Force cleanup all AWS resources (no confirmation)
 	else \
 		echo "ℹ️  IAM role not found or already cleaned up"; \
 	fi
+	@echo "🔍 Checking broadcast IAM execution role..."
+	-aws iam detach-role-policy --role-name $(BROADCAST_EXEC_ROLE_NAME) --policy-arn arn:aws:iam::aws:policy/CloudWatchLogsFullAccess --region $(AWS_REGION) 2>/dev/null || true
+	-aws iam delete-role --role-name $(BROADCAST_EXEC_ROLE_NAME) --region $(AWS_REGION) 2>/dev/null || echo "Broadcast execution role might not exist or still in use"
 	@echo ""
 	@echo "✅ AWS Resource Cleanup Complete!"
 	@echo "================================="
@@ -1836,9 +1853,11 @@ aws-cleanup-all: ## 🗑️  Force cleanup all AWS resources (no confirmation)
 	@echo "   • Target Group: $(TARGET_GROUP_NAME)"
 	@echo "   • ECS Service: $(ECS_SERVICE_NAME)"
 	@echo "   • ECS Cluster: $(ECS_CLUSTER_NAME)"
-	@echo "   • CloudWatch Logs: $(ECS_LOG_GROUP)"
-	@echo "   • ECR Repository: $(REPO_NAME) + all images"
-	@echo "   • Security Groups: mediamtx-security-group, mediamtx-alb-security-group"
+	@echo "   • Broadcast Service: $(BROADCAST_ECS_SERVICE)"
+	@echo "   • Broadcast Cluster: $(BROADCAST_ECS_CLUSTER)"
+	@echo "   • CloudWatch Logs: $(ECS_LOG_GROUP) + $(BROADCAST_LOG_GROUP)"
+	@echo "   • ECR Repository: $(REPO_NAME) + $(BROADCAST_REPO_NAME) + all images"
+	@echo "   • Security Groups: mediamtx-security-group, mediamtx-alb-security-group, broadcast-sg"
 	@echo ""
 	@echo "🌐 DNS Records PRESERVED:"
 	@echo "   ✅ CNAME: $(DOMAIN_NAME) (ready for redeployment)"
@@ -2315,7 +2334,7 @@ broadcast-push-registry: ## Push broadcast system image to Docker registry
 ###############################################
 # Broadcast System AWS ECS Deployment
 
-.PHONY: broadcast-aws-login broadcast-aws-build broadcast-aws-push broadcast-aws-create-task broadcast-aws-create-service broadcast-aws-update broadcast-aws-deploy broadcast-aws-quick-deploy broadcast-aws-logs broadcast-aws-status broadcast-aws-cleanup
+.PHONY: broadcast-aws-login broadcast-aws-build broadcast-aws-push broadcast-aws-create-iam-role broadcast-aws-create-task broadcast-aws-create-service broadcast-aws-update broadcast-aws-update-dns broadcast-aws-deploy broadcast-aws-quick-deploy broadcast-aws-logs broadcast-aws-status broadcast-aws-get-ip broadcast-aws-cleanup cloudflare-setup-guide cloudflare-create-records cloudflare-update-dns
 
 # Configuration for Broadcast System
 BROADCAST_REPO_NAME ?= broadcast-system
@@ -2323,6 +2342,8 @@ BROADCAST_ECR_URI := $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(BRO
 BROADCAST_ECS_CLUSTER := broadcast-cluster
 BROADCAST_ECS_SERVICE := broadcast-service
 BROADCAST_ECS_TASK_FAMILY := broadcast-task
+BROADCAST_EXEC_ROLE_NAME := broadcast-ecs-task-execution-role
+BROADCAST_SECURITY_GROUP := broadcast-sg
 BROADCAST_LOG_GROUP := /ecs/broadcast
 BROADCAST_DOMAIN := admin.racetrackstreaming.com
 BROADCAST_PORT := 443
@@ -2339,6 +2360,17 @@ broadcast-aws-build: ## 🏗️ Build broadcast system for AWS (AMD64)
 
 broadcast-aws-push: broadcast-aws-login broadcast-aws-build ## 📤 Build and push broadcast system to ECR
 	@echo "📤 Pushing broadcast system image to ECR..."
+	@REPO_EXISTS=$$(aws ecr describe-repositories --repository-names $(BROADCAST_ECR_REPO_NAME) --region $(AWS_REGION) 2>/dev/null | jq -r '.repositories[0].repositoryName // empty'); \
+	if [ -z "$$REPO_EXISTS" ]; then \
+		echo "📦 Creating ECR repository: $(BROADCAST_ECR_REPO_NAME)"; \
+		aws ecr create-repository \
+			--repository-name $(BROADCAST_ECR_REPO_NAME) \
+			--region $(AWS_REGION) \
+			--no-cli-pager > /dev/null; \
+		echo "✅ Repository created"; \
+	else \
+		echo "ℹ️  Repository already exists"; \
+	fi
 	@TIMESTAMP=$$(date +%Y%m%d-%H%M%S); \
 	docker tag $(BROADCAST_REPO_NAME):latest $(BROADCAST_ECR_URI):latest; \
 	docker tag $(BROADCAST_REPO_NAME):latest $(BROADCAST_ECR_URI):$$TIMESTAMP; \
@@ -2347,14 +2379,59 @@ broadcast-aws-push: broadcast-aws-login broadcast-aws-build ## 📤 Build and pu
 	echo "✅ Pushed: $(BROADCAST_ECR_URI):latest"; \
 	echo "✅ Pushed: $(BROADCAST_ECR_URI):$$TIMESTAMP"
 
-broadcast-aws-create-task: ## 📋 Create broadcast ECS task definition
+broadcast-aws-create-iam-role: ## 🔑 Create IAM execution role for broadcast ECS tasks
+	@echo "🔑 Creating IAM execution role for broadcast..."
+	@ROLE_EXISTS=$$(aws iam get-role --role-name $(BROADCAST_EXEC_ROLE_NAME) --region $(AWS_REGION) 2>/dev/null); \
+	if [ -z "$$ROLE_EXISTS" ]; then \
+		echo "📝 Creating new role: $(BROADCAST_EXEC_ROLE_NAME)"; \
+		aws iam create-role \
+			--role-name $(BROADCAST_EXEC_ROLE_NAME) \
+			--assume-role-policy-document '{ \
+				"Version": "2012-10-17", \
+				"Statement": [{ \
+					"Effect": "Allow", \
+					"Principal": {"Service": "ecs-tasks.amazonaws.com"}, \
+					"Action": "sts:AssumeRole" \
+				}] \
+			}' \
+			--region $(AWS_REGION) > /dev/null 2>&1; \
+		echo "✅ Role created"; \
+		echo "📋 Attaching CloudWatch Logs policy..."; \
+		aws iam attach-role-policy \
+			--role-name $(BROADCAST_EXEC_ROLE_NAME) \
+			--policy-arn arn:aws:iam::aws:policy/CloudWatchLogsFullAccess \
+			--region $(AWS_REGION) > /dev/null 2>&1; \
+		echo "✅ CloudWatch policy attached"; \
+		sleep 2; \
+	else \
+		echo "ℹ️  Role already exists"; \
+	fi
+	@echo "📝 Ensuring CloudWatch Logs inline policy..."
+	@aws iam put-role-policy \
+		--role-name $(BROADCAST_EXEC_ROLE_NAME) \
+		--policy-name CloudWatchLogsCreateStreamPolicy \
+		--policy-document '{ \
+			"Version": "2012-10-17", \
+			"Statement": [{ \
+				"Effect": "Allow", \
+				"Action": ["logs:CreateLogStream", "logs:PutLogEvents"], \
+				"Resource": "arn:aws:logs:$(AWS_REGION):$(AWS_ACCOUNT_ID):log-group:/ecs/broadcast:*" \
+			}] \
+		}' \
+		--region $(AWS_REGION) > /dev/null 2>&1; \
+	echo "✅ CloudWatch Logs permissions ensured!"
+	@echo "✅ IAM role ready!"
+
+broadcast-aws-create-task: broadcast-aws-create-iam-role ## 📋 Create broadcast ECS task definition
 	@echo "📋 Creating broadcast ECS task definition..."
-	@aws ecs register-task-definition \
+	@EXEC_ROLE_ARN=$$(aws iam get-role --role-name $(BROADCAST_EXEC_ROLE_NAME) --region $(AWS_REGION) --query 'Role.Arn' --output text); \
+	aws ecs register-task-definition \
 		--family $(BROADCAST_ECS_TASK_FAMILY) \
 		--network-mode awsvpc \
 		--requires-compatibilities FARGATE \
 		--cpu 512 \
 		--memory 1024 \
+		--execution-role-arn $$EXEC_ROLE_ARN \
 		--container-definitions '[ \
 			{ \
 				"name": "broadcast-system", \
@@ -2411,17 +2488,23 @@ broadcast-aws-create-service: ## 🚀 Create broadcast ECS service
 	@echo "🚀 Creating broadcast ECS service..."
 	@VPC_ID=$$(aws ec2 describe-vpcs --filters "Name=isDefault,Values=true" --query 'Vpcs[0].VpcId' --output text --region $(AWS_REGION)); \
 	SUBNET_IDS=$$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$$VPC_ID" --query 'Subnets[0:2].SubnetId' --output text --region $(AWS_REGION) | tr '\t' ','); \
-	SG_ID=$$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$$VPC_ID" "Name=group-name,Values=default" --query 'SecurityGroups[0].GroupId' --output text --region $(AWS_REGION)); \
-	aws ecs create-service \
-		--cluster $(BROADCAST_ECS_CLUSTER) \
-		--service-name $(BROADCAST_ECS_SERVICE) \
-		--task-definition $(BROADCAST_ECS_TASK_FAMILY) \
-		--desired-count 1 \
-		--launch-type FARGATE \
-		--network-configuration "awsvpcConfiguration={subnets=[$$SUBNET_IDS],securityGroups=[$$SG_ID],assignPublicIp=ENABLED}" \
-		--region $(AWS_REGION) \
-		--no-cli-pager > /dev/null
-	@echo "✅ Service created!"
+	SG_ID=$$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$$VPC_ID" "Name=group-name,Values=$(BROADCAST_SECURITY_GROUP)" --query 'SecurityGroups[0].GroupId' --output text --region $(AWS_REGION) 2>/dev/null); \
+	if [ -z "$$SG_ID" ]; then SG_ID=$$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$$VPC_ID" "Name=group-name,Values=default" --query 'SecurityGroups[0].GroupId' --output text --region $(AWS_REGION)); fi; \
+	SERVICE_EXISTS=$$(aws ecs describe-services --cluster $(BROADCAST_ECS_CLUSTER) --services $(BROADCAST_ECS_SERVICE) --region $(AWS_REGION) --query 'services[0].serviceName' --output text 2>/dev/null); \
+	if [ "$$SERVICE_EXISTS" != "$(BROADCAST_ECS_SERVICE)" ]; then \
+		aws ecs create-service \
+			--cluster $(BROADCAST_ECS_CLUSTER) \
+			--service-name $(BROADCAST_ECS_SERVICE) \
+			--task-definition $(BROADCAST_ECS_TASK_FAMILY) \
+			--desired-count 1 \
+			--launch-type FARGATE \
+			--network-configuration "awsvpcConfiguration={subnets=[$$SUBNET_IDS],securityGroups=[$$SG_ID],assignPublicIp=ENABLED}" \
+			--region $(AWS_REGION) \
+			--no-cli-pager > /dev/null; \
+		echo "✅ Service created!"; \
+	else \
+		echo "ℹ️  Service already exists"; \
+	fi
 
 broadcast-aws-update: ## 🔄 Update broadcast ECS service with latest image
 	@echo "🔄 Updating broadcast ECS service..."
@@ -2432,6 +2515,54 @@ broadcast-aws-update: ## 🔄 Update broadcast ECS service with latest image
 		--region $(AWS_REGION) \
 		--no-cli-pager > /dev/null
 	@echo "✅ Service updated!"
+	@echo "⏳ Waiting 30 seconds for new task to start..."
+	@sleep 30
+	@$(MAKE) broadcast-aws-update-dns
+
+broadcast-aws-update-dns: ## 🔗 Update Route53 and Cloudflare DNS to point to current broadcast ECS task IP
+	@echo "🔗 Updating DNS records for $(BROADCAST_DOMAIN)..."
+	@TASK_ARN=$$(aws ecs list-tasks --cluster $(BROADCAST_ECS_CLUSTER) --desired-status RUNNING --region $(AWS_REGION) --query 'taskArns[0]' --output text); \
+	if [ "$$TASK_ARN" = "None" ] || [ -z "$$TASK_ARN" ]; then \
+		echo "❌ No running tasks found"; \
+		exit 1; \
+	fi; \
+	NETWORK_INTERFACE_ID=$$(aws ecs describe-tasks --cluster $(BROADCAST_ECS_CLUSTER) --tasks $$TASK_ARN --region $(AWS_REGION) --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' --output text); \
+	if [ "$$NETWORK_INTERFACE_ID" = "None" ] || [ -z "$$NETWORK_INTERFACE_ID" ]; then \
+		echo "❌ No network interface found for task"; \
+		exit 1; \
+	fi; \
+	PUBLIC_IP=$$(aws ec2 describe-network-interfaces --network-interface-ids $$NETWORK_INTERFACE_ID --region $(AWS_REGION) --query 'NetworkInterfaces[0].Association.PublicIp' --output text 2>/dev/null); \
+	if [ "$$PUBLIC_IP" = "None" ] || [ -z "$$PUBLIC_IP" ]; then \
+		echo "❌ No public IP found for task"; \
+		exit 1; \
+	fi; \
+	echo "📍 Current task public IP: $$PUBLIC_IP"; \
+	BASE_DOMAIN=$$(echo "$(BROADCAST_DOMAIN)" | sed 's/^[^.]*\.//' | tr -d ' '); \
+	HOSTED_ZONE_ID=$$(aws route53 list-hosted-zones --query "HostedZones[?Name=='$$BASE_DOMAIN.'].Id" --output text | sed 's/.*\///'); \
+	if [ "$$HOSTED_ZONE_ID" = "None" ] || [ -z "$$HOSTED_ZONE_ID" ]; then \
+		echo "❌ Hosted zone for $$BASE_DOMAIN not found"; \
+		exit 1; \
+	fi; \
+	echo "🔗 Updating Route53 A record for $(BROADCAST_DOMAIN) → $$PUBLIC_IP"; \
+	aws route53 change-resource-record-sets --hosted-zone-id $$HOSTED_ZONE_ID --change-batch "{ \
+		\"Changes\": [{ \
+			\"Action\": \"UPSERT\", \
+			\"ResourceRecordSet\": { \
+				\"Name\": \"$(BROADCAST_DOMAIN).\", \
+				\"Type\": \"A\", \
+				\"TTL\": 60, \
+				\"ResourceRecords\": [{\"Value\": \"$$PUBLIC_IP\"}] \
+			} \
+		}] \
+	}" --region $(AWS_REGION) --no-cli-pager > /dev/null; \
+	echo "✅ Route53 DNS updated!"; \
+	echo "🔗 Updating all Cloudflare DNS records (admin, rtsp, webrtc)..."; \
+	if [ -z "$$CLOUDFLARE_API_TOKEN" ] || [ -z "$$CLOUDFLARE_ZONE_ID" ]; then \
+		echo "⚠️  Cloudflare credentials not set. Skipping Cloudflare DNS update."; \
+	else \
+		bash scripts/cloudflare-dns-update-all.sh && echo "✅ Cloudflare DNS updated!" || echo "⚠️  Cloudflare DNS update failed"; \
+	fi
+
 
 broadcast-aws-deploy: broadcast-aws-create-cluster broadcast-aws-create-logs broadcast-aws-create-task broadcast-aws-create-service broadcast-aws-push broadcast-aws-update dns-create-admin-record ## 🚀 Full broadcast system deployment to AWS
 	@echo ""
@@ -2441,8 +2572,11 @@ broadcast-aws-deploy: broadcast-aws-create-cluster broadcast-aws-create-logs bro
 	@echo "   https://$(BROADCAST_DOMAIN)"
 	@echo ""
 	@echo "📡 Connected to MediaMTX:"
-	@echo "   WebRTC: https://rtsp.racetrackstreaming.com:8889"
-	@echo "   RTSP: rtsp://rtsp.racetrackstreaming.com:8554"
+	@echo "   WebRTC: https://webrtc.racetrackstreaming.com:8889"
+	@echo "   RTSP: https://rtsp.racetrackstreaming.com:8554"
+	@echo ""
+	@echo "🔒 Cloudflare SSL Protection:"
+	@echo "   All subdomains protected with DigiCert certificates"
 	@echo ""
 	@echo "📊 Monitor deployment:"
 	@echo "   make broadcast-aws-status"
@@ -2462,6 +2596,8 @@ broadcast-aws-quick-deploy: broadcast-aws-push broadcast-aws-update dns-create-a
 	done
 	@echo "✅ Quick deployment complete!"
 	@echo "🌐 Access at: https://$(BROADCAST_DOMAIN)"
+	@echo "📡 RTSP: https://rtsp.racetrackstreaming.com:8554"
+	@echo "📡 WebRTC: https://webrtc.racetrackstreaming.com:8889"
 
 broadcast-aws-logs: ## 📋 View broadcast system logs
 	@echo "📋 Getting broadcast system logs..."
@@ -2477,8 +2613,140 @@ broadcast-aws-status: ## 📊 Show broadcast ECS service status
 		--query 'services[0].{Status:status,Running:runningCount,Desired:desiredCount}' \
 		--output table 2>/dev/null || echo "❌ Service not found"
 
+broadcast-aws-get-ip: ## 🌐 Get current broadcast ECS task public IP (for Cloudflare)
+	@echo "🌐 Getting current broadcast ECS task public IP..."
+	@TASK_ARN=$$(aws ecs list-tasks --cluster $(BROADCAST_ECS_CLUSTER) --desired-status RUNNING --region $(AWS_REGION) --query 'taskArns[0]' --output text); \
+	if [ "$$TASK_ARN" = "None" ] || [ -z "$$TASK_ARN" ]; then \
+		echo "❌ No running tasks found"; \
+		exit 1; \
+	fi; \
+	NETWORK_INTERFACE_ID=$$(aws ecs describe-tasks --cluster $(BROADCAST_ECS_CLUSTER) --tasks $$TASK_ARN --region $(AWS_REGION) --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' --output text); \
+	if [ "$$NETWORK_INTERFACE_ID" = "None" ] || [ -z "$$NETWORK_INTERFACE_ID" ]; then \
+		echo "❌ No network interface found"; \
+		exit 1; \
+	fi; \
+	PUBLIC_IP=$$(aws ec2 describe-network-interfaces --network-interface-ids $$NETWORK_INTERFACE_ID --region $(AWS_REGION) --query 'NetworkInterfaces[0].Association.PublicIp' --output text 2>/dev/null); \
+	if [ "$$PUBLIC_IP" = "None" ] || [ -z "$$PUBLIC_IP" ]; then \
+		echo "❌ No public IP found"; \
+		exit 1; \
+	fi; \
+	echo "✅ Current IP: $$PUBLIC_IP"; \
+	echo "📋 Update this in Cloudflare DNS settings"
+
 broadcast-aws-cleanup: ## 🧹 Delete broadcast ECS service and task definition
 	@echo "🧹 Cleaning up broadcast system..."
-	aws ecs delete-service --cluster $(BROADCAST_ECS_CLUSTER) --service $(BROADCAST_ECS_SERVICE) --force --region $(AWS_REGION) 2>/dev/null || true
-	aws ecs deregister-task-definition --task-definition $(BROADCAST_ECS_TASK_FAMILY) --region $(AWS_REGION) 2>/dev/null || true
+	aws ecs delete-service --cluster $(BROADCAST_ECS_CLUSTER) --service $(BROADCAST_ECS_SERVICE) --force --region $(AWS_REGION) --no-cli-pager 2>/dev/null || true
+	aws ecs deregister-task-definition --task-definition $(BROADCAST_ECS_TASK_FAMILY) --region $(AWS_REGION) --no-cli-pager 2>/dev/null || true
 	@echo "✅ Cleanup complete!"
+
+###############################################
+# Cloudflare DNS Management
+
+.PHONY: cloudflare-setup-guide cloudflare-update-dns
+
+cloudflare-setup-guide: ## 📘 Show Cloudflare setup instructions
+	@echo ""
+	@echo "╔════════════════════════════════════════════════════════════════╗"
+	@echo "║        CLOUDFLARE SETUP FOR PRODUCTION SSL (10 minutes)       ║"
+	@echo "╚════════════════════════════════════════════════════════════════╝"
+	@echo ""
+	@echo "📌 CURRENT STATUS:"
+	@echo "   • Domain: racetrackstreaming.com"
+	@echo "   • Subdomain: admin.racetrackstreaming.com"
+	@echo "   • Current IP: $$(make broadcast-aws-get-ip 2>/dev/null | grep 'Current IP' | cut -d: -f2 | xargs)"
+	@echo "   • Certificate: Let's Encrypt (valid, but Chrome warning)"
+	@echo ""
+	@echo "⚡ QUICK STEPS:"
+	@echo ""
+	@echo "1️⃣  SIGN UP FOR CLOUDFLARE"
+	@echo "   Go to: https://dash.cloudflare.com"
+	@echo "   Sign up (free tier)"
+	@echo ""
+	@echo "2️⃣  ADD DOMAIN"
+	@echo "   • Click 'Add a Site'"
+	@echo "   • Enter: racetrackstreaming.com"
+	@echo "   • Select 'Free' plan"
+	@echo ""
+	@echo "3️⃣  UPDATE NAMESERVERS"
+	@echo "   • Cloudflare shows 2 nameservers"
+	@echo "   • Go to: https://console.aws.amazon.com/route53/"
+	@echo "   • Update NS records to Cloudflare's"
+	@echo "   • ⏱️  Wait 5-15 minutes"
+	@echo ""
+	@echo "4️⃣  ADD DNS RECORD IN CLOUDFLARE"
+	@echo "   Dashboard → DNS records → Add record"
+	@echo "   • Type: A"
+	@echo "   • Name: admin"
+	@echo "   • IPv4: 18.118.227.69 (from above)"
+	@echo "   • Proxy status: Proxied (orange cloud) ← IMPORTANT!"
+	@echo ""
+	@echo "5️⃣  ENABLE FULL (STRICT) MODE"
+	@echo "   Dashboard → SSL/TLS"
+	@echo "   • Encryption mode: 'Full (Strict)'"
+	@echo ""
+	@echo "6️⃣  SET UP API TOKEN (optional, for automation)"
+	@echo "   Go to: https://dash.cloudflare.com/profile/api-tokens"
+	@echo "   Create token with 'Edit zone DNS' permission"
+	@echo "   Export: export CLOUDFLARE_API_TOKEN='your-token'"
+	@echo "   Also get Zone ID from dashboard and export:"
+	@echo "   export CLOUDFLARE_ZONE_ID='your-zone-id'"
+	@echo ""
+	@echo "🎯 EXPECTED RESULT AFTER SETUP:"
+	@echo "   ✅ Green lock in Chrome"
+	@echo "   ✅ Certificate: 'DigiCert' or 'Google Trust Services'"
+	@echo "   ✅ No Chrome warnings"
+	@echo "   ✅ Production-ready!"
+	@echo ""
+	@echo "📚 FULL DOCUMENTATION:"
+	@echo "   cat CLOUDFLARE_SETUP.md"
+	@echo ""
+
+cloudflare-create-records: ## 🔧 Create Cloudflare DNS records (admin, rtsp, webrtc, hls)
+	@echo "🔧 Creating Cloudflare DNS records..."
+	@if [ -z "$$CLOUDFLARE_API_TOKEN" ] || [ -z "$$CLOUDFLARE_ZONE_ID" ]; then \
+		echo "❌ Missing Cloudflare credentials"; \
+		exit 1; \
+	fi
+	@TASK_ARN=$$(aws ecs list-tasks --cluster broadcast-cluster --desired-status RUNNING --region us-east-2 --query 'taskArns[0]' --output text); \
+	if [ "$$TASK_ARN" = "None" ] || [ -z "$$TASK_ARN" ]; then \
+		echo "❌ No running tasks found"; \
+		exit 1; \
+	fi; \
+	NETWORK_INTERFACE_ID=$$(aws ecs describe-tasks --cluster broadcast-cluster --tasks $$TASK_ARN --region us-east-2 --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' --output text); \
+	PUBLIC_IP=$$(aws ec2 describe-network-interfaces --network-interface-ids $$NETWORK_INTERFACE_ID --region us-east-2 --query 'NetworkInterfaces[0].Association.PublicIp' --output text 2>/dev/null); \
+	echo "   IP: $$PUBLIC_IP"; \
+	for SUBDOMAIN in admin rtsp webrtc hls; do \
+		RECORD_NAME="$$SUBDOMAIN.racetrackstreaming.com"; \
+		echo "   ↳ Creating $$RECORD_NAME..."; \
+		RESPONSE=$$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$${CLOUDFLARE_ZONE_ID}/dns_records" \
+			-H "Authorization: Bearer $${CLOUDFLARE_API_TOKEN}" \
+			-H "Content-Type: application/json" \
+			-d "{\"type\":\"A\",\"name\":\"$$SUBDOMAIN\",\"content\":\"$$PUBLIC_IP\",\"ttl\":60,\"proxied\":true}"); \
+		if echo "$$RESPONSE" | jq -e '.success' > /dev/null 2>&1; then \
+			echo "     ✅ $$RECORD_NAME created"; \
+		elif echo "$$RESPONSE" | jq -e '.errors[0].message' | grep -q "Record already exists"; then \
+			echo "     ℹ️  $$RECORD_NAME already exists"; \
+		else \
+			echo "     ⚠️  $$RECORD_NAME creation may have failed"; \
+		fi; \
+	done
+	@echo "✅ Cloudflare DNS records ready!"
+
+cloudflare-update-dns: ## 🔗 Update Cloudflare DNS with current ECS IP (requires API token)
+	@echo "🔗 Updating Cloudflare DNS record..."
+	@if [ -z "$$CLOUDFLARE_API_TOKEN" ] || [ -z "$$CLOUDFLARE_ZONE_ID" ]; then \
+		echo "❌ Missing Cloudflare credentials"; \
+		echo ""; \
+		echo "To set up API token:"; \
+		echo "  1. Go to: https://dash.cloudflare.com/profile/api-tokens"; \
+		echo "  2. Create token with 'Edit zone DNS' permission"; \
+		echo "  3. Export: export CLOUDFLARE_API_TOKEN='your-token'"; \
+		echo "  4. Get Zone ID from dashboard"; \
+		echo "  5. Export: export CLOUDFLARE_ZONE_ID='your-zone-id'"; \
+		exit 1; \
+	fi
+	@bash scripts/cloudflare-dns-update.sh
+
+deploy-all: full-deploy broadcast-aws-deploy
+
+clean-clean: aws-cleanup-all broadcast-aws-cleanup 
