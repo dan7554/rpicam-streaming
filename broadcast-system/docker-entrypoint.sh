@@ -84,12 +84,46 @@ fi
 # Step 4: Get MediaMTX task IP from ECS and update nginx configuration
 echo "🔍 Configuring MediaMTX upstream..."
 
-# Use ECS service discovery DNS name - the tasks are in the same cluster
-# ECS automatically provides internal DNS for services
-MEDIAMTX_UPSTREAM="mediamtx-service:8888"
+# Query ECS to find MediaMTX task IP
+# Add retry logic since MediaMTX task may not be running yet
+MEDIAMTX_IP=""
+max_retries=30
+attempt=0
 
-echo "   ✅ Using upstream: $MEDIAMTX_UPSTREAM"
-sed -i "s|MEDIAMTX_IP_PLACEHOLDER:8888|$MEDIAMTX_UPSTREAM|g" /etc/nginx/conf.d/default.conf
+while [ -z "$MEDIAMTX_IP" ] && [ $attempt -lt $max_retries ]; do
+    MEDIAMTX_TASK=$(aws ecs list-tasks \
+        --cluster broadcast-cluster \
+        --service-name mediamtx-service \
+        --desired-status RUNNING \
+        --region us-east-2 \
+        --query 'taskArns[0]' \
+        --output text 2>/dev/null || echo "")
+    
+    if [ -n "$MEDIAMTX_TASK" ] && [ "$MEDIAMTX_TASK" != "None" ]; then
+        MEDIAMTX_IP=$(aws ecs describe-tasks \
+            --cluster broadcast-cluster \
+            --tasks "$MEDIAMTX_TASK" \
+            --region us-east-2 \
+            --query 'tasks[0].containers[0].networkInterfaces[0].privateIpv4Address' \
+            --output text 2>/dev/null || echo "")
+    fi
+    
+    if [ -z "$MEDIAMTX_IP" ] || [ "$MEDIAMTX_IP" = "None" ]; then
+        attempt=$((attempt + 1))
+        if [ $attempt -lt $max_retries ]; then
+            echo "   ⏳ Waiting for MediaMTX task... (attempt $attempt/$max_retries)"
+            sleep 1
+        fi
+    fi
+done
+
+if [ -n "$MEDIAMTX_IP" ] && [ "$MEDIAMTX_IP" != "None" ] && [ "$MEDIAMTX_IP" != "" ]; then
+    echo "✅ MediaMTX resolved to: $MEDIAMTX_IP:8888"
+    sed -i "s/MEDIAMTX_IP_PLACEHOLDER/$MEDIAMTX_IP/g" /etc/nginx/conf.d/default.conf
+else
+    echo "⚠️  MediaMTX not found after retries, using localhost:8888"
+    sed -i "s/MEDIAMTX_IP_PLACEHOLDER/127.0.0.1/g" /etc/nginx/conf.d/default.conf
+fi
 
 # Step 5: Start nginx in foreground (for container logging)
 echo "🔒 Starting nginx with SSL..."
