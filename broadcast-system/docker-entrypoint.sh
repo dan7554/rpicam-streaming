@@ -86,25 +86,31 @@ echo "🔍 Finding MediaMTX task IP from ECS..."
 MEDIAMTX_IP=""
 
 # Get the task ARN for MediaMTX service
+echo "   ⏳ Querying ECS for MediaMTX service tasks..."
 MEDIAMTX_TASK=$(aws ecs list-tasks \
     --cluster broadcast-cluster \
     --service-name mediamtx-service \
     --desired-status RUNNING \
     --region us-east-2 \
     --query 'taskArns[0]' \
-    --output text 2>/dev/null)
+    --output text 2>&1)
+
+echo "   Task query result: $MEDIAMTX_TASK"
 
 if [ -n "$MEDIAMTX_TASK" ] && [ "$MEDIAMTX_TASK" != "None" ]; then
     # Get the private IP from the container's network interface
+    echo "   ⏳ Getting private IP for task: $MEDIAMTX_TASK"
     MEDIAMTX_IP=$(aws ecs describe-tasks \
         --cluster broadcast-cluster \
         --tasks "$MEDIAMTX_TASK" \
         --region us-east-2 \
         --query 'tasks[0].containers[0].networkInterfaces[0].privateIpv4Address' \
-        --output text 2>/dev/null)
+        --output text 2>&1)
+    
+    echo "   IP query result: $MEDIAMTX_IP"
 fi
 
-if [ -n "$MEDIAMTX_IP" ] && [ "$MEDIAMTX_IP" != "None" ]; then
+if [ -n "$MEDIAMTX_IP" ] && [ "$MEDIAMTX_IP" != "None" ] && [ "$MEDIAMTX_IP" != "" ]; then
     echo "✅ MediaMTX task found at: $MEDIAMTX_IP"
     # Update nginx config with the resolved IP
     sed -i "s/MEDIAMTX_IP_PLACEHOLDER/$MEDIAMTX_IP/g" /etc/nginx/conf.d/default.conf
