@@ -81,10 +81,34 @@ if ! wait_for_service "Express server" 3001; then
     exit 1
 fi
 
-# Step 4: Start nginx in foreground (for container logging)
-BROADCAST_HOSTNAME=${BROADCAST_HOSTNAME:-localhost}
-BROADCAST_PORT=${BROADCAST_PORT:-443}
+# Step 4: Resolve MediaMTX service IP and update nginx configuration
+echo "🔍 Resolving MediaMTX service..."
+MEDIAMTX_IP=""
+RESOLVE_ATTEMPTS=0
+MAX_RESOLVE_ATTEMPTS=30
 
+while [ -z "$MEDIAMTX_IP" ] && [ $RESOLVE_ATTEMPTS -lt $MAX_RESOLVE_ATTEMPTS ]; do
+    # Try to resolve mediamtx hostname (ECS internal DNS)
+    MEDIAMTX_IP=$(getent hosts mediamtx 2>/dev/null | awk '{print $1}' | head -1)
+    
+    if [ -z "$MEDIAMTX_IP" ]; then
+        RESOLVE_ATTEMPTS=$((RESOLVE_ATTEMPTS + 1))
+        if [ $RESOLVE_ATTEMPTS -eq 1 ] || [ $((RESOLVE_ATTEMPTS % 5)) -eq 0 ]; then
+            echo "⏳ Waiting for MediaMTX DNS resolution... (attempt $RESOLVE_ATTEMPTS/$MAX_RESOLVE_ATTEMPTS)"
+        fi
+        sleep 1
+    fi
+done
+
+if [ -n "$MEDIAMTX_IP" ]; then
+    echo "✅ MediaMTX resolved to: $MEDIAMTX_IP"
+    # Update nginx upstream with actual IP (replace mediamtx:8888 with IP:8888)
+    sed -i "s/server mediamtx:8888 resolve;/server $MEDIAMTX_IP:8888 max_fails=3 fail_timeout=30s;/" /etc/nginx/conf.d/default.conf
+else
+    echo "⚠️  Could not resolve MediaMTX, using mediamtx:8888 (may fail if DNS not ready)"
+fi
+
+# Step 5: Start nginx in foreground (for container logging)
 echo "🔒 Starting nginx with SSL..."
 echo "   HTTP:  http://$BROADCAST_HOSTNAME:80 → https://$BROADCAST_HOSTNAME:$BROADCAST_PORT"
 echo "   Client: https://$BROADCAST_HOSTNAME/"
