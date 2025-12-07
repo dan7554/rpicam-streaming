@@ -83,8 +83,8 @@ fi
 
 # Step 4: Configure MediaMTX upstream
 echo "🔍 Configuring MediaMTX upstream..."
-echo "   ✅ nginx is configured to use ECS Service Discovery DNS"
-echo "   📍 Using: mediamtx-service.mediamtx-cluster.ecs.local"
+echo "   ✅ nginx is configured to use public domain for MediaMTX"
+echo "   📍 Using: rtsp.racetrackstreaming.com"
 echo ""
 
 # Step 5: Start nginx in foreground (for container logging)
