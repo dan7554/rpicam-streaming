@@ -81,33 +81,11 @@ if ! wait_for_service "Express server" 3001; then
     exit 1
 fi
 
-# Step 4: Configure MediaMTX upstream and update nginx configuration
+# Step 4: Configure MediaMTX upstream
 echo "🔍 Configuring MediaMTX upstream..."
-
-# Use ECS service discovery for inter-service communication
-# Format: service-name.cluster-name.ecs.local
-# This works because both services are in ECS and can resolve each other via Route 53
-MEDIAMTX_SERVICE="mediamtx-service.mediamtx-cluster.ecs.local"
-
-echo "   🔧 Using ECS Service Discovery: $MEDIAMTX_SERVICE"
-
-# Substitute the service name/IP in nginx configuration
-# nginx will resolve the DNS name on each request, providing dynamic discovery
-ESCAPED_SERVICE=$(printf '%s\n' "$MEDIAMTX_SERVICE" | sed -e 's/[\/&]/\\&/g')
-echo "   📝 Configuring nginx to use: $ESCAPED_SERVICE"
-sed -i "s/MEDIAMTX_IP_PLACEHOLDER/$ESCAPED_SERVICE/g" /etc/nginx/conf.d/default.conf
-
-# Verify the substitution worked
-if grep -q "MEDIAMTX_IP_PLACEHOLDER" /etc/nginx/conf.d/default.conf; then
-    echo "   ❌ Error: MEDIAMTX_IP_PLACEHOLDER still found in configuration"
-    kill $SERVER_PID 2>/dev/null || true
-    exit 1
-else
-    echo "   ✅ nginx configuration updated successfully"
-    # Show a sample of what was substituted
-    echo "   📋 Sample nginx config:"
-    grep -m 1 "proxy_pass.*mediamtx" /etc/nginx/conf.d/default.conf | sed 's/^/      /'
-fi
+echo "   ✅ nginx is configured to use ECS Service Discovery DNS"
+echo "   📍 Using: mediamtx-service.mediamtx-cluster.ecs.local"
+echo ""
 
 # Step 5: Start nginx in foreground (for container logging)
 echo "🔒 Starting nginx with SSL..."
