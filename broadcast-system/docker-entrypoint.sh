@@ -88,13 +88,14 @@ RESOLVE_ATTEMPTS=0
 MAX_RESOLVE_ATTEMPTS=60
 
 while [ -z "$MEDIAMTX_IP" ] && [ $RESOLVE_ATTEMPTS -lt $MAX_RESOLVE_ATTEMPTS ]; do
-    # Try getent first (most reliable)
-    if command -v getent > /dev/null 2>&1; then
-        MEDIAMTX_IP=$(getent ahosts mediamtx 2>/dev/null | awk '{print $1}' | head -1)
+    # Try nslookup first (most reliable for this use case)
+    if command -v nslookup > /dev/null 2>&1; then
+        MEDIAMTX_IP=$(nslookup mediamtx 2>/dev/null | grep "^Address: " | grep -v "127.0.0.1" | awk '{print $2}' | head -1)
     fi
     
-    if [ -z "$MEDIAMTX_IP" ] && command -v nslookup > /dev/null 2>&1; then
-        MEDIAMTX_IP=$(nslookup mediamtx 2>/dev/null | grep "Address:" | tail -1 | awk '{print $2}')
+    # Try getent as fallback
+    if [ -z "$MEDIAMTX_IP" ] && command -v getent > /dev/null 2>&1; then
+        MEDIAMTX_IP=$(getent hosts mediamtx 2>/dev/null | awk '{print $1}' | grep -v "::1" | head -1)
     fi
     
     if [ -z "$MEDIAMTX_IP" ]; then
@@ -113,8 +114,8 @@ if [ -n "$MEDIAMTX_IP" ]; then
     echo "✅ Nginx upstream configured for MediaMTX"
 else
     echo "❌ Could not resolve MediaMTX after $MAX_RESOLVE_ATTEMPTS attempts"
-    echo "⚠️  Using localhost:8888 as fallback (HLS will not work)"
-    sed -i "s/MEDIAMTX_IP_PLACEHOLDER/localhost/g" /etc/nginx/conf.d/default.conf
+    echo "⚠️  Using 127.0.0.1 as fallback (HLS will not work)"
+    sed -i "s/MEDIAMTX_IP_PLACEHOLDER/127.0.0.1/g" /etc/nginx/conf.d/default.conf
 fi
 
 # Step 5: Start nginx in foreground (for container logging)
