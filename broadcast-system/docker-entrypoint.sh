@@ -85,16 +85,23 @@ fi
 echo "🔍 Resolving MediaMTX service..."
 MEDIAMTX_IP=""
 RESOLVE_ATTEMPTS=0
-MAX_RESOLVE_ATTEMPTS=30
+MAX_RESOLVE_ATTEMPTS=60
 
 while [ -z "$MEDIAMTX_IP" ] && [ $RESOLVE_ATTEMPTS -lt $MAX_RESOLVE_ATTEMPTS ]; do
-    # Try to resolve mediamtx hostname (ECS internal DNS)
-    MEDIAMTX_IP=$(getent hosts mediamtx 2>/dev/null | awk '{print $1}' | head -1)
+    # Try to resolve mediamtx hostname using DNS lookup
+    # First try getent, then try nslookup, then try host
+    if command -v getent > /dev/null 2>&1; then
+        MEDIAMTX_IP=$(getent hosts mediamtx 2>/dev/null | awk '{print $1}' | head -1)
+    elif command -v nslookup > /dev/null 2>&1; then
+        MEDIAMTX_IP=$(nslookup mediamtx 2>/dev/null | grep "Address:" | tail -1 | awk '{print $2}')
+    elif command -v host > /dev/null 2>&1; then
+        MEDIAMTX_IP=$(host mediamtx 2>/dev/null | grep "has address" | awk '{print $4}' | head -1)
+    fi
     
     if [ -z "$MEDIAMTX_IP" ]; then
         RESOLVE_ATTEMPTS=$((RESOLVE_ATTEMPTS + 1))
-        if [ $RESOLVE_ATTEMPTS -eq 1 ] || [ $((RESOLVE_ATTEMPTS % 5)) -eq 0 ]; then
-            echo "⏳ Waiting for MediaMTX DNS resolution... (attempt $RESOLVE_ATTEMPTS/$MAX_RESOLVE_ATTEMPTS)"
+        if [ $((RESOLVE_ATTEMPTS % 10)) -eq 1 ]; then
+            echo "⏳ MediaMTX DNS resolution... (attempt $RESOLVE_ATTEMPTS)"
         fi
         sleep 1
     fi
@@ -102,10 +109,15 @@ done
 
 if [ -n "$MEDIAMTX_IP" ]; then
     echo "✅ MediaMTX resolved to: $MEDIAMTX_IP"
-    # Update nginx upstream with actual IP (replace mediamtx:8888 with IP:8888)
-    sed -i "s/server mediamtx:8888 resolve;/server $MEDIAMTX_IP:8888 max_fails=3 fail_timeout=30s;/" /etc/nginx/conf.d/default.conf
+    # Update nginx upstream with actual IP using perl for better sed compatibility
+    if command -v perl > /dev/null 2>&1; then
+        perl -pi -e "s/server mediamtx:8888 resolve;/server $MEDIAMTX_IP:8888 max_fails=3 fail_timeout=30s;/" /etc/nginx/conf.d/default.conf
+    else
+        sed -i "s|server mediamtx:8888 resolve;|server $MEDIAMTX_IP:8888 max_fails=3 fail_timeout=30s;|" /etc/nginx/conf.d/default.conf
+    fi
+    echo "✅ Nginx upstream updated"
 else
-    echo "⚠️  Could not resolve MediaMTX, using mediamtx:8888 (may fail if DNS not ready)"
+    echo "⚠️  Could not resolve MediaMTX, using DNS-based upstream"
 fi
 
 # Step 5: Start nginx in foreground (for container logging)
