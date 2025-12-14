@@ -8,8 +8,15 @@ export const useWebSocket = () => {
   const socketRef = useRef(null);
 
   useEffect(() => {
-    // Use Vite environment variables
-    const serverUrl = import.meta.env.VITE_SERVER_URL || 'http://localhost:3001';
+    // Use Vite environment variables, fall back to current origin
+    let serverUrl = import.meta.env.VITE_SERVER_URL;
+    
+    // If not set, use the current origin (window.location.origin)
+    // This ensures we use https:// in production and http:// in local dev
+    if (!serverUrl) {
+      // For browser, use current origin
+      serverUrl = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3001';
+    }
     
     // Initialize socket connection
     const newSocket = io(serverUrl, {

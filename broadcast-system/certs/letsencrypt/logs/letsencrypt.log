@@ -1,0 +1,40 @@
+2025-12-03 15:03:06,815:DEBUG:certbot._internal.main:certbot version: 5.1.0
+2025-12-03 15:03:06,815:DEBUG:certbot._internal.main:Location of certbot entry point: /opt/homebrew/bin/certbot
+2025-12-03 15:03:06,815:DEBUG:certbot._internal.main:Arguments: ['--manual', '--preferred-challenges', 'dns', '-d', 'admin.racetrackstreaming.com', '--config-dir', './letsencrypt/config', '--work-dir', './letsencrypt/work', '--logs-dir', './letsencrypt/logs', '--agree-tos', '-m', 'dan@racetrackstreaming.com', '--register-unsafely-without-email', '--non-interactive']
+2025-12-03 15:03:06,815:DEBUG:certbot._internal.main:Discovered plugins: PluginsRegistry(PluginEntryPoint#apache,PluginEntryPoint#dns-cloudflare,PluginEntryPoint#manual,PluginEntryPoint#nginx,PluginEntryPoint#null,PluginEntryPoint#standalone,PluginEntryPoint#webroot)
+2025-12-03 15:03:06,840:DEBUG:certbot._internal.log:Root logging level set at 30
+2025-12-03 15:03:06,840:DEBUG:certbot._internal.plugins.selection:Requested authenticator manual and installer None
+2025-12-03 15:03:06,840:DEBUG:certbot._internal.plugins.disco:Other error:(PluginEntryPoint#manual): An authentication script must be provided with --manual-auth-hook when using the manual plugin non-interactively.
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/_internal/plugins/disco.py", line 109, in prepare
+    self._initialized.prepare()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/_internal/plugins/manual.py", line 110, in prepare
+    raise errors.PluginError(
+    ...<2 lines>...
+            self.option_name('auth-hook')))
+certbot.errors.PluginError: An authentication script must be provided with --manual-auth-hook when using the manual plugin non-interactively.
+2025-12-03 15:03:06,842:DEBUG:certbot._internal.plugins.selection:No candidate plugin
+2025-12-03 15:03:06,842:DEBUG:certbot._internal.log:Exiting abnormally:
+Traceback (most recent call last):
+  File "/opt/homebrew/bin/certbot", line 7, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/main.py", line 18, in main
+    return internal_main.main(cli_args)
+           ~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/_internal/main.py", line 1850, in main
+    return config.func(config, plugins)
+           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/_internal/main.py", line 1543, in certonly
+    installer, auth = plug_sel.choose_configurator_plugins(config, plugins, "certonly")
+                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/_internal/plugins/selection.py", line 253, in choose_configurator_plugins
+    diagnose_configurator_problem("authenticator", req_auth, plugins)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/_internal/plugins/selection.py", line 371, in diagnose_configurator_problem
+    raise errors.PluginSelectionError(msg)
+certbot.errors.PluginSelectionError: The manual plugin is not working; there may be problems with your existing configuration.
+The error was: PluginError('An authentication script must be provided with --manual-auth-hook when using the manual plugin non-interactively.')
+2025-12-03 15:03:06,843:ERROR:certbot._internal.log:The manual plugin is not working; there may be problems with your existing configuration.
+The error was: PluginError('An authentication script must be provided with --manual-auth-hook when using the manual plugin non-interactively.')

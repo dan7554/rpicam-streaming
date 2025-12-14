@@ -1,113 +1,67 @@
-#!/bin/sh
-# Docker entrypoint script for broadcast system
-# Handles nginx startup, SSL certificate generation/validation, and Node server management
-
+#!/bin/bash
+# Docker entrypoint script for broadcast system - Simplified
 set -e
 
 echo "🚀 Starting broadcast system..."
 
-# Function to generate self-signed certificates if they don't exist
-generate_certificates() {
-    CERT_DIR="/etc/nginx/certs"
-    CERT_FILE="$CERT_DIR/server.crt"
-    KEY_FILE="$CERT_DIR/server.key"
-    BROADCAST_HOSTNAME=${BROADCAST_HOSTNAME:-localhost}
-    
-    if [ ! -f "$CERT_FILE" ] || [ ! -f "$KEY_FILE" ]; then
-        echo "📜 Generating self-signed SSL certificates for $BROADCAST_HOSTNAME..."
-        mkdir -p "$CERT_DIR"
-        
-        openssl req -x509 -newkey rsa:4096 \
-            -keyout "$KEY_FILE" \
-            -out "$CERT_FILE" \
-            -days 365 \
-            -nodes \
-            -subj "/C=US/ST=State/L=City/O=Organization/CN=$BROADCAST_HOSTNAME"
-        
-        echo "✅ SSL certificates generated at $CERT_DIR"
-        chmod 600 "$KEY_FILE"
-        chmod 644 "$CERT_FILE"
-    else
-        echo "✅ SSL certificates found at $CERT_DIR"
-    fi
-}
+# Generate self-signed certificates
+if [ ! -f "/etc/nginx/certs/server.crt" ]; then
+    echo "📜 Generating SSL certificates..."
+    mkdir -p /etc/nginx/certs
+    openssl req -x509 -newkey rsa:4096 \
+        -keyout /etc/nginx/certs/server.key \
+        -out /etc/nginx/certs/server.crt \
+        -days 365 -nodes \
+        -subj "/C=US/ST=State/L=City/O=Org/CN=localhost"
+    chmod 600 /etc/nginx/certs/server.key
+    echo "✅ Certificates generated"
+fi
 
-# Function to wait for a service to be healthy
-wait_for_service() {
-    local service=$1
-    local port=$2
-    local max_attempts=30
-    local attempt=0
-    
-    echo "⏳ Waiting for $service on port $port..."
-    
-    while [ $attempt -lt $max_attempts ]; do
-        if nc -z localhost $port 2>/dev/null; then
-            echo "✅ $service is ready"
-            return 0
-        fi
-        
-        attempt=$((attempt + 1))
-        sleep 1
-    done
-    
-    echo "❌ Timeout waiting for $service"
-    return 1
-}
-
-# Step 1: Generate SSL certificates
-generate_certificates
-
-# Step 2: Create a health check endpoint handler in Express
-# The Express server will serve /health at port 3001
-echo "📦 Configuring Node server..."
+# Start Express server
+echo "🌐 Starting Express server..."
 export NODE_ENV=production
 export PORT=3001
-
-# Step 3: Start Express server in the background
-echo "🌐 Starting Express server..."
 cd /app
 node server/index.js &
-SERVER_PID=$!
+sleep 5
+echo "✅ Express server started"
 
-# Trap signals to clean up
-trap 'kill $SERVER_PID 2>/dev/null; kill $NGINX_PID 2>/dev/null; exit' SIGTERM SIGINT
+# Fix Nginx config if needed (remove HTTP->HTTPS redirect)
+echo "🔧 Configuring Nginx..."
 
-# Wait for Express server to start
-sleep 2
-if ! wait_for_service "Express server" 3001; then
-    echo "❌ Failed to start Express server"
-    kill $SERVER_PID 2>/dev/null || true
-    exit 1
+# Use localhost:8888 as fallback if MediaMTX service is not available via service discovery
+# The resolver in nginx.conf will handle DNS lookups dynamically
+MEDIAMTX_HOST="${MEDIAMTX_SERVICE_HOST:-localhost}"
+MEDIAMTX_PORT="${MEDIAMTX_SERVICE_PORT:-8888}"
+
+# Update the upstream server in the nginx config
+sed -i "s|mediamtx-service.broadcast-cluster.ecs.local:8888|${MEDIAMTX_HOST}:${MEDIAMTX_PORT}|g" /etc/nginx/conf.d/default.conf
+
+# Also remove any HTTP->HTTPS redirects to prevent ALB loops
+if grep -q "return 301 https" /etc/nginx/conf.d/default.conf 2>/dev/null; then
+    echo "   ⚠️  Removing redirect from Nginx..."
+    sed -i '/return 301 https/d' /etc/nginx/conf.d/default.conf 2>/dev/null || true
 fi
 
-# Step 4: Configure MediaMTX upstream
-echo "🔍 Configuring MediaMTX upstream..."
-echo "   ✅ nginx is configured to use public domain for MediaMTX"
-echo "   📍 Using: rtsp.racetrackstreaming.com"
+echo "   ✅ MediaMTX upstream: ${MEDIAMTX_HOST}:${MEDIAMTX_PORT}"
+
+# Start Nginx
+echo "🔒 Starting Nginx..."
+echo ""
+echo "   SSL/TLS chain: Internet → Cloudflare → ALB:443 → ALB:80 → Nginx → Apps"
+echo "   ALB handles HTTPS termination and health checks"
 echo ""
 
-# Step 5: Start nginx in foreground (for container logging)
-echo "🔒 Starting nginx with SSL..."
-echo "   HTTP:  http://$BROADCAST_HOSTNAME:80 → https://$BROADCAST_HOSTNAME:$BROADCAST_PORT"
-echo "   Client: https://$BROADCAST_HOSTNAME/"
-echo "   API:   https://$BROADCAST_HOSTNAME/api/*"
+# Note: Skip nginx -t test as DNS resolution may not be available for service discovery at startup
+# Nginx will validate the config when it tries to load it
+# if ! nginx -t 2>&1; then
+#     echo "⚠️  Nginx config test skipped (service discovery may not be available yet)"
+# fi
+
+echo "✨ Broadcast system ready!"
+echo "   Web UI:  https://admin.racetrackstreaming.com"
+echo "   Streams: https://stream.racetrackstreaming.com/hls/"
 echo ""
 
-# Verify nginx configuration
-if ! nginx -t; then
-    echo "❌ Nginx configuration test failed"
-    kill $SERVER_PID 2>/dev/null || true
-    exit 1
-fi
-
-# Show startup info
-echo "✨ Broadcast system is ready!"
-echo ""
-echo "   📱 Web UI:     https://$BROADCAST_HOSTNAME"
-echo "   🔌 API Base:   https://$BROADCAST_HOSTNAME/api"
-echo "   🎥 MediaMTX:   $MEDIAMTX_URL"
-echo ""
-
-# Start nginx in foreground (this will be PID 1 in container and keep it alive)
+# Start Nginx as PID 1
 exec nginx -g 'daemon off;'

@@ -9,7 +9,7 @@
   "containerDefinitions": [
     {
       "name": "mediamtx",
-      "image": "457553343935.dkr.ecr.us-east-2.amazonaws.com/mediamtx:latest",
+      "image": "457553343935.dkr.ecr.us-east-1.amazonaws.com/mediamtx:latest",
       "portMappings": [
         {
           "containerPort": 8554,
@@ -37,7 +37,7 @@
         "logDriver": "awslogs",
         "options": {
           "awslogs-group": "/ecs/mediamtx",
-          "awslogs-region": "us-east-2",
+          "awslogs-region": "us-east-1",
           "awslogs-stream-prefix": "ecs"
         }
       },

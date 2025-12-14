@@ -24,7 +24,7 @@ fi
 if [ -z "$1" ]; then
     echo "📍 Getting current ECS task IP from AWS..."
     TASK_ARN=$(aws ecs list-tasks --cluster broadcast-cluster --desired-status RUNNING \
-        --region us-east-2 --query 'taskArns[0]' --output text)
+        --region us-east-1 --query 'taskArns[0]' --output text)
     
     if [ "$TASK_ARN" = "None" ] || [ -z "$TASK_ARN" ]; then
         echo "❌ No running tasks found"
@@ -32,7 +32,7 @@ if [ -z "$1" ]; then
     fi
     
     NETWORK_INTERFACE_ID=$(aws ecs describe-tasks --cluster broadcast-cluster --tasks "$TASK_ARN" \
-        --region us-east-2 --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' \
+        --region us-east-1 --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' \
         --output text)
     
     if [ "$NETWORK_INTERFACE_ID" = "None" ] || [ -z "$NETWORK_INTERFACE_ID" ]; then
@@ -41,7 +41,7 @@ if [ -z "$1" ]; then
     fi
     
     NEW_IP=$(aws ec2 describe-network-interfaces --network-interface-ids "$NETWORK_INTERFACE_ID" \
-        --region us-east-2 --query 'NetworkInterfaces[0].Association.PublicIp' --output text)
+        --region us-east-1 --query 'NetworkInterfaces[0].Association.PublicIp' --output text)
     
     if [ "$NEW_IP" = "None" ] || [ -z "$NEW_IP" ]; then
         echo "❌ No public IP found"

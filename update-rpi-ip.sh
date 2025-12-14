@@ -5,7 +5,7 @@
 
 set -e
 
-AWS_REGION="us-east-2"
+AWS_REGION="us-east-1"
 CLUSTER="mediamtx-cluster"
 PI_USER="dan7554"
 PI_HOST="192.168.50.96"

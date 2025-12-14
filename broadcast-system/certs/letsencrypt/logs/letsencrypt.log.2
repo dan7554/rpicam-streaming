@@ -1,0 +1,347 @@
+2025-12-03 15:01:39,166:DEBUG:certbot._internal.main:certbot version: 5.1.0
+2025-12-03 15:01:39,167:DEBUG:certbot._internal.main:Location of certbot entry point: /opt/homebrew/bin/certbot
+2025-12-03 15:01:39,167:DEBUG:certbot._internal.main:Arguments: ['--standalone', '-d', 'admin.racetrackstreaming.com', '--config-dir', './letsencrypt/config', '--work-dir', './letsencrypt/work', '--logs-dir', './letsencrypt/logs', '--agree-tos', '-m', 'dan@racetrackstreaming.com', '--non-interactive']
+2025-12-03 15:01:39,167:DEBUG:certbot._internal.main:Discovered plugins: PluginsRegistry(PluginEntryPoint#apache,PluginEntryPoint#dns-cloudflare,PluginEntryPoint#manual,PluginEntryPoint#nginx,PluginEntryPoint#null,PluginEntryPoint#standalone,PluginEntryPoint#webroot)
+2025-12-03 15:01:39,198:DEBUG:certbot._internal.log:Root logging level set at 30
+2025-12-03 15:01:39,200:DEBUG:certbot._internal.plugins.selection:Requested authenticator standalone and installer None
+2025-12-03 15:01:39,200:DEBUG:certbot._internal.plugins.selection:Single candidate plugin: * standalone
+Description: Runs an HTTP server locally which serves the necessary validation files under the /.well-known/acme-challenge/ request path. Suitable if there is no HTTP server already running. HTTP challenge only (wildcards not supported).
+Interfaces: Authenticator, Plugin
+Entry point: EntryPoint(name='standalone', value='certbot._internal.plugins.standalone:Authenticator', group='certbot.plugins')
+Initialized: <certbot._internal.plugins.standalone.Authenticator object at 0x104f9c1a0>
+Prep: True
+2025-12-03 15:01:39,200:DEBUG:certbot._internal.plugins.selection:Selected authenticator <certbot._internal.plugins.standalone.Authenticator object at 0x104f9c1a0> and installer None
+2025-12-03 15:01:39,200:INFO:certbot._internal.plugins.selection:Plugins selected: Authenticator standalone, Installer None
+2025-12-03 15:01:39,247:DEBUG:acme.client:Sending GET request to https://acme-v02.api.letsencrypt.org/directory.
+2025-12-03 15:01:39,249:DEBUG:urllib3.connectionpool:Starting new HTTPS connection (1): acme-v02.api.letsencrypt.org:443
+2025-12-03 15:01:39,476:DEBUG:urllib3.connectionpool:https://acme-v02.api.letsencrypt.org:443 "GET /directory HTTP/1.1" 200 1063
+2025-12-03 15:01:39,476:DEBUG:acme.client:Received response:
+HTTP 200
+Server: nginx
+Date: Wed, 03 Dec 2025 22:01:39 GMT
+Content-Type: application/json
+Content-Length: 1063
+Connection: keep-alive
+Cache-Control: public, max-age=0, no-cache
+X-Frame-Options: DENY
+Strict-Transport-Security: max-age=604800
+
+{
+  "g-K3oQQLgZs": "https://community.letsencrypt.org/t/adding-random-entries-to-the-directory/33417",
+  "keyChange": "https://acme-v02.api.letsencrypt.org/acme/key-change",
+  "meta": {
+    "caaIdentities": [
+      "letsencrypt.org"
+    ],
+    "profiles": {
+      "classic": "https://letsencrypt.org/docs/profiles#classic",
+      "shortlived": "https://letsencrypt.org/docs/profiles#shortlived (not yet generally available)",
+      "tlsclient": "https://letsencrypt.org/docs/profiles#tlsclient",
+      "tlsserver": "https://letsencrypt.org/docs/profiles#tlsserver"
+    },
+    "termsOfService": "https://letsencrypt.org/documents/LE-SA-v1.6-August-18-2025.pdf",
+    "website": "https://letsencrypt.org"
+  },
+  "newAccount": "https://acme-v02.api.letsencrypt.org/acme/new-acct",
+  "newNonce": "https://acme-v02.api.letsencrypt.org/acme/new-nonce",
+  "newOrder": "https://acme-v02.api.letsencrypt.org/acme/new-order",
+  "renewalInfo": "https://acme-v02.api.letsencrypt.org/acme/renewal-info",
+  "revokeCert": "https://acme-v02.api.letsencrypt.org/acme/revoke-cert"
+}
+2025-12-03 15:01:39,477:DEBUG:acme.client:Requesting fresh nonce
+2025-12-03 15:01:39,477:DEBUG:acme.client:Sending HEAD request to https://acme-v02.api.letsencrypt.org/acme/new-nonce.
+2025-12-03 15:01:39,531:DEBUG:urllib3.connectionpool:https://acme-v02.api.letsencrypt.org:443 "HEAD /acme/new-nonce HTTP/1.1" 200 0
+2025-12-03 15:01:39,531:DEBUG:acme.client:Received response:
+HTTP 200
+Server: nginx
+Date: Wed, 03 Dec 2025 22:01:39 GMT
+Connection: keep-alive
+Cache-Control: public, max-age=0, no-cache
+Link: <https://acme-v02.api.letsencrypt.org/directory>;rel="index"
+Replay-Nonce: So3nmrng9AORgoVghw8lME_TQes3qRtNRR7LYD9Aqpt4_ty5dEQ
+X-Frame-Options: DENY
+Strict-Transport-Security: max-age=604800
+
+
+2025-12-03 15:01:39,531:DEBUG:acme.client:Storing nonce: So3nmrng9AORgoVghw8lME_TQes3qRtNRR7LYD9Aqpt4_ty5dEQ
+2025-12-03 15:01:39,531:DEBUG:acme.client:JWS payload:
+b'{\n  "contact": [\n    "mailto:dan@racetrackstreaming.com"\n  ],\n  "termsOfServiceAgreed": true\n}'
+2025-12-03 15:01:39,534:DEBUG:acme.client:Sending POST request to https://acme-v02.api.letsencrypt.org/acme/new-acct:
+{
+  "protected": "eyJhbGciOiAiUlMyNTYiLCAiandrIjogeyJuIjogIm9IT0NiSXk2Yk1lX0czWVoyWVdEZlVkd2l2QldKaWVETTVlQ0FLNVB6UG1odS1zbzlqcU9sY3RGR2ZiZW13WUpxOGFNLUtUVE1XSld4RnJOYUFQVWxMdklPWkZVMUM5dFpEb0J3M0pYakNfQVg5bXBHWl9yZ2dCYnU3NW9UeTJmc1QwcG55SjR2T0kxMkU5UFY1eXFCenMzR1BJOTJSQUl0ekdPWFBXaEZQd0ZLQzVSR2xBd29fLUFQMnJQelVBdXZTbERVU3g1aEIyN1pZNUxma3BXelQxbW9aT1A5Wmw0MUxrMi05V1Zwd0Q1N2RCYlpxeXBPR011LU92WmwxZFZicjF6MnEwbnJ2Yy1TMlpXZmtGQ08yVXEyNkFFSFBHVUlSMzZReEJqWjZFY0ExbEdvbFBLU3VOcEFnc1U1NVZDcG9ITHNkTDd2MFFLckxKcnVMblFFUSIsICJlIjogIkFRQUIiLCAia3R5IjogIlJTQSJ9LCAibm9uY2UiOiAiU28zbm1ybmc5QU9SZ29WZ2h3OGxNRV9UUWVzM3FSdE5SUjdMWUQ5QXFwdDRfdHk1ZEVRIiwgInVybCI6ICJodHRwczovL2FjbWUtdjAyLmFwaS5sZXRzZW5jcnlwdC5vcmcvYWNtZS9uZXctYWNjdCJ9",
+  "signature": "faHKt86UBYNDQETTlaneCwE6_AXQVl0Hn3ktEQGRazZIVYotNEqstkXHQgnltZ-_rCYouQ5V9DL5LSxwQVEg7LV5oOOP2GVPMd4ddC7andTGqRBUA6OZ11gZEjMT0c5R-c1-mI3JmpeTreuQ7txVTufFXkkfvtRHxdfvrgtwVQOJ9fhUBf_gbkPST0_Eug7EtsnEHJ92Tzi-5l-XpvTaibaJsgqgQonToK1tLzRMonJWkjidcSqt_tAG9fod5lDul2zLaA4rYjmaPahDBiRrv-n4-GL1VFzUfZlodrIvs0mLWZjPg_8IsjPvtz46ichIsCT6pYbOgxIZ7ZipeE-New",
+  "payload": "ewogICJjb250YWN0IjogWwogICAgIm1haWx0bzpkYW5AcmFjZXRyYWNrc3RyZWFtaW5nLmNvbSIKICBdLAogICJ0ZXJtc09mU2VydmljZUFncmVlZCI6IHRydWUKfQ"
+}
+2025-12-03 15:01:39,611:DEBUG:urllib3.connectionpool:https://acme-v02.api.letsencrypt.org:443 "POST /acme/new-acct HTTP/1.1" 201 477
+2025-12-03 15:01:39,611:DEBUG:acme.client:Received response:
+HTTP 201
+Server: nginx
+Date: Wed, 03 Dec 2025 22:01:39 GMT
+Content-Type: application/json
+Content-Length: 477
+Connection: keep-alive
+Boulder-Requester: 2848891036
+Cache-Control: public, max-age=0, no-cache
+Link: <https://acme-v02.api.letsencrypt.org/directory>;rel="index", <https://letsencrypt.org/documents/LE-SA-v1.6-August-18-2025.pdf>;rel="terms-of-service"
+Location: https://acme-v02.api.letsencrypt.org/acme/acct/2848891036
+Replay-Nonce: So3nmrngwabOY5cPEBf-fWWRwbaAwrohcGtWI4k4AMvuS27FzoY
+X-Frame-Options: DENY
+Strict-Transport-Security: max-age=604800
+
+{
+  "key": {
+    "kty": "RSA",
+    "n": "oHOCbIy6bMe_G3YZ2YWDfUdwivBWJieDM5eCAK5PzPmhu-so9jqOlctFGfbemwYJq8aM-KTTMWJWxFrNaAPUlLvIOZFU1C9tZDoBw3JXjC_AX9mpGZ_rggBbu75oTy2fsT0pnyJ4vOI12E9PV5yqBzs3GPI92RAItzGOXPWhFPwFKC5RGlAwo_-AP2rPzUAuvSlDUSx5hB27ZY5LfkpWzT1moZOP9Zl41Lk2-9WVpwD57dBbZqypOGMu-OvZl1dVbr1z2q0nrvc-S2ZWfkFCO2Uq26AEHPGUIR36QxBjZ6EcA1lGolPKSuNpAgsU55VCpoHLsdL7v0QKrLJruLnQEQ",
+    "e": "AQAB"
+  },
+  "createdAt": "2025-12-03T22:01:39.680948369Z",
+  "status": "valid"
+}
+2025-12-03 15:01:39,611:DEBUG:acme.client:Storing nonce: So3nmrngwabOY5cPEBf-fWWRwbaAwrohcGtWI4k4AMvuS27FzoY
+2025-12-03 15:01:39,615:DEBUG:certbot._internal.display.obj:Notifying user: Account registered.
+2025-12-03 15:01:39,615:DEBUG:certbot._internal.main:Picked account: <Account(RegistrationResource(body=Registration(key=JWKRSA(key=<ComparableRSAKey(<cryptography.hazmat.bindings._rust.openssl.rsa.RSAPublicKey object at 0x1059b9750>)>), contact=(), agreement=None, status='valid', terms_of_service_agreed=None, only_return_existing=None, external_account_binding=None), uri='https://acme-v02.api.letsencrypt.org/acme/acct/2848891036', new_authzr_uri=None, terms_of_service='https://letsencrypt.org/documents/LE-SA-v1.6-August-18-2025.pdf'), f08d75237ecadc7148087f65880e0d65, Meta(creation_dt=datetime.datetime(2025, 12, 3, 22, 1, 39, tzinfo=datetime.timezone.utc), creation_host='G2F4Y97FMY-Dan-Christiani.local', register_to_eff=None))>
+2025-12-03 15:01:39,616:DEBUG:certbot._internal.display.obj:Notifying user: Requesting a certificate for admin.racetrackstreaming.com
+2025-12-03 15:01:39,619:DEBUG:acme.client:JWS payload:
+b'{\n  "identifiers": [\n    {\n      "type": "dns",\n      "value": "admin.racetrackstreaming.com"\n    }\n  ]\n}'
+2025-12-03 15:01:39,620:DEBUG:acme.client:Sending POST request to https://acme-v02.api.letsencrypt.org/acme/new-order:
+{
+  "protected": "eyJhbGciOiAiUlMyNTYiLCAia2lkIjogImh0dHBzOi8vYWNtZS12MDIuYXBpLmxldHNlbmNyeXB0Lm9yZy9hY21lL2FjY3QvMjg0ODg5MTAzNiIsICJub25jZSI6ICJTbzNubXJuZ3dhYk9ZNWNQRUJmLWZXV1J3YmFBd3JvaGNHdFdJNGs0QU12dVMyN0Z6b1kiLCAidXJsIjogImh0dHBzOi8vYWNtZS12MDIuYXBpLmxldHNlbmNyeXB0Lm9yZy9hY21lL25ldy1vcmRlciJ9",
+  "signature": "KBx6P2O7o_gUi10fzr8965Xuwv8pJSZV66l5bsBEU7FSFik-ujMsJbz6HP1vvJUW2jU80pp2tcNqQ4g2gcJU3H0wRa-kuh45Trje8-CvnpkubPyOvdeTo0KFkiWWPLI1pKLhxeb8Cufn46bHv0GP3sbKJbE0sbfvI7K7kGsIHovzva5L0T-rhG1HUcjCuzubH4OBMZuUG0p_eK13fH_QBhQCTMQAH16MFw5nLBqBygYP5be7gXo8vpIL-cF4Ir_LgvksxYeO9g3WzkSdQewBPSHJLpHK6j6A0u9yyopkuhFXsc4KIv7ymaPKHdSL4yxeysEmjJYWv2QHVBqZLz7HBA",
+  "payload": "ewogICJpZGVudGlmaWVycyI6IFsKICAgIHsKICAgICAgInR5cGUiOiAiZG5zIiwKICAgICAgInZhbHVlIjogImFkbWluLnJhY2V0cmFja3N0cmVhbWluZy5jb20iCiAgICB9CiAgXQp9"
+}
+2025-12-03 15:01:39,752:DEBUG:urllib3.connectionpool:https://acme-v02.api.letsencrypt.org:443 "POST /acme/new-order HTTP/1.1" 201 362
+2025-12-03 15:01:39,752:DEBUG:acme.client:Received response:
+HTTP 201
+Server: nginx
+Date: Wed, 03 Dec 2025 22:01:39 GMT
+Content-Type: application/json
+Content-Length: 362
+Connection: keep-alive
+Boulder-Requester: 2848891036
+Cache-Control: public, max-age=0, no-cache
+Link: <https://acme-v02.api.letsencrypt.org/directory>;rel="index"
+Location: https://acme-v02.api.letsencrypt.org/acme/order/2848891036/455228359136
+Replay-Nonce: -l2dNf_Xi4_1IKCrsOUsTBk71kfd8aQszbTA8UnNB4MSodLMFoI
+X-Frame-Options: DENY
+Strict-Transport-Security: max-age=604800
+
+{
+  "status": "pending",
+  "expires": "2025-12-10T22:01:39Z",
+  "identifiers": [
+    {
+      "type": "dns",
+      "value": "admin.racetrackstreaming.com"
+    }
+  ],
+  "authorizations": [
+    "https://acme-v02.api.letsencrypt.org/acme/authz/2848891036/622284889666"
+  ],
+  "finalize": "https://acme-v02.api.letsencrypt.org/acme/finalize/2848891036/455228359136"
+}
+2025-12-03 15:01:39,752:DEBUG:acme.client:Storing nonce: -l2dNf_Xi4_1IKCrsOUsTBk71kfd8aQszbTA8UnNB4MSodLMFoI
+2025-12-03 15:01:39,752:DEBUG:acme.client:JWS payload:
+b''
+2025-12-03 15:01:39,753:DEBUG:acme.client:Sending POST request to https://acme-v02.api.letsencrypt.org/acme/authz/2848891036/622284889666:
+{
+  "protected": "eyJhbGciOiAiUlMyNTYiLCAia2lkIjogImh0dHBzOi8vYWNtZS12MDIuYXBpLmxldHNlbmNyeXB0Lm9yZy9hY21lL2FjY3QvMjg0ODg5MTAzNiIsICJub25jZSI6ICItbDJkTmZfWGk0XzFJS0Nyc09Vc1RCazcxa2ZkOGFRc3piVEE4VW5OQjRNU29kTE1Gb0kiLCAidXJsIjogImh0dHBzOi8vYWNtZS12MDIuYXBpLmxldHNlbmNyeXB0Lm9yZy9hY21lL2F1dGh6LzI4NDg4OTEwMzYvNjIyMjg0ODg5NjY2In0",
+  "signature": "BRe9AT-n8x6n86dOLQ5MfVykxy6VW7aeEpdtQgPcT1lStVhkRhMceQe543_xm_g8UMsQTkgGiERZTDE7nftkv4TZmf7YtFMVqFKZBaUvv-VcA8aZHxT72Q0j9zGBpddk_Qciq-U0Q8RTSlS4Q5A7YwwcsLTKfWZ0ICMm_wKVb2czxq-opMLMATV0K4AAwEwv9VvAEYm551L72xMeoa3A5Cy6GCMC6ZFxqNcx1NMapX-JqlB0i4JRGB2yS6zZkV_FeBpTzKlJuehF7YhpbhfZcsAKYBwJ5gYVxhi1hdW413Tr7fGATbUBjmqvm40VgpsWz5gvHfF82XByBVTnbrQnzw",
+  "payload": ""
+}
+2025-12-03 15:01:39,818:DEBUG:urllib3.connectionpool:https://acme-v02.api.letsencrypt.org:443 "POST /acme/authz/2848891036/622284889666 HTTP/1.1" 200 836
+2025-12-03 15:01:39,819:DEBUG:acme.client:Received response:
+HTTP 200
+Server: nginx
+Date: Wed, 03 Dec 2025 22:01:39 GMT
+Content-Type: application/json
+Content-Length: 836
+Connection: keep-alive
+Boulder-Requester: 2848891036
+Cache-Control: public, max-age=0, no-cache
+Link: <https://acme-v02.api.letsencrypt.org/directory>;rel="index"
+Replay-Nonce: -l2dNf_XQAOeTNACAq5Dugx5vNqvjGSDp0wMmlqbFxLj9cGO234
+X-Frame-Options: DENY
+Strict-Transport-Security: max-age=604800
+
+{
+  "identifier": {
+    "type": "dns",
+    "value": "admin.racetrackstreaming.com"
+  },
+  "status": "pending",
+  "expires": "2025-12-10T22:01:39Z",
+  "challenges": [
+    {
+      "type": "dns-01",
+      "url": "https://acme-v02.api.letsencrypt.org/acme/chall/2848891036/622284889666/uwLa3Q",
+      "status": "pending",
+      "token": "04GETPAw8LqBsYDoKvYzByjkQySOXd0mh6eHX5KJTKQ"
+    },
+    {
+      "type": "tls-alpn-01",
+      "url": "https://acme-v02.api.letsencrypt.org/acme/chall/2848891036/622284889666/x5JxOg",
+      "status": "pending",
+      "token": "04GETPAw8LqBsYDoKvYzByjkQySOXd0mh6eHX5KJTKQ"
+    },
+    {
+      "type": "http-01",
+      "url": "https://acme-v02.api.letsencrypt.org/acme/chall/2848891036/622284889666/A5KGKQ",
+      "status": "pending",
+      "token": "04GETPAw8LqBsYDoKvYzByjkQySOXd0mh6eHX5KJTKQ"
+    }
+  ]
+}
+2025-12-03 15:01:39,819:DEBUG:acme.client:Storing nonce: -l2dNf_XQAOeTNACAq5Dugx5vNqvjGSDp0wMmlqbFxLj9cGO234
+2025-12-03 15:01:39,819:DEBUG:acme.challenges:tls-alpn-01 was not recognized, full message: {'type': 'tls-alpn-01', 'url': 'https://acme-v02.api.letsencrypt.org/acme/chall/2848891036/622284889666/x5JxOg', 'status': 'pending', 'token': '04GETPAw8LqBsYDoKvYzByjkQySOXd0mh6eHX5KJTKQ'}
+2025-12-03 15:01:39,819:INFO:certbot._internal.auth_handler:Performing the following challenges:
+2025-12-03 15:01:39,819:INFO:certbot._internal.auth_handler:http-01 challenge for admin.racetrackstreaming.com
+2025-12-03 15:01:39,819:DEBUG:acme.standalone:Failed to bind to :80 using IPv6
+2025-12-03 15:01:39,819:DEBUG:acme.standalone:Failed to bind to :80 using IPv4
+2025-12-03 15:01:39,824:DEBUG:certbot._internal.error_handler:Encountered exception:
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/_internal/plugins/standalone.py", line 58, in run
+    servers = acme_standalone.HTTP01DualNetworkedServers(
+        address, self.http_01_resources)
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/acme/standalone.py", line 136, in __init__
+    super().__init__(HTTP01Server, *args, **kwargs)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/acme/standalone.py", line 81, in __init__
+    raise last_socket_err
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/acme/standalone.py", line 56, in __init__
+    server = ServerClass(*new_args, **kwargs)
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/acme/standalone.py", line 126, in __init__
+    super().__init__(
+    ~~~~~~~~~~~~~~~~^
+        server_address, HTTP01RequestHandler.partial_init(
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+            simple_http_resources=resources, timeout=timeout), ipv6=ipv6)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/acme/standalone.py", line 117, in __init__
+    super().__init__(*args, **kwargs)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 457, in __init__
+    self.server_bind()
+    ~~~~~~~~~~~~~~~~^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/http/server.py", line 144, in server_bind
+    socketserver.TCPServer.server_bind(self)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 478, in server_bind
+    self.socket.bind(self.server_address)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+OSError: [Errno 48] Address already in use
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/_internal/plugins/standalone.py", line 148, in _try_perform_single
+    return self._perform_single(achall)
+           ~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/_internal/plugins/standalone.py", line 154, in _perform_single
+    servers, response = self._perform_http_01(achall)
+                        ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/_internal/plugins/standalone.py", line 163, in _perform_http_01
+    servers = self.servers.run(port, challenges.HTTP01, listenaddr=addr)
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/_internal/plugins/standalone.py", line 61, in run
+    raise errors.StandaloneBindError(error, port)
+certbot.errors.StandaloneBindError: Problem binding to port 80: [Errno 48] Address already in use
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/_internal/auth_handler.py", line 84, in handle_authorizations
+    resps = self.auth.perform(achalls)
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/_internal/plugins/standalone.py", line 142, in perform
+    return [self._try_perform_single(achall) for achall in achalls]
+            ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/_internal/plugins/standalone.py", line 150, in _try_perform_single
+    _handle_perform_error(error)
+    ~~~~~~~~~~~~~~~~~~~~~^^^^^^^
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/_internal/plugins/standalone.py", line 204, in _handle_perform_error
+    raise errors.PluginError(msg)
+certbot.errors.PluginError: Could not bind TCP port 80 because it is already in use by another process on this system (such as a web server). Please stop the program in question and then try again.
+
+2025-12-03 15:01:39,824:DEBUG:certbot._internal.error_handler:Calling registered functions
+2025-12-03 15:01:39,824:INFO:certbot._internal.auth_handler:Cleaning up challenges
+2025-12-03 15:01:39,825:DEBUG:certbot._internal.log:Exiting abnormally:
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/_internal/plugins/standalone.py", line 58, in run
+    servers = acme_standalone.HTTP01DualNetworkedServers(
+        address, self.http_01_resources)
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/acme/standalone.py", line 136, in __init__
+    super().__init__(HTTP01Server, *args, **kwargs)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/acme/standalone.py", line 81, in __init__
+    raise last_socket_err
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/acme/standalone.py", line 56, in __init__
+    server = ServerClass(*new_args, **kwargs)
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/acme/standalone.py", line 126, in __init__
+    super().__init__(
+    ~~~~~~~~~~~~~~~~^
+        server_address, HTTP01RequestHandler.partial_init(
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+            simple_http_resources=resources, timeout=timeout), ipv6=ipv6)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/acme/standalone.py", line 117, in __init__
+    super().__init__(*args, **kwargs)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 457, in __init__
+    self.server_bind()
+    ~~~~~~~~~~~~~~~~^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/http/server.py", line 144, in server_bind
+    socketserver.TCPServer.server_bind(self)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 478, in server_bind
+    self.socket.bind(self.server_address)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+OSError: [Errno 48] Address already in use
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/_internal/plugins/standalone.py", line 148, in _try_perform_single
+    return self._perform_single(achall)
+           ~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/_internal/plugins/standalone.py", line 154, in _perform_single
+    servers, response = self._perform_http_01(achall)
+                        ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/_internal/plugins/standalone.py", line 163, in _perform_http_01
+    servers = self.servers.run(port, challenges.HTTP01, listenaddr=addr)
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/_internal/plugins/standalone.py", line 61, in run
+    raise errors.StandaloneBindError(error, port)
+certbot.errors.StandaloneBindError: Problem binding to port 80: [Errno 48] Address already in use
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/opt/homebrew/bin/certbot", line 7, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/main.py", line 18, in main
+    return internal_main.main(cli_args)
+           ~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/_internal/main.py", line 1850, in main
+    return config.func(config, plugins)
+           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/_internal/main.py", line 1562, in certonly
+    lineage = _get_and_save_cert(le_client, config, domains, certname, lineage)
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/_internal/main.py", line 141, in _get_and_save_cert
+    lineage = le_client.obtain_and_enroll_certificate(domains, certname)
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/_internal/client.py", line 526, in obtain_and_enroll_certificate
+    cert, chain, key, _ = self.obtain_certificate(domains)
+                          ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/_internal/client.py", line 427, in obtain_certificate
+    orderr = self._get_order_and_authorizations(csr.data, self.config.allow_subset_of_names)
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/_internal/client.py", line 505, in _get_order_and_authorizations
+    authzr = self.auth_handler.handle_authorizations(orderr, self.config, best_effort)
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/_internal/auth_handler.py", line 84, in handle_authorizations
+    resps = self.auth.perform(achalls)
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/_internal/plugins/standalone.py", line 142, in perform
+    return [self._try_perform_single(achall) for achall in achalls]
+            ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/_internal/plugins/standalone.py", line 150, in _try_perform_single
+    _handle_perform_error(error)
+    ~~~~~~~~~~~~~~~~~~~~~^^^^^^^
+  File "/opt/homebrew/Cellar/certbot/5.1.0/libexec/lib/python3.14/site-packages/certbot/_internal/plugins/standalone.py", line 204, in _handle_perform_error
+    raise errors.PluginError(msg)
+certbot.errors.PluginError: Could not bind TCP port 80 because it is already in use by another process on this system (such as a web server). Please stop the program in question and then try again.
+2025-12-03 15:01:39,827:ERROR:certbot._internal.log:Could not bind TCP port 80 because it is already in use by another process on this system (such as a web server). Please stop the program in question and then try again.
