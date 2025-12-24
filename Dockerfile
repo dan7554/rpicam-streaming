@@ -1,5 +1,6 @@
-# Use the MediaMTX image with FFmpeg support (AMD64 compatible for cloud deployment)
-FROM bluenviron/mediamtx:1-ffmpeg
+# Use the MediaMTX image with FFmpeg support (AMD64 for AWS Fargate deployment)
+# Explicitly specify linux/amd64 architecture
+FROM --platform=linux/amd64 bluenviron/mediamtx:1.15.5
 
 # Set working directory
 WORKDIR /app
@@ -14,9 +15,6 @@ COPY mediamtx-container.yml /mediamtx.yml
 COPY server.crt /server.crt
 COPY server.key /server.key
 
-# Create recordings directory
-RUN mkdir -p /app/recordings
-
 # Set environment variables for MediaMTX configuration
 ENV MTX_RTSPTRANSPORTS=tcp
 ENV MTX_WEBRTCADDITIONALHOSTS=localhost
@@ -26,13 +24,19 @@ EXPOSE 8554/tcp
 EXPOSE 1935/tcp
 EXPOSE 8888/tcp
 EXPOSE 8889/tcp
+EXPOSE 8890/tcp
+EXPOSE 8891/udp
 EXPOSE 9996/tcp
-EXPOSE 8890/udp
+EXPOSE 9997/tcp
+EXPOSE 9998/tcp
+EXPOSE 9999/tcp
 EXPOSE 8189/udp
 
 # Add health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD curl -f http://localhost:8888/ || exit 1
+  CMD curl -f http://0.0.0.0:9997/v3/info || exit 1
 
-# MediaMTX looks for mediamtx.yml in the working directory by default
-# No need to specify the config file explicitly
+# Base image entrypoint is /mediamtx which looks for mediamtx.yml in current directory
+# We're in /app and have copied mediamtx.yml there
+# Do NOT override the base image entrypoint - ECS will provide the command as needed
+# The base image ENTRYPOINT is /mediamtx, and ECS will pass /app/mediamtx.yml as the command argument
