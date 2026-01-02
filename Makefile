@@ -810,6 +810,21 @@ setup-fargate: ## 🏗️ Initial Fargate setup (Legacy - HTTP timeout issues)
 
 deploy: deploy-fargate ## 🚀 Deploy both services to Fargate (Recommended)
 
+.PHONY: mediamtx-wait-targets
+mediamtx-wait-targets: ## ⏱ Wait for at least one healthy target in the MediaMTX target group
+	@echo "⏱ Waiting for healthy targets in $(MEDIAMTX_TG_NAME)..."
+	@TG_ARN=$$(aws elbv2 describe-target-groups --names $(MEDIAMTX_TG_NAME) --region $(AWS_REGION) --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo ""); \
+	if [ -z "$$TG_ARN" ] || [ "$$TG_ARN" = "None" ]; then \
+	  echo "⚠️ Target group $(MEDIAMTX_TG_NAME) not found; skipping health wait"; exit 0; \
+	fi; \
+	for i in `seq 1 30`; do \
+	  HEALTHY=$$(aws elbv2 describe-target-health --target-group-arn $$TG_ARN --region $(AWS_REGION) --query 'TargetHealthDescriptions[?TargetHealth.State==`healthy`]|length(@)' --output text 2>/dev/null || echo 0); \
+	  if [ "$$HEALTHY" != "0" ]; then echo "✅ Found $$HEALTHY healthy target(s)"; exit 0; fi; \
+	  echo "  no healthy targets yet ($$i/30), waiting..."; sleep 4; \
+	done; \
+	echo "⚠️ No healthy targets detected in $(MEDIAMTX_TG_NAME) after wait; continue with deploy but check logs/target health"; exit 0
+
+
 deploy-ec2: mediamtx-deploy-ec2 broadcast-deploy fix-broadcast-service ## 🚀 Deploy to EC2 (RECOMMENDED - fixes Fargate HTTP timeout)
 	@echo "✅ EC2 Deployment complete!"
 	@echo ""
@@ -831,22 +846,17 @@ deploy-ec2: mediamtx-deploy-ec2 broadcast-deploy fix-broadcast-service ## 🚀 D
 	@echo "📝 Watch logs:   make logs"
 	@echo ""
 
-deploy-fargate: mediamtx-deploy broadcast-deploy fix-broadcast-service ## 🚀 Deploy to Fargate (Legacy - HTTP timeout issues)
-	@echo "⚠️  Fargate Deployment complete!"
-	@echo ""
-	@echo "📡 MediaMTX service: $(MEDIAMTX_SERVICE)"
-	@echo "   RTSP input:      8554"
-	@echo "   HLS output:      8888"
-	@echo "   WebRTC output:   8889"
-	@echo "   RTMP output:     1935"
-	@echo ""
-	@echo "📺 Broadcast-System service: $(BROADCAST_SERVICE)"
-	@echo "   Web interface:   https://$(ADMIN_DOMAIN)"
-	@echo "   Backend:         port 80 (via ALB)"
-	@echo ""
-	@echo "⚠️  NOTE: HTTP endpoints (HLS, WebRTC, API) may timeout due to Fargate networking issue"
-	@echo "💡 Recommendation: Switch to EC2 deployment (make deploy-ec2)"
-	@echo ""
+deploy-fargate: ## 🚀 Deploy both services to Fargate (idempotent end-to-end)
+	@echo "🔁 Starting full idempotent deploy (Fargate)..."
+	@echo "\n--- MediaMTX: build, push, task, logs, SG, ALB/TG, service ---\n"; \
+	$(MAKE) -s mediamtx-ecr-repo mediamtx-build mediamtx-ecr-push mediamtx-task-def mediamtx-logs mediamtx-ensure-alb mediamtx-create-target-group mediamtx-attach-alb mediamtx-ensure-sg mediamtx-service mediamtx-wait-targets; \
+	echo "\n--- Broadcast: build, push, task, service ---\n"; \
+	$(MAKE) -s broadcast-ecr-repo broadcast-build broadcast-ecr-push broadcast-logs broadcast-task-def broadcast-deploy; \
+	# Ensure ALB attach/config for broadcast
+	$(MAKE) -s fix-broadcast-service; \
+	# Final status
+	$(MAKE) -s status; \
+	@echo "\n✅ Full deploy (Fargate) complete"
 
 quick: quick-ec2 ## ⚡ Quick update (EC2 - Recommended)
 
