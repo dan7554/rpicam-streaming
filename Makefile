@@ -31,6 +31,11 @@
 #
 .PHONY: help
 
+# Disable interactive pagers for AWS CLI and system commands to ensure
+# non-interactive Makefile runs (prevents `less`/pager prompts requiring 'q').
+export AWS_PAGER :=
+export PAGER :=
+
 ###############################################
 # Global Configuration
 ###############################################
@@ -91,8 +96,10 @@ MEDIAMTX_SERVICE_URL := http://$(MEDIAMTX_SERVICE).$(ECS_CLUSTER).ecs.local:$(ME
 
 ALB_NAME := broadcast-alb
 ALB_TG_NAME := broadcast-targets
-ALB_SECURITY_GROUP := sg-0693f1de9c2f66aef
-ECS_SECURITY_GROUP := sg-084ba18877836077a
+ALB_SECURITY_GROUP := sg-05daa07df49f3e721
+# ECS task ENI security group — reconciled (created if missing)
+ECS_SECURITY_GROUP := sg-0a39a0404cc7eac61
+MEDIAMTX_TG_NAME := mediamtx-targets
 
 # Domain Configuration
 ADMIN_DOMAIN := admin.racetrackstreaming.com    # Broadcast admin dashboard
@@ -179,7 +186,7 @@ mediamtx-ecr-push: mediamtx-ecr-repo mediamtx-pull ## ⬆️ Complete ECR push f
 mediamtx-task-def: mediamtx-ecr-push ## 📋 Create MediaMTX ECS task definition
 	@echo "📋 Creating MediaMTX task definition..."
 	@TMPFILE=$$(mktemp -t mediamtx-container-def); \
-	printf '%s\n' '[{"name":"mediamtx","image":"$(MEDIAMTX_ECR)","cpu":$(MEDIAMTX_CPU),"memory":$(MEDIAMTX_MEMORY),"command":["/app/mediamtx.yml"],"portMappings":[{"containerPort":$(MEDIAMTX_PORT_RTSP),"protocol":"tcp"},{"containerPort":$(MEDIAMTX_PORT_HLS),"protocol":"tcp"},{"containerPort":$(MEDIAMTX_PORT_WEBRTC),"protocol":"tcp"},{"containerPort":$(MEDIAMTX_PORT_RTMP),"protocol":"tcp"},{"containerPort":$(MEDIAMTX_PORT_API),"protocol":"tcp"},{"containerPort":$(MEDIAMTX_PORT_SRT),"protocol":"udp"},{"containerPort":$(MEDIAMTX_PORT_PLAYBACK),"protocol":"tcp"}],"logConfiguration":{"logDriver":"awslogs","options":{"awslogs-group":"$(MEDIAMTX_LOG_GROUP)","awslogs-region":"$(AWS_REGION)","awslogs-stream-prefix":"mediamtx"}},"healthCheck":{"command":["CMD-SHELL","curl -f http://localhost:$(MEDIAMTX_PORT_API)/v3/info || exit 1"],"interval":30,"timeout":5,"retries":3,"startPeriod":10}}]' > $$TMPFILE; \
+		printf '%s\n' '[{"name":"mediamtx","image":"$(MEDIAMTX_ECR)","cpu":$(MEDIAMTX_CPU),"memory":$(MEDIAMTX_MEMORY),"command":["/app/mediamtx.yml"],"portMappings":[{"containerPort":$(MEDIAMTX_PORT_RTSP),"protocol":"tcp"},{"containerPort":$(MEDIAMTX_PORT_HLS),"protocol":"tcp"},{"containerPort":$(MEDIAMTX_PORT_WEBRTC),"protocol":"tcp"},{"containerPort":$(MEDIAMTX_PORT_RTMP),"protocol":"tcp"},{"containerPort":$(MEDIAMTX_PORT_API),"protocol":"tcp"},{"containerPort":$(MEDIAMTX_PORT_SRT),"protocol":"udp"},{"containerPort":$(MEDIAMTX_PORT_PLAYBACK),"protocol":"tcp"}],"logConfiguration":{"logDriver":"awslogs","options":{"awslogs-group":"$(MEDIAMTX_LOG_GROUP)","awslogs-region":"$(AWS_REGION)","awslogs-stream-prefix":"mediamtx"}}}]' > $$TMPFILE; \
 	aws ecs register-task-definition \
 	  --family $(MEDIAMTX_TASK_FAMILY) \
 	  --network-mode awsvpc \
@@ -200,22 +207,48 @@ mediamtx-logs: ## 📝 Create CloudWatch log group for MediaMTX
 
 mediamtx-service: mediamtx-logs ## ⚙️ Create MediaMTX ECS service (internal, no ALB)
 	@echo "⚙️ Creating MediaMTX ECS service..."
-	@aws ecs create-service \
-	  --cluster $(ECS_CLUSTER) \
-	  --service-name $(MEDIAMTX_SERVICE) \
-	  --task-definition $(MEDIAMTX_TASK_FAMILY) \
-	  --desired-count 1 \
-	  --launch-type FARGATE \
-	  --network-configuration "awsvpcConfiguration={subnets=[$(AWS_SUBNET_ID)],securityGroups=[$(ECS_SECURITY_GROUP)],assignPublicIp=ENABLED}" \
-	  --enable-ecs-managed-tags \
-	  --region $(AWS_REGION) 2>/dev/null || \
+	@TG_ARN=$$(aws elbv2 describe-target-groups --region $(AWS_REGION) --names $(MEDIAMTX_TG_NAME) --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo ""); \
+	if [ -n "$$TG_ARN" ]; then \
+	  echo "⚙️ Attaching ALB target group to service: $$TG_ARN"; \
+	  aws ecs create-service \
+	    --cluster $(ECS_CLUSTER) \
+	    --service-name $(MEDIAMTX_SERVICE) \
+	    --task-definition $(MEDIAMTX_TASK_FAMILY) \
+	    --desired-count 1 \
+	    --launch-type FARGATE \
+	    --network-configuration "awsvpcConfiguration={subnets=[$(AWS_SUBNET_ID)],securityGroups=[$(ECS_SECURITY_GROUP)],assignPublicIp=ENABLED}" \
+	    --enable-ecs-managed-tags \
+	    --load-balancers "targetGroupArn=$$TG_ARN,containerName=mediamtx,containerPort=$(MEDIAMTX_PORT_API)" \
+	    --region $(AWS_REGION) 2>/dev/null || \
+	  (echo "Service exists, updating..."; \
+	   aws ecs update-service \
+	    --cluster $(ECS_CLUSTER) \
+	    --service $(MEDIAMTX_SERVICE) \
+	    --task-definition $(MEDIAMTX_TASK_FAMILY) \
+	    --load-balancers "targetGroupArn=$$TG_ARN,containerName=mediamtx,containerPort=$(MEDIAMTX_PORT_API)" \
+	    --force-new-deployment \
+	    --region $(AWS_REGION) 2>/dev/null || echo "⚠️ Service update skipped (still initializing)"); \
+	else \
+	  echo "⚙️ No mediamtx target group found; creating/updating service without ALB attachment"; \
+	  aws ecs create-service \
+	    --cluster $(ECS_CLUSTER) \
+	    --service-name $(MEDIAMTX_SERVICE) \
+	    --task-definition $(MEDIAMTX_TASK_FAMILY) \
+	    --desired-count 1 \
+	    --launch-type FARGATE \
+	    --network-configuration "awsvpcConfiguration={subnets=[$(AWS_SUBNET_ID)],securityGroups=[$(ECS_SECURITY_GROUP)],assignPublicIp=ENABLED}" \
+	    --enable-ecs-managed-tags \
+	    --region $(AWS_REGION) 2>/dev/null || \
 	  (echo "Service exists, updating..."; \
 	   aws ecs update-service \
 	    --cluster $(ECS_CLUSTER) \
 	    --service $(MEDIAMTX_SERVICE) \
 	    --task-definition $(MEDIAMTX_TASK_FAMILY) \
 	    --force-new-deployment \
-	    --region $(AWS_REGION) 2>/dev/null || echo "⚠️ Service update skipped (still initializing)")
+	    --region $(AWS_REGION) 2>/dev/null || echo "⚠️ Service update skipped (still initializing)"); \
+	fi
+	@echo "Waiting for MediaMTX service to reach stable state (this may take 1-2 minutes)..."; \
+	aws ecs wait services-stable --cluster $(ECS_CLUSTER) --services $(MEDIAMTX_SERVICE) --region $(AWS_REGION) >/dev/null 2>&1 || echo "⚠️ Service did not reach stable state within waiter timeout"; \
 	@echo "✅ MediaMTX service ready"
 
 mediamtx-update: mediamtx-ecr-push ## 🔄 Update MediaMTX service with latest image
@@ -227,7 +260,8 @@ mediamtx-update: mediamtx-ecr-push ## 🔄 Update MediaMTX service with latest i
 	  --region $(AWS_REGION)
 	@echo "✅ Service update initiated"
 
-mediamtx-deploy: mediamtx-logs mediamtx-task-def mediamtx-service ## 🚀 Complete MediaMTX deployment (Fargate)
+mediamtx-deploy: mediamtx-logs mediamtx-task-def mediamtx-ensure-sg mediamtx-create-target-group mediamtx-attach-alb mediamtx-service ## 🚀 Complete MediaMTX deployment (Fargate)
+
 
 ###############################################
 # ✅ EC2-BASED MEDIAMTX DEPLOYMENT (RECOMMENDED - FIXES HTTP TIMEOUT)
@@ -299,7 +333,7 @@ mediamtx-ec2-task-def: mediamtx-task-def-ec2 ## 📋 Create MediaMTX ECS task de
 mediamtx-task-def-ec2: mediamtx-ecr-push ## 📋 Create MediaMTX ECS task definition for EC2 (bridge networking)
 	@echo "📋 Creating MediaMTX task definition for EC2 (bridge mode)..."
 	@TMPFILE=$$(mktemp -t mediamtx-container-def-ec2); \
-	printf '%s\n' '[{"name":"mediamtx","image":"$(MEDIAMTX_ECR)","cpu":$(MEDIAMTX_CPU),"memory":$(MEDIAMTX_MEMORY),"command":["/app/mediamtx.yml"],"portMappings":[{"containerPort":$(MEDIAMTX_PORT_RTSP),"hostPort":$(MEDIAMTX_PORT_RTSP),"protocol":"tcp"},{"containerPort":$(MEDIAMTX_PORT_HLS),"hostPort":$(MEDIAMTX_PORT_HLS),"protocol":"tcp"},{"containerPort":$(MEDIAMTX_PORT_WEBRTC),"hostPort":$(MEDIAMTX_PORT_WEBRTC),"protocol":"tcp"},{"containerPort":$(MEDIAMTX_PORT_RTMP),"hostPort":$(MEDIAMTX_PORT_RTMP),"protocol":"tcp"},{"containerPort":$(MEDIAMTX_PORT_API),"hostPort":$(MEDIAMTX_PORT_API),"protocol":"tcp"},{"containerPort":$(MEDIAMTX_PORT_SRT),"hostPort":$(MEDIAMTX_PORT_SRT),"protocol":"udp"},{"containerPort":$(MEDIAMTX_PORT_PLAYBACK),"hostPort":$(MEDIAMTX_PORT_PLAYBACK),"protocol":"tcp"}],"logConfiguration":{"logDriver":"awslogs","options":{"awslogs-group":"$(MEDIAMTX_LOG_GROUP)","awslogs-region":"$(AWS_REGION)","awslogs-stream-prefix":"mediamtx-ec2"}},"healthCheck":{"command":["CMD-SHELL","curl -f http://localhost:$(MEDIAMTX_PORT_API)/v3/info || exit 1"],"interval":30,"timeout":5,"retries":3,"startPeriod":10}}]' > $$TMPFILE; \
+		printf '%s\n' '[{"name":"mediamtx","image":"$(MEDIAMTX_ECR)","cpu":$(MEDIAMTX_CPU),"memory":$(MEDIAMTX_MEMORY),"command":["/app/mediamtx.yml"],"portMappings":[{"containerPort":$(MEDIAMTX_PORT_RTSP),"hostPort":$(MEDIAMTX_PORT_RTSP),"protocol":"tcp"},{"containerPort":$(MEDIAMTX_PORT_HLS),"hostPort":$(MEDIAMTX_PORT_HLS),"protocol":"tcp"},{"containerPort":$(MEDIAMTX_PORT_WEBRTC),"hostPort":$(MEDIAMTX_PORT_WEBRTC),"protocol":"tcp"},{"containerPort":$(MEDIAMTX_PORT_RTMP),"hostPort":$(MEDIAMTX_PORT_RTMP),"protocol":"tcp"},{"containerPort":$(MEDIAMTX_PORT_API),"hostPort":$(MEDIAMTX_PORT_API),"protocol":"tcp"},{"containerPort":$(MEDIAMTX_PORT_SRT),"hostPort":$(MEDIAMTX_PORT_SRT),"protocol":"udp"},{"containerPort":$(MEDIAMTX_PORT_PLAYBACK),"hostPort":$(MEDIAMTX_PORT_PLAYBACK),"protocol":"tcp"}],"logConfiguration":{"logDriver":"awslogs","options":{"awslogs-group":"$(MEDIAMTX_LOG_GROUP)","awslogs-region":"$(AWS_REGION)","awslogs-stream-prefix":"mediamtx-ec2"}}}]' > $$TMPFILE; \
 	aws ecs register-task-definition \
 	  --family $(MEDIAMTX_TASK_FAMILY)-ec2 \
 	  --network-mode bridge \
@@ -457,6 +491,111 @@ broadcast-deploy: broadcast-task-def ## 🚀 Complete broadcast-system deploymen
 ###############################################
 
 .PHONY: fix-alb-ports fix-broadcast-service
+
+# Create a target group for MediaMTX so ALB can health-check /v3/info
+.PHONY: mediamtx-create-target-group
+mediamtx-create-target-group: ## 🔧 Create ALB target group for MediaMTX API (/v3/info)
+	@echo "🔧 Creating MediaMTX ALB target group ($(MEDIAMTX_TG_NAME))..."
+	@TG_ARN=$$(aws elbv2 describe-target-groups --names $(MEDIAMTX_TG_NAME) --region $(AWS_REGION) --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo ""); \
+	if [ -n "$$TG_ARN" ] && [ "$$TG_ARN" != "None" ]; then \
+	  echo "✅ Target group exists: $$TG_ARN"; \
+	else \
+	  aws elbv2 create-target-group \
+	    --name $(MEDIAMTX_TG_NAME) \
+	    --protocol HTTP \
+	    --port $(MEDIAMTX_PORT_API) \
+	    --vpc-id $(AWS_VPC_ID) \
+	    --target-type ip \
+	    --health-check-protocol HTTP \
+	    --health-check-path /v3/info \
+	    --health-check-port $(MEDIAMTX_PORT_API) \
+	    --health-check-interval-seconds 30 \
+	    --health-check-timeout-seconds 5 \
+	    --healthy-threshold-count 3 \
+	    --unhealthy-threshold-count 2 \
+	    --region $(AWS_REGION); \
+	  echo "Created target group $(MEDIAMTX_TG_NAME), waiting for it to appear..."; \
+	  for i in `seq 1 20`; do \
+	    TG_ARN=$$(aws elbv2 describe-target-groups --names $(MEDIAMTX_TG_NAME) --region $(AWS_REGION) --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo ""); \
+	    if [ -n "$$TG_ARN" ] && [ "$$TG_ARN" != "None" ]; then break; fi; \
+	    echo "  waiting for target group... ($$i/20)"; sleep 2; \
+	  done; \
+	  if [ -z "$$TG_ARN" ] || [ "$$TG_ARN" = "None" ]; then echo "❌ Failed to create target group"; exit 1; fi; \
+	  echo "✅ Target group ready: $$TG_ARN"; \
+	fi
+
+.PHONY: mediamtx-ensure-alb mediamtx-attach-alb mediamtx-verify-sg
+
+# Ensure ALB exists and create it (and a security group) if missing.
+mediamtx-ensure-alb: ## 🛠 Ensure Application Load Balancer exists (creates ALB and security-group if needed)
+	@MEDIAMTX_LOG_GROUP="$(MEDIAMTX_LOG_GROUP)" ALB_NAME="$(ALB_NAME)" AWS_REGION="$(AWS_REGION)" AWS_VPC_ID="$(AWS_VPC_ID)" ALB_SECURITY_GROUP="$(ALB_SECURITY_GROUP)" sh scripts/mediamtx-ensure-alb.sh
+
+mediamtx-attach-alb: mediamtx-create-target-group mediamtx-ensure-alb ## 🔗 Create/modify ALB listener to forward to mediamtx-targets
+	@echo "🔗 Attaching mediamtx target group to ALB ($(ALB_NAME))..."
+	@ALB_ARN=$$(aws elbv2 describe-load-balancers --names $(ALB_NAME) --region $(AWS_REGION) --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null || echo ""); \
+	if [ -z "$$ALB_ARN" ]; then \
+	  echo "❌ ALB $(ALB_NAME) not found (check ALB_NAME)"; exit 1; \
+	fi; \
+	# Wait for ALB to become active
+	ALB_STATE=$$(aws elbv2 describe-load-balancers --load-balancer-arns $$ALB_ARN --region $(AWS_REGION) --query 'LoadBalancers[0].State.Code' --output text 2>/dev/null || echo ""); \
+	for i in `seq 1 30`; do \
+	  if [ "$$ALB_STATE" = "active" ]; then break; fi; \
+	  echo "  Waiting for ALB to become active (state=$$ALB_STATE) ($$i/30)"; sleep 2; \
+	  ALB_STATE=$$(aws elbv2 describe-load-balancers --load-balancer-arns $$ALB_ARN --region $(AWS_REGION) --query 'LoadBalancers[0].State.Code' --output text 2>/dev/null || echo ""); \
+	done; \
+	if [ "$$ALB_STATE" != "active" ]; then echo "❌ ALB is not active (state=$$ALB_STATE)"; exit 1; fi; \
+	TG_ARN=$$(aws elbv2 describe-target-groups --region $(AWS_REGION) --names $(MEDIAMTX_TG_NAME) --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo ""); \
+	if [ -z "$$TG_ARN" ]; then \
+	  echo "❌ Target group $(MEDIAMTX_TG_NAME) not found (run make mediamtx-create-target-group)"; exit 1; \
+	fi; \
+	LISTENER_ARN=$$(aws elbv2 describe-listeners --load-balancer-arn $$ALB_ARN --region $(AWS_REGION) --query "Listeners[?Port==`$(MEDIAMTX_PORT_API)`].ListenerArn" --output text 2>/dev/null || echo ""); \
+	if [ -z "$$LISTENER_ARN" ]; then \
+	  echo "📍 Creating listener on port $(MEDIAMTX_PORT_API)..."; \
+	  aws elbv2 create-listener --load-balancer-arn $$ALB_ARN --protocol HTTP --port $(MEDIAMTX_PORT_API) --default-actions Type=forward,TargetGroupArn=$$TG_ARN --region $(AWS_REGION); \
+	  # wait briefly for listener to be available
+	  sleep 2; \
+	else \
+	  echo "🔁 Updating existing listener to forward to $$TG_ARN"; \
+	  aws elbv2 modify-listener --listener-arn $$LISTENER_ARN --default-actions Type=forward,TargetGroupArn=$$TG_ARN --region $(AWS_REGION); \
+	fi; \
+	echo "✅ ALB listener configured (port $(MEDIAMTX_PORT_API))"
+
+mediamtx-verify-sg: ## 🔎 Verify security group rules between ALB and task ENI
+	@echo "🔎 Verifying security group configuration..."
+	@echo "  ALB SG: $(ALB_SECURITY_GROUP)"; echo "  Task SG: $(ECS_SECURITY_GROUP)"; \
+	INBOUND_OK=$$(aws ec2 describe-security-groups --group-ids $(ECS_SECURITY_GROUP) --region $(AWS_REGION) --query 'SecurityGroups[0].IpPermissions' --output json | grep -q $(ALB_SECURITY_GROUP) && echo yes || echo no); \
+	if [ "$$INBOUND_OK" = "yes" ]; then \
+	  echo "✅ Task security group allows ingress from ALB security group on port $(MEDIAMTX_PORT_API)"; \
+	else \
+	  echo "❌ Missing inbound rule: allow ALB SG $(ALB_SECURITY_GROUP) -> Task SG $(ECS_SECURITY_GROUP) on port $(MEDIAMTX_PORT_API)"; \
+	  echo "Run the following to add the rule:"; \
+	  echo "aws ec2 authorize-security-group-ingress --group-id $(ECS_SECURITY_GROUP) --protocol tcp --port $(MEDIAMTX_PORT_API) --source-group $(ALB_SECURITY_GROUP) --region $(AWS_REGION)"; \
+	fi; \
+	# Check ALB egress (basic)
+	EGRESS_OK=$$(aws ec2 describe-security-groups --group-ids $(ALB_SECURITY_GROUP) --region $(AWS_REGION) --query 'SecurityGroups[0].IpPermissionsEgress' --output json | grep -q '0.0.0.0' && echo yes || echo no); \
+	if [ "$$EGRESS_OK" = "yes" ]; then \
+	  echo "✅ ALB security group has default egress (internet) or allows outbound traffic"; \
+	else \
+	  echo "⚠️ ALB security group egress may be restricted. Ensure it can reach task ENIs on port $(MEDIAMTX_PORT_API)"; \
+	fi
+
+.PHONY: mediamtx-ensure-sg
+mediamtx-ensure-sg: ## ✅ Ensure task SG allows ingress from ALB SG on the API port
+	@echo "🔐 Ensuring security group ingress: ALB ($(ALB_SECURITY_GROUP)) -> Task ($(ECS_SECURITY_GROUP)) on port $(MEDIAMTX_PORT_API)"
+	# Verify the task security group exists
+	if ! aws ec2 describe-security-groups --group-ids $(ECS_SECURITY_GROUP) --region $(AWS_REGION) >/dev/null 2>&1; then \
+	  echo "⚠️ Task security group $(ECS_SECURITY_GROUP) not found; skipping ingress configuration. Update ECS_SECURITY_GROUP in Makefile if needed."; \
+	  exit 0; \
+	fi; \
+	# Check if there's already a rule referencing the ALB SG
+	HAS_RULE=$$(aws ec2 describe-security-groups --group-ids $(ECS_SECURITY_GROUP) --region $(AWS_REGION) --query 'SecurityGroups[0].IpPermissions[*].UserIdGroupPairs[?GroupId==`'$(ALB_SECURITY_GROUP)'`].GroupId' --output text 2>/dev/null || echo ""); \
+	if [ -n "$$HAS_RULE" ]; then \
+	  echo "✅ Ingress rule already present"; \
+	else \
+	  echo "➕ Adding ingress rule..."; \
+	  aws ec2 authorize-security-group-ingress --group-id $(ECS_SECURITY_GROUP) --protocol tcp --port $(MEDIAMTX_PORT_API) --source-group $(ALB_SECURITY_GROUP) --region $(AWS_REGION) >/dev/null 2>&1 || echo "⚠️ Ingress rule may already exist or failed to add"; \
+	  echo "✅ Ingress rule ensured"; \
+	fi
 
 fix-alb-ports: ## 🔧 Fix ALB target group health check
 	@echo "🔧 Fixing ALB target group health check..."
@@ -1038,11 +1177,11 @@ cleanup: ## 🧹 Delete ECS services (keep images, logs, and infrastructure)
 	  --region $(AWS_REGION) 2>/dev/null || true
 	@echo "✅ Services deleted"
 
+
 cleanup-all: cleanup ## 🧹🔥 Full cleanup (services, task definitions, images, logs)
 	@echo "⚠️  Deleting all resources..."
-	aws logs delete-log-group --log-group-name $(MEDIAMTX_LOG_GROUP) --region $(AWS_REGION) 2>/dev/null || true
-	aws logs delete-log-group --log-group-name $(BROADCAST_LOG_GROUP) --region $(AWS_REGION) 2>/dev/null || true
-	@echo "✅ All cleaned up"
+	@echo "Running cleanup script..."
+	@MEDIAMTX_LOG_GROUP="$(MEDIAMTX_LOG_GROUP)" BROADCAST_LOG_GROUP="$(BROADCAST_LOG_GROUP)" ALB_NAME="$(ALB_NAME)" AWS_REGION="$(AWS_REGION)" MEDIAMTX_TG_NAME="$(MEDIAMTX_TG_NAME)" ALB_TG_NAME="$(ALB_TG_NAME)" ECS_SECURITY_GROUP="$(ECS_SECURITY_GROUP)" ALB_SECURITY_GROUP="$(ALB_SECURITY_GROUP)" MEDIAMTX_PORT_API="$(MEDIAMTX_PORT_API)" MEDIAMTX_TASK_FAMILY="$(MEDIAMTX_TASK_FAMILY)" BROADCAST_TASK_FAMILY="$(BROADCAST_TASK_FAMILY)" MEDIAMTX_REPO="$(MEDIAMTX_REPO)" BROADCAST_REPO="$(BROADCAST_REPO)" sh scripts/mediamtx-cleanup.sh;
 
 debug-env: ## 🐛 Show configuration and environment variables
 	@echo "🐛 Environment & Configuration"
@@ -1077,3 +1216,28 @@ debug-env: ## 🐛 Show configuration and environment variables
 	@echo ""
 
 .DEFAULT_GOAL := help
+
+###############################################
+# AWS Cost Estimation
+###############################################
+
+# Pricing assumptions (override when running):
+# - PRICE_FARGATE_VCPU_H: $ per vCPU-hour (vCPU = 1024 CPU units)
+# - PRICE_FARGATE_MEM_GB_H: $ per GB-hour
+# - ALB_MONTHLY_PRICE: fixed monthly ALB cost estimate
+# - ECR_GB_MONTHLY: $ per GB-month for ECR storage (guide)
+# - EC2_MONTHLY_ESTIMATE_PER_INSTANCE: monthly cost estimate per test EC2 instance
+PRICE_FARGATE_VCPU_H ?= 0.040
+PRICE_FARGATE_MEM_GB_H ?= 0.0045
+ALB_MONTHLY_PRICE ?= 18.00
+ECR_GB_MONTHLY ?= 0.10
+EC2_MONTHLY_ESTIMATE_PER_INSTANCE ?= 15.00
+
+.PHONY: aws-cost-estimate
+
+aws-cost-estimate: ## 📊 Estimate next-month AWS costs (rough, configurable rates)
+	@MEDIAMTX_CPU="$(MEDIAMTX_CPU)" MEDIAMTX_MEMORY="$(MEDIAMTX_MEMORY)" BROADCAST_CPU="$(BROADCAST_CPU)" BROADCAST_MEMORY="$(BROADCAST_MEMORY)" \
+		PRICE_FARGATE_VCPU_H="$(PRICE_FARGATE_VCPU_H)" PRICE_FARGATE_MEM_GB_H="$(PRICE_FARGATE_MEM_GB_H)" \
+		ALB_NAME="$(ALB_NAME)" AWS_REGION="$(AWS_REGION)" ECS_CLUSTER="$(ECS_CLUSTER)" MEDIAMTX_SERVICE="$(MEDIAMTX_SERVICE)" BROADCAST_SERVICE="$(BROADCAST_SERVICE)" \
+		ECR_GB_MONTHLY="$(ECR_GB_MONTHLY)" EC2_MONTHLY_ESTIMATE_PER_INSTANCE="$(EC2_MONTHLY_ESTIMATE_PER_INSTANCE)" \
+		sh scripts/aws-cost-estimate.sh
