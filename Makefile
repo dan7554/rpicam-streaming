@@ -828,7 +828,7 @@ deploy-fargate: ## 🚀 Deploy both services to Fargate (idempotent end-to-end)
 	$(MAKE) -s fix-broadcast-service; \
 	# Final status
 	$(MAKE) -s status; \
-	@echo "\n✅ Full deploy (Fargate) complete"
+	echo "\n✅ Full deploy (Fargate) complete"
 
 quick: quick-ec2 ## ⚡ Quick update (EC2 - Recommended)
 
