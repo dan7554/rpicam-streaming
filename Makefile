@@ -530,35 +530,7 @@ mediamtx-create-target-group: ## 🔧 Create ALB target group for MediaMTX API (
 mediamtx-ensure-alb: ## 🛠 Ensure Application Load Balancer exists (creates ALB and security-group if needed)
 	@MEDIAMTX_LOG_GROUP="$(MEDIAMTX_LOG_GROUP)" ALB_NAME="$(ALB_NAME)" AWS_REGION="$(AWS_REGION)" AWS_VPC_ID="$(AWS_VPC_ID)" ALB_SECURITY_GROUP="$(ALB_SECURITY_GROUP)" sh scripts/mediamtx-ensure-alb.sh
 
-mediamtx-attach-alb: mediamtx-create-target-group mediamtx-ensure-alb ## 🔗 Create/modify ALB listener to forward to mediamtx-targets
-	@echo "🔗 Attaching mediamtx target group to ALB ($(ALB_NAME))..."
-	@ALB_ARN=$$(aws elbv2 describe-load-balancers --names $(ALB_NAME) --region $(AWS_REGION) --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null || echo ""); \
-	if [ -z "$$ALB_ARN" ]; then \
-	  echo "❌ ALB $(ALB_NAME) not found (check ALB_NAME)"; exit 1; \
-	fi; \
-	# Wait for ALB to become active
-	ALB_STATE=$$(aws elbv2 describe-load-balancers --load-balancer-arns $$ALB_ARN --region $(AWS_REGION) --query 'LoadBalancers[0].State.Code' --output text 2>/dev/null || echo ""); \
-	for i in `seq 1 30`; do \
-	  if [ "$$ALB_STATE" = "active" ]; then break; fi; \
-	  echo "  Waiting for ALB to become active (state=$$ALB_STATE) ($$i/30)"; sleep 2; \
-	  ALB_STATE=$$(aws elbv2 describe-load-balancers --load-balancer-arns $$ALB_ARN --region $(AWS_REGION) --query 'LoadBalancers[0].State.Code' --output text 2>/dev/null || echo ""); \
-	done; \
-	if [ "$$ALB_STATE" != "active" ]; then echo "❌ ALB is not active (state=$$ALB_STATE)"; exit 1; fi; \
-	TG_ARN=$$(aws elbv2 describe-target-groups --region $(AWS_REGION) --names $(MEDIAMTX_TG_NAME) --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo ""); \
-	if [ -z "$$TG_ARN" ]; then \
-	  echo "❌ Target group $(MEDIAMTX_TG_NAME) not found (run make mediamtx-create-target-group)"; exit 1; \
-	fi; \
-	LISTENER_ARN=$$(aws elbv2 describe-listeners --load-balancer-arn $$ALB_ARN --region $(AWS_REGION) --query "Listeners[?Port==`$(MEDIAMTX_PORT_API)`].ListenerArn" --output text 2>/dev/null || echo ""); \
-	if [ -z "$$LISTENER_ARN" ]; then \
-	  echo "📍 Creating listener on port $(MEDIAMTX_PORT_API)..."; \
-	  aws elbv2 create-listener --load-balancer-arn $$ALB_ARN --protocol HTTP --port $(MEDIAMTX_PORT_API) --default-actions Type=forward,TargetGroupArn=$$TG_ARN --region $(AWS_REGION); \
-	  # wait briefly for listener to be available
-	  sleep 2; \
-	else \
-	  echo "🔁 Updating existing listener to forward to $$TG_ARN"; \
-	  aws elbv2 modify-listener --listener-arn $$LISTENER_ARN --default-actions Type=forward,TargetGroupArn=$$TG_ARN --region $(AWS_REGION); \
-	fi; \
-	echo "✅ ALB listener configured (port $(MEDIAMTX_PORT_API))"
+	@MEDIAMTX_TG_NAME="$(MEDIAMTX_TG_NAME)" ALB_NAME="$(ALB_NAME)" MEDIAMTX_PORT_API="$(MEDIAMTX_PORT_API)" AWS_REGION="$(AWS_REGION)" sh scripts/mediamtx-attach-alb.sh
 
 mediamtx-verify-sg: ## 🔎 Verify security group rules between ALB and task ENI
 	@echo "🔎 Verifying security group configuration..."
