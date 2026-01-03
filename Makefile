@@ -100,6 +100,7 @@ ALB_SECURITY_GROUP := sg-05daa07df49f3e721
 # ECS task ENI security group — reconciled (created if missing)
 ECS_SECURITY_GROUP := sg-0a39a0404cc7eac61
 MEDIAMTX_TG_NAME := mediamtx-targets
+MEDIAMTX_RTSP_TG_NAME := mediamtx-rtsp
 
 # Domain Configuration
 ADMIN_DOMAIN := admin.racetrackstreaming.com    # Broadcast admin dashboard
@@ -205,11 +206,21 @@ mediamtx-logs: ## 📝 Create CloudWatch log group for MediaMTX
 	aws logs put-retention-policy --log-group-name $(MEDIAMTX_LOG_GROUP) --retention-in-days 7 --region $(AWS_REGION) 2>/dev/null || true
 	@echo "✅ Log group ready"
 
-mediamtx-service: mediamtx-logs ## ⚙️ Create MediaMTX ECS service (internal, no ALB)
-	@echo "⚙️ Creating MediaMTX ECS service..."
-	@TG_ARN=$$(aws elbv2 describe-target-groups --region $(AWS_REGION) --names $(MEDIAMTX_TG_NAME) --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo ""); \
-	if [ -n "$$TG_ARN" ]; then \
-	  echo "⚙️ Attaching ALB target group to service: $$TG_ARN"; \
+
+mediamtx-create-rtsp: ## 🧭 Ensure RTSP target group exists (port 8554)
+	@echo "🧭 Ensuring RTSP target group exists ($(MEDIAMTX_RTSP_TG_NAME))..."; \
+	bash scripts/mediamtx-ensure-rtsp-tg.sh || echo "⚠️ mediamtx-rtsp ensure script returned non-zero"
+
+
+mediamtx-service: mediamtx-logs ## ⚙️ Create MediaMTX ECS service (attach API and RTSP TGs when present)
+	@echo "⚙️ Creating/updating MediaMTX ECS service..."
+	@TG_API_ARN=$$(aws elbv2 describe-target-groups --region $(AWS_REGION) --names $(MEDIAMTX_TG_NAME) --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo ""); \
+	TG_RTSP_ARN=$$(aws elbv2 describe-target-groups --region $(AWS_REGION) --names $(MEDIAMTX_RTSP_TG_NAME) --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo ""); \
+	if [ -n "$$TG_API_ARN" ] || [ -n "$$TG_RTSP_ARN" ]; then \
+	  echo "⚙️ Attaching ALB/NLB target groups to service: $$TG_API_ARN $$TG_RTSP_ARN"; \
+	  LB_ARGS=""; \
+	  if [ -n "$$TG_API_ARN" ]; then LB_ARGS="$$LB_ARGS targetGroupArn=$$TG_API_ARN,containerName=mediamtx,containerPort=$(MEDIAMTX_PORT_API)"; fi; \
+	  if [ -n "$$TG_RTSP_ARN" ]; then LB_ARGS="$$LB_ARGS targetGroupArn=$$TG_RTSP_ARN,containerName=mediamtx,containerPort=$(MEDIAMTX_PORT_RTSP)"; fi; \
 	  aws ecs create-service \
 	    --cluster $(ECS_CLUSTER) \
 	    --service-name $(MEDIAMTX_SERVICE) \
@@ -217,19 +228,18 @@ mediamtx-service: mediamtx-logs ## ⚙️ Create MediaMTX ECS service (internal,
 	    --desired-count 1 \
 	    --launch-type FARGATE \
 	    --network-configuration "awsvpcConfiguration={subnets=[$(AWS_SUBNET_ID)],securityGroups=[$(ECS_SECURITY_GROUP)],assignPublicIp=ENABLED}" \
-	    --enable-ecs-managed-tags \
-	    --load-balancers "targetGroupArn=$$TG_ARN,containerName=mediamtx,containerPort=$(MEDIAMTX_PORT_API)" \
+	    --enable-ecs-managed-tags $$LB_ARGS \
 	    --region $(AWS_REGION) 2>/dev/null || \
 	  (echo "Service exists, updating..."; \
 	   aws ecs update-service \
 	    --cluster $(ECS_CLUSTER) \
 	    --service $(MEDIAMTX_SERVICE) \
 	    --task-definition $(MEDIAMTX_TASK_FAMILY) \
-	    --load-balancers "targetGroupArn=$$TG_ARN,containerName=mediamtx,containerPort=$(MEDIAMTX_PORT_API)" \
+	    $$LB_ARGS \
 	    --force-new-deployment \
 	    --region $(AWS_REGION) 2>/dev/null || echo "⚠️ Service update skipped (still initializing)"); \
 	else \
-	  echo "⚙️ No mediamtx target group found; creating/updating service without ALB attachment"; \
+	  echo "⚙️ No mediamtx target groups found; creating/updating service without ALB/NLB attachment"; \
 	  aws ecs create-service \
 	    --cluster $(ECS_CLUSTER) \
 	    --service-name $(MEDIAMTX_SERVICE) \
@@ -249,7 +259,7 @@ mediamtx-service: mediamtx-logs ## ⚙️ Create MediaMTX ECS service (internal,
 	fi
 	@echo "Waiting for MediaMTX service to reach stable state (this may take 1-2 minutes)..."; \
 	aws ecs wait services-stable --cluster $(ECS_CLUSTER) --services $(MEDIAMTX_SERVICE) --region $(AWS_REGION) >/dev/null 2>&1 || echo "⚠️ Service did not reach stable state within waiter timeout"; \
-	@echo "✅ MediaMTX service ready"
+	echo "✅ MediaMTX service ready"
 
 mediamtx-update: mediamtx-ecr-push ## 🔄 Update MediaMTX service with latest image
 	@echo "🔄 Updating MediaMTX service..."
@@ -260,7 +270,7 @@ mediamtx-update: mediamtx-ecr-push ## 🔄 Update MediaMTX service with latest i
 	  --region $(AWS_REGION)
 	@echo "✅ Service update initiated"
 
-mediamtx-deploy: mediamtx-logs mediamtx-task-def mediamtx-ensure-sg mediamtx-create-target-group mediamtx-attach-alb mediamtx-service ## 🚀 Complete MediaMTX deployment (Fargate)
+mediamtx-deploy: mediamtx-logs mediamtx-task-def mediamtx-ensure-sg mediamtx-create-target-group mediamtx-create-rtsp mediamtx-attach-alb mediamtx-service ## 🚀 Complete MediaMTX deployment (Fargate)
 
 
 ###############################################
@@ -277,7 +287,7 @@ mediamtx-deploy: mediamtx-logs mediamtx-task-def mediamtx-ensure-sg mediamtx-cre
 
 # EC2 Configuration
 EC2_INSTANCE_TYPE ?= t3.medium       # 2 vCPU, 4GB RAM - sufficient for MediaMTX
-EC2_AMI ?= ami-0b3ca45933d9d6d87    # Amazon ECS-optimized AMI for us-east-1 (latest)
+EC2_AMI ?= ami-0bcad7d4493b66a48    # Amazon ECS-optimized AL2023 AMI for us-east-1 (2026-01-03)
 EC2_KEY_PAIR ?= racetrack-key        # EC2 key pair for SSH access
 EC2_VOLUME_SIZE ?= 100               # GB
 
@@ -292,7 +302,7 @@ mediamtx-ec2-launch: ## 🖥️ Launch EC2 instance for MediaMTX (fixes Fargate 
 	--block-device-mappings "DeviceName=/dev/xvda,Ebs={VolumeSize=$(EC2_VOLUME_SIZE),VolumeType=gp3,DeleteOnTermination=true}" \
 	  --iam-instance-profile Name=ecsInstanceProfile \
 	  --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=mediamtx-ec2},{Key=Service,Value=mediamtx},{Key=Type,Value=streaming}]" \
-	--user-data "IyEvYmluL2Jhc2gKZXhlYyA+IC92YXIvbG9nL2Vjcy1zdGFydHVwLmxvZyAyPiYxCmVjaG8gIj09PSBTdGFydGluZyBFQ1MgY29uZmlndXJhdGlvbiBhdCAkKGRhdGUpID09PSIKCiMgTWluaW1hbCBhcHByb2FjaCAtIGp1c3QgZW5zdXJlIERvY2tlciBhbmQgRUNTIGFyZSBydW5uaW5nCnN5c3RlbWN0bCBzdGFydCBkb2NrZXIgfHwgZWNobyAiRG9ja2VyIHN0YXJ0IGZhaWxlZCIKc3lzdGVtY3RsIGVuYWJsZSBkb2NrZXIgfHwgZWNobyAiRG9ja2VyIGVuYWJsZSBmYWlsZWQiCgojIEFkZCBJQU0gcm9sZSB0byBFQ1MgY29uZmlnCmNhdCA+PiAvZXRjL2Vjcy9lY3MuY29uZmlnIDw8ICdFQ1NDT05GSUcnCkVDU19DTFVTVEVSPWJyb2FkY2FzdC1jbHVzdGVyCkVDU19FTkFCTEVfQ09OVEFJTkVSX01FVEFEQVRBPXRydWUKRUNTQ09ORklHCgpzeXN0ZW1jdGwgcmVzdGFydCBlY3MgfHwgZWNobyAiRUNTIHJlc3RhcnQgZmFpbGVkIgpzeXN0ZW1jdGwgZW5hYmxlIGVjcyB8fCBlY2hvICJFQ1MgZW5hYmxlIGZhaWxlZCIKCmVjaG8gIj09PSBFQ1MgY29uZmlndXJhdGlvbiBjb21wbGV0ZSBhdCAkKGRhdGUpID09PSIK" \
+	--user-data "IyEvYmluL2Jhc2gKIyBFQ1MgQWdlbnQgY29uZmlndXJhdGlvbiBmb3IgQW1hem9uIExpbnV4IDIwMjMgRUNTLW9wdGltaXplZCBBTUkKZXhlYyA+IC92YXIvbG9nL2Vjcy1zdGFydHVwLmxvZyAyPiYxCnNldCAteAoKZWNobyAiPT09IFN0YXJ0aW5nIEVDUyBjb25maWd1cmF0aW9uIGF0ICQoZGF0ZSkgPT09IgoKIyBDb25maWd1cmUgRUNTIGNsdXN0ZXIKbWtkaXIgLXAgL2V0Yy9lY3MKY2F0ID4gL2V0Yy9lY3MvZWNzLmNvbmZpZyA8PCdFQ1NDT05GSUcnCkVDU19DTFVTVEVSPWJyb2FkY2FzdC1jbHVzdGVyCkVDU19FTkFCTEVfQ09OVEFJTkVSX01FVEFEQVRBPXRydWUKRUNTX0VOQUJMRV9UQVNLX0lBTV9ST0xFPXRydWUKRUNTX0VOQUJMRV9UQVNLX0lBTV9ST0xFX05FVFdPUktfSE9TVD10cnVlCkVDU0NPTkZJRwoKIyBFbnN1cmUgRG9ja2VyIGlzIHJ1bm5pbmcgKHNob3VsZCBhbHJlYWR5IGJlIGVuYWJsZWQgb24gRUNTLW9wdGltaXplZCBBTUkpCnN5c3RlbWN0bCBlbmFibGUgZG9ja2VyIHx8IHRydWUKc3lzdGVtY3RsIHN0YXJ0IGRvY2tlciB8fCB0cnVlCgojIEVuc3VyZSBFQ1MgYWdlbnQgaXMgcnVubmluZyAoc2hvdWxkIGFscmVhZHkgYmUgZW5hYmxlZCBvbiBFQ1Mtb3B0aW1pemVkIEFNSSkKc3lzdGVtY3RsIGVuYWJsZSBlY3MgfHwgdHJ1ZQpzeXN0ZW1jdGwgcmVzdGFydCBlY3MgfHwgdHJ1ZQoKIyBXYWl0IGZvciBFQ1MgYWdlbnQgdG8gc3RhcnQKc2xlZXAgNQoKZWNobyAiPT09IEVDUyBjb25maWd1cmF0aW9uIGNvbXBsZXRlIGF0ICQoZGF0ZSkgPT09IgplY2hvICJEb2NrZXIgc3RhdHVzOiIKc3lzdGVtY3RsIHN0YXR1cyBkb2NrZXIgLS1uby1wYWdlciB8fCB0cnVlCmVjaG8gIkVDUyBhZ2VudCBzdGF0dXM6IgpzeXN0ZW1jdGwgc3RhdHVzIGVjcyAtLW5vLXBhZ2VyIHx8IHRydWUK" \
 	  --region $(AWS_REGION) | tee /tmp/ec2-launch.json
 	@INSTANCE_ID=$$(jq -r '.Instances[0].InstanceId' /tmp/ec2-launch.json); \
 	echo "✅ Instance launched: $$INSTANCE_ID"; \
@@ -569,6 +579,11 @@ mediamtx-ensure-sg: ## ✅ Ensure task SG allows ingress from ALB SG on the API 
 	  echo "✅ Ingress rule ensured"; \
 	fi
 
+	# Ensure RTSP port is reachable (NLB forwards public traffic) - allow from public CIDR
+	echo "🔐 Ensuring RTSP ingress (port $(MEDIAMTX_PORT_RTSP)) from 0.0.0.0/0 on $(ECS_SECURITY_GROUP)"; \
+	aws ec2 authorize-security-group-ingress --group-id $(ECS_SECURITY_GROUP) --protocol tcp --port $(MEDIAMTX_PORT_RTSP) --cidr 0.0.0.0/0 --region $(AWS_REGION) >/dev/null 2>&1 || echo "⚠️ RTSP ingress may already exist or failed to add"; \
+	echo "✅ RTSP ingress ensured (best-effort)"
+
 fix-alb-ports: ## 🔧 Fix ALB target group health check
 	@echo "🔧 Fixing ALB target group health check..."
 	@TARGET_GROUP_ARN=$$(aws elbv2 describe-target-groups \
@@ -777,7 +792,7 @@ setup-fargate: ## 🏗️ Initial Fargate setup (Legacy - HTTP timeout issues)
 	@echo "   Admin:    https://$(ADMIN_DOMAIN)"
 	@echo "   Streams:  https://$(STREAM_DOMAIN)/hls/"
 	@echo ""
-	@echo "💡 Recommendation: Use EC2 instead (make deploy)"
+	@echo "💡 Recommendation: Use Fargate instead (make deploy)"
 	@echo ""
 
 deploy: deploy-fargate ## 🚀 Deploy both services to Fargate (Recommended)
@@ -821,7 +836,7 @@ deploy-ec2: mediamtx-deploy-ec2 broadcast-deploy fix-broadcast-service ## 🚀 D
 deploy-fargate: ## 🚀 Deploy both services to Fargate (idempotent end-to-end)
 	@echo "🔁 Starting full idempotent deploy (Fargate)..."
 	@echo "\n--- MediaMTX: build, push, task, logs, SG, ALB/TG, service ---\n"; \
-	$(MAKE) -s mediamtx-ecr-repo mediamtx-build mediamtx-ecr-push mediamtx-task-def mediamtx-logs mediamtx-ensure-alb mediamtx-create-target-group mediamtx-attach-alb mediamtx-ensure-sg mediamtx-service mediamtx-wait-targets; \
+	$(MAKE) -s mediamtx-ecr-repo mediamtx-build mediamtx-ecr-push mediamtx-task-def mediamtx-logs mediamtx-ensure-alb mediamtx-create-target-group mediamtx-create-rtsp mediamtx-attach-alb mediamtx-ensure-sg mediamtx-service mediamtx-wait-targets; \
 	echo "\n--- Broadcast: build, push, task, service ---\n"; \
 	$(MAKE) -s broadcast-ecr-repo broadcast-build broadcast-ecr-push broadcast-logs broadcast-task-def broadcast-deploy; \
 	# Ensure ALB attach/config for broadcast

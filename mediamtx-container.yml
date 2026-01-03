@@ -27,6 +27,9 @@ authInternalUsers:
         path:
       - action: playback
         path:
+      - action: api
+      - action: metrics
+      - action: pprof
   - user: any
     pass:
     ips: ["127.0.0.1", "::1"]
@@ -39,17 +42,15 @@ authInternalUsers:
 # Global settings -> Control API
 
 api: yes
-apiAddress: :9997
+apiAddress: 0.0.0.0:9997
 apiEncryption: no
-apiServerKey: /app/server.key
-apiServerCert: /app/server.crt
 apiAllowOrigins: ["*"]
 
 ###############################################
 # Global settings -> Metrics
 
 metrics: no
-metricsAddress: :9998
+metricsAddress: 0.0.0.0:9998
 metricsEncryption: no
 metricsServerKey: /app/server.key
 metricsServerCert: /app/server.crt
@@ -59,7 +60,7 @@ metricsAllowOrigins: ["*"]
 # Global settings -> PPROF
 
 pprof: no
-pprofAddress: :9999
+pprofAddress: 0.0.0.0:9999
 pprofEncryption: no
 pprofServerKey: /app/server.key
 pprofServerCert: /app/server.crt
@@ -69,7 +70,7 @@ pprofAllowOrigins: ["*"]
 # Global settings -> Playback server
 
 playback: yes
-playbackAddress: :9996
+playbackAddress: 0.0.0.0:9996
 playbackEncryption: no
 playbackServerKey: /app/server.key
 playbackServerCert: /app/server.crt
@@ -81,7 +82,7 @@ playbackAllowOrigins: ["*"]
 rtsp: yes
 rtspTransports: [udp, multicast, tcp]
 rtspEncryption: "no"
-rtspAddress: :8554
+rtspAddress: 0.0.0.0:8554
 rtspsAddress: :8322
 rtpAddress: :8000
 rtcpAddress: :8001
@@ -100,7 +101,7 @@ rtspAuthMethods: [basic]
 # Global settings -> RTMP server
 
 rtmp: yes
-rtmpAddress: :1935
+rtmpAddress: 0.0.0.0:1935
 rtmpEncryption: "no"
 rtmpsAddress: :1936
 rtmpServerKey: /app/server.key
@@ -110,12 +111,12 @@ rtmpServerCert: /app/server.crt
 # Global settings -> HLS server
 
 hls: yes
-hlsAddress: :8888
+hlsAddress: 0.0.0.0:8888
 hlsEncryption: no
 hlsServerKey: /app/server.key
 hlsServerCert: /app/server.crt
 hlsAllowOrigins: ["*"]
-hlsAlwaysRemux: no
+hlsAlwaysRemux: yes
 hlsVariant: lowLatency
 hlsSegmentCount: 7
 hlsSegmentDuration: 1s
@@ -128,7 +129,7 @@ hlsMuxerCloseAfter: 60s
 # Global settings -> WebRTC server
 
 webrtc: yes
-webrtcAddress: :8889
+webrtcAddress: 0.0.0.0:8889
 webrtcEncryption: no
 webrtcServerKey: /app/server.key
 webrtcServerCert: /app/server.crt
@@ -145,7 +146,7 @@ webrtcTrackGatherTimeout: 5s
 # Global settings -> SRT server
 
 srt: yes
-srtAddress: :8890
+srtAddress: 0.0.0.0:8891
 
 ###############################################
 # Default path settings
@@ -169,6 +170,11 @@ pathDefaults:
 # Specific paths
 
 paths:
+  rpicam3:
+    source: publisher
+    record: yes
+    sourceOnDemandStartTimeout: 20s
+
   rpicam2:
     source: publisher
     record: yes
