@@ -86,9 +86,10 @@ BROADCAST_HEALTH_PATH := /health
 BROADCAST_CPU := 256         # 0.25 vCPU
 BROADCAST_MEMORY := 512      # 512 MB
 
-# Service discovery: MediaMTX service DNS name in ECS awsvpc mode
-# Format: <service>.<cluster>.ecs.local (ECS native service discovery)
-MEDIAMTX_SERVICE_URL := http://$(MEDIAMTX_SERVICE).$(ECS_CLUSTER).ecs.local:$(MEDIAMTX_PORT_WEBRTC)
+# Service discovery: MediaMTX service via Route53 DNS (survives task restarts)
+# Updated by: ./scripts/update-mediamtx-dns.sh after deployment
+MEDIAMTX_SUBDOMAIN ?= mediamtx.racetrackstreaming.com
+MEDIAMTX_SERVICE_URL := http://$(MEDIAMTX_SUBDOMAIN):$(MEDIAMTX_PORT_HLS)
 
 ###############################################
 # ALB & Security Group Configuration
@@ -837,6 +838,8 @@ deploy-fargate: ## 🚀 Deploy both services to Fargate (idempotent end-to-end)
 	@echo "🔁 Starting full idempotent deploy (Fargate)..."
 	@echo "\n--- MediaMTX: build, push, task, logs, SG, ALB/TG, service ---\n"; \
 	$(MAKE) -s mediamtx-ecr-repo mediamtx-build mediamtx-ecr-push mediamtx-task-def mediamtx-logs mediamtx-ensure-alb mediamtx-create-target-group mediamtx-create-rtsp mediamtx-attach-alb mediamtx-ensure-sg mediamtx-service mediamtx-wait-targets; \
+	echo "\n--- Update Route53 DNS for MediaMTX ---\n"; \
+	./scripts/update-mediamtx-dns.sh; \
 	echo "\n--- Broadcast: build, push, task, service ---\n"; \
 	$(MAKE) -s broadcast-ecr-repo broadcast-build broadcast-ecr-push broadcast-logs broadcast-task-def broadcast-deploy; \
 	# Ensure ALB attach/config for broadcast

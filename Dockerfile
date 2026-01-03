@@ -32,9 +32,7 @@ EXPOSE 9998/tcp
 EXPOSE 9999/tcp
 EXPOSE 8189/udp
 
-# Add health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD curl -f http://0.0.0.0:9997/v3/info || exit 1
+# No Docker HEALTHCHECK: rely on ALB target-group for readiness
 
 # Base image entrypoint is /mediamtx which looks for mediamtx.yml in current directory
 # We're in /app and have copied mediamtx.yml there

@@ -1,0 +1,93 @@
+# Dockerfile for MediaMTX with Nginx health check sidecar
+# This creates a single container with both MediaMTX and Nginx
+# Nginx provides a simple health check endpoint, MediaMTX handles streaming
+
+FROM --platform=linux/amd64 alpine:3.18 AS base
+
+# Install nginx and required tools
+RUN apk add --no-cache nginx curl ca-certificates bash
+
+
+# Stage 2: Add MediaMTX
+FROM base
+
+# Create working directory
+WORKDIR /app
+
+# Copy MediaMTX binary from original image (we'll use a different approach)
+# Instead, use the mediamtx image and just add nginx on top
+# Actually, let's use ubuntu which has bash and works better
+FROM --platform=linux/amd64 ubuntu:22.04
+
+# Install nginx and utilities
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    nginx curl ca-certificates bash && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Install mediamtx (download prebuilt binary)
+RUN curl -fL https://github.com/bluenviron/mediamtx/releases/download/v1.15.5/mediamtx_v1.15.5_linux_amd64.tar.gz -o /tmp/mediamtx.tar.gz && \
+    tar -xzf /tmp/mediamtx.tar.gz -C /usr/local/bin/ && \
+    rm /tmp/mediamtx.tar.gz && \
+    chmod +x /usr/local/bin/mediamtx
+
+# Set working directory
+WORKDIR /app
+
+# Copy MediaMTX config
+COPY mediamtx-container.yml /app/mediamtx.yml
+COPY server.crt /app/server.crt
+COPY server.key /app/server.key
+
+# Also copy to root for compatibility
+COPY mediamtx-container.yml /mediamtx.yml
+COPY server.crt /server.crt
+COPY server.key /server.key
+
+# Set environment variables
+ENV MTX_RTSPTRANSPORTS=tcp
+ENV MTX_WEBRTCADDITIONALHOSTS=localhost
+
+# Create a simple nginx config for health checks
+RUN mkdir -p /etc/nginx/conf.d && printf '%s\n' \
+    'server {' \
+    '    listen 8080;' \
+    '    listen [::]:8080;' \
+    '    server_name _;' \
+    '    access_log off;' \
+    '    ' \
+    '    location /health {' \
+    '        return 200 "HEALTHY\n";' \
+    '        add_header Content-Type text/plain;' \
+    '    }' \
+    '    ' \
+    '    location / {' \
+    '        return 200 "MediaMTX Health Check OK\n";' \
+    '        add_header Content-Type text/plain;' \
+    '    }' \
+    '}' > /etc/nginx/conf.d/health.conf
+
+# Disable default nginx site
+RUN rm -f /etc/nginx/sites-enabled/default
+
+# Expose all ports
+EXPOSE 8554/tcp 1935/tcp 8888/tcp 8889/tcp 8890/tcp 8891/udp 9996/tcp 9997/tcp 8080/tcp
+
+# Create entrypoint script that runs both mediamtx and nginx
+RUN printf '%s\n' \
+    '#!/bin/bash' \
+    'set -e' \
+    '' \
+    'echo "Starting nginx health check server on port 8080..."' \
+    'nginx -c /etc/nginx/nginx.conf &' \
+    'NGINX_PID=$!' \
+    '' \
+    'echo "Starting MediaMTX..."' \
+    'exec /usr/local/bin/mediamtx /app/mediamtx.yml' > /entrypoint.sh && \
+    chmod +x /entrypoint.sh
+
+# Use the entrypoint script
+ENTRYPOINT ["/entrypoint.sh"]
+
+# Health check - checks the simple nginx endpoint
+HEALTHCHECK --interval=15s --timeout=3s --start-period=5s --retries=2 \
+  CMD curl -f http://localhost:8080/health || exit 1

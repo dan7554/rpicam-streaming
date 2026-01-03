@@ -9,8 +9,10 @@ docker run --rm -it \
 -p 8189:8189/udp \
 -p 9996:9996 \
 -p 9997:9997 \
--v ./mediamtx.yml:/mediamtx.yml \
+-v ./mediamtx-container.yml:/mediamtx.yml \
 -v ./server.crt:/server.crt \
 -v ./server.key:/server.key \
-bluenviron/mediamtx:1-ffmpeg-rpi
+bluenviron/mediamtx:latest
+
+# bluenviron/mediamtx:1-ffmpeg-rpi
 

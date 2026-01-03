@@ -310,7 +310,7 @@ make local-stop      # Stop local container
 2. **Check Health Endpoints**
    ```bash
    # MediaMTX health
-   curl http://MEDIAMTX_IP:9997/v1/config
+   curl http://MEDIAMTX_IP:9997/v3/config/global/get
    
    # Broadcast health
    curl https://admin.racetrackstreaming.com/health

@@ -89,7 +89,7 @@ Your MediaMTX/Broadcast System architecture is well-designed with proper service
 - **Ports:** RTSP(8554), HLS(8888), WebRTC(8889), RTMP(1935)
 - **Resources:** Appropriately sized (512 CPU, 1GB RAM)
 - **Logging:** CloudWatch configured
-- **Health Check:** HTTP on port 9997 (/v1/config)
+- **Health Check:** HTTP on port 9997 (/v3/paths/list)
 
 **Issues:** None identified
 

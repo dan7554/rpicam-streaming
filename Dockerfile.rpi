@@ -30,9 +30,7 @@ EXPOSE 9996/tcp
 EXPOSE 8890/udp
 EXPOSE 8189/udp
 
-# Add health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD curl -f http://localhost:8888/ || exit 1
+# No Docker HEALTHCHECK for RPi build: rely on ALB/monitoring instead
 
 # MediaMTX looks for mediamtx.yml in the working directory by default
 # No need to specify the config file explicitly

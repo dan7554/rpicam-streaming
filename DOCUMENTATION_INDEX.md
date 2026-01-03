@@ -11,6 +11,37 @@
 
 ## 📖 Documentation Map
 
+### 🆕 EC2 Migration & Refactoring (December 22, 2025)
+
+**New Primary Solution**: EC2-based ECS (fixes Fargate HTTP timeout)
+
+#### Quick Reference (Daily Operations)
+**File:** `EC2_QUICK_REFERENCE.md` ✅ START HERE FOR OPERATIONS
+- Quick start guide (3 options)
+- Common commands table
+- Troubleshooting procedures
+- Deployment checklist
+- Stream access endpoints
+
+#### Migration Guide
+**File:** `MAKEFILE_EC2_MIGRATION.md` 
+- Why EC2 over Fargate
+- Root cause analysis (Fargate HTTP timeout)
+- Before/after command structure
+- Infrastructure diagrams
+- Cost comparison
+- FAQ section
+
+#### Change Log
+**File:** `REFACTORING_COMPLETE.md`
+- Detailed list of all changes
+- Section-by-section breakdown
+- Impact assessment
+- Verification checklist
+- Version history
+
+---
+
 ### For Quick Start (5-10 minutes)
 **File:** `BROADCAST_ALB_SOLUTION.md`
 - What was added

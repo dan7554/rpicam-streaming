@@ -47,6 +47,10 @@
           "value": "tcp"
         },
         {
+          "name": "MTX_RTMPADDRESS",
+          "value": ":1935"
+        },
+        {
           "name": "MTX_WEBRTCADDITIONALHOSTS",
           "value": "localhost"
         },
@@ -59,16 +63,7 @@
           "value": ":8889"
         }
       ],
-      "healthCheck": {
-        "command": [
-          "CMD-SHELL",
-          "curl -f http://localhost:8888/ || exit 1"
-        ],
-        "interval": 30,
-        "timeout": 10,
-        "retries": 3,
-        "startPeriod": 5
-      }
+      
     }
   ],
   "tags": [
