@@ -130,7 +130,7 @@ hlsMuxerCloseAfter: 60s
 
 webrtc: yes
 webrtcAddress: 0.0.0.0:8889
-webrtcEncryption: no
+webrtcEncryption: yes
 webrtcServerKey: /app/server.key
 webrtcServerCert: /app/server.crt
 webrtcAllowOrigins: ["*"]
