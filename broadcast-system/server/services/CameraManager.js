@@ -271,7 +271,8 @@ class CameraManager {
     try {
       // For WebRTC cameras, check if the path exists in MediaMTX
       if (camera.type === 'webrtc') {
-        const pathName = camera.url.split('/').slice(-2, -1)[0];
+        // Extract path name from URL (e.g., "rpicam2" from "https://admin.../rpicam2")
+        const pathName = camera.url.split('/').filter(part => part.length > 0).pop();
         const response = await axios.get(`${this.mediamtxApiUrl}/v3/paths/get/${pathName}`, this.axiosConfig);
         const isActive = response.data.ready === true;
         
