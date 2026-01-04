@@ -150,17 +150,16 @@ class CameraManager {
         } else {
           // Update existing camera status
           const camera = this.cameras.get(pathName);
-          if (camera) {
-            const wasOnline = camera.status === 'online';
-            const isNowOnline = pathInfo.ready;
-            
-            camera.status = isNowOnline ? 'online' : 'offline';
-            camera.lastSeen = pathInfo.readyTime || new Date().toISOString();
+          if (camera && camera.autodiscovered) {
+            const newStatus = pathInfo.ready ? 'online' : 'offline';
             
             // Log status changes
-            if (wasOnline !== isNowOnline) {
-              console.log(`🔄 Camera ${pathName} status changed: ${wasOnline ? 'online' : 'offline'} → ${isNowOnline ? 'online' : 'offline'}`);
+            if (camera.status !== newStatus) {
+              console.log(`🔄 Camera ${pathName}: ${camera.status} → ${newStatus}`);
             }
+            
+            camera.status = newStatus;
+            camera.lastSeen = pathInfo.readyTime || new Date().toISOString();
           }
         }
       }
@@ -269,33 +268,23 @@ class CameraManager {
     if (!camera) return false;
 
     try {
-      // For WebRTC cameras, check if the path exists in MediaMTX
-      if (camera.type === 'webrtc') {
-        // Extract path name from URL (e.g., "rpicam2" from "https://admin.../rpicam2")
-        const pathName = camera.url.split('/').filter(part => part.length > 0).pop();
-        const response = await axios.get(`${this.mediamtxApiUrl}/v3/paths/get/${pathName}`, this.axiosConfig);
-        const isActive = response.data.ready === true;
-        
-        camera.status = isActive ? 'online' : 'offline';
-        camera.lastSeen = new Date().toISOString();
-        
-        return isActive;
+      // Auto-discovered cameras are updated by discoverExistingStreams()
+      // Skip health check to avoid redundant API calls
+      if (camera.autodiscovered) {
+        return camera.status === 'online';
       }
 
-      // For RTSP cameras, check MediaMTX API
-      if (camera.type === 'rtsp') {
-        const pathName = camera.url.split('/').pop();
-        const response = await axios.get(`${this.mediamtxApiUrl}/v3/paths/get/${pathName}`, this.axiosConfig);
-        const isActive = response.data.ready === true;
-        
-        camera.status = isActive ? 'online' : 'offline';
-        camera.lastSeen = new Date().toISOString();
-        
-        return isActive;
-      }
-
-      // For other camera types, implement appropriate health checks
-      return true;
+      // For manually configured cameras, check MediaMTX API
+      // Extract path name from camera ID (which is the MediaMTX path for auto-discovered)
+      // or from the URL for manual configs
+      const pathName = camera.id;
+      const response = await axios.get(`${this.mediamtxApiUrl}/v3/paths/get/${pathName}`, this.axiosConfig);
+      const isActive = response.data.ready === true;
+      
+      camera.status = isActive ? 'online' : 'offline';
+      camera.lastSeen = new Date().toISOString();
+      
+      return isActive;
       
     } catch (error) {
       camera.status = 'error';
