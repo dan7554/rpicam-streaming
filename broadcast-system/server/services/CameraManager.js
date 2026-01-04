@@ -124,10 +124,9 @@ class CameraManager {
         // Check if we already have this camera configured
         if (!this.cameras.has(pathName)) {
           // Auto-discover new camera
-          // WebRTC requires direct access to MediaMTX for ICE/UDP connectivity
-          // Cannot proxy WebRTC media through nginx/ALB (only signaling works via HTTP)
-          // Use HTTPS on MediaMTX public domain to avoid mixed content errors
-          const webrtcUrl = `https://mediamtx.racetrackstreaming.com:8889/${pathName}`;
+          // WebRTC via NLB with TLS termination on port 443 (using ACM certificate)
+          // NLB forwards to MediaMTX port 8889 for actual WebRTC signaling
+          const webrtcUrl = `https://mediamtx.racetrackstreaming.com/${pathName}`;
           
           const discoveredCamera = {
             id: pathName,
