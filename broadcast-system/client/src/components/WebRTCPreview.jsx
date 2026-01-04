@@ -7,6 +7,7 @@ const WebRTCPreview = ({ url }) => {
   const pcRef = useRef(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [stream, setStream] = useState(null);
 
   useEffect(() => {
     if (!url) return;
@@ -57,19 +58,8 @@ const WebRTCPreview = ({ url }) => {
           // console.log('WebRTCPreview','📺 Received track:', event.track.kind, event.track.id);
           if (event.track.kind === 'video') {
             setIsLoading(false);
-
-            // console.log('WebRTCPreview','✅ Setting video stream to video element', videoRef.current);
-            if (videoRef.current) {
-              videoRef.current.srcObject = new MediaStream([event.track]);
-            } else {
-              console.warn('WebRTCPreview', '⚠️ Video element not ready, will retry...');
-              // Retry after a short delay
-              setTimeout(() => {
-                if (videoRef.current) {
-                  videoRef.current.srcObject = new MediaStream([event.track]);
-                }
-              }, 100);
-            }
+            const mediaStream = new MediaStream([event.track]);
+            setStream(mediaStream);
           }
         };
 
@@ -143,6 +133,13 @@ const WebRTCPreview = ({ url }) => {
       }
     };
   }, [url]);
+
+  // Set video stream when it becomes available
+  useEffect(() => {
+    if (stream && videoRef.current) {
+      videoRef.current.srcObject = stream;
+    }
+  }, [stream]);
 
   if (error) {
     return <div style={{ padding: '20px', color: 'red' }}>Error: {error}</div>;
