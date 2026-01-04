@@ -10,7 +10,7 @@ class CameraManager {
     const mediaUrl = new URL(mediamtxUrl);
     const mediaHost = process.env.MEDIAMTX_HOST || mediaUrl.hostname;
     const mediaPort = process.env.MEDIAMTX_API_PORT || '9997';
-    const mediaProtocol = process.env.MEDIAMTX_API_PROTOCOL || 'https';
+    const mediaProtocol = process.env.MEDIAMTX_API_PROTOCOL || mediaUrl.protocol.replace(':', '');
     
     this.mediamtxApiUrl = process.env.MEDIAMTX_API_URL || `${mediaProtocol}://${mediaHost}:${mediaPort}`;
     this.mediamtxHost = mediaHost;

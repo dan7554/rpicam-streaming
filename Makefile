@@ -86,10 +86,10 @@ BROADCAST_HEALTH_PATH := /health
 BROADCAST_CPU := 256         # 0.25 vCPU
 BROADCAST_MEMORY := 512      # 512 MB
 
-# Service discovery: MediaMTX accessible via ECS private IP (Fargate task)
-# Internal communication: use private task IP for direct connection within VPC
+# Service discovery: MediaMTX accessible via public NLB domain
+# Internal communication: use public domain through NLB (more reliable than tracking IPs)
 # Use API port (9997) for admin connections
-MEDIAMTX_SUBDOMAIN ?= 172.31.82.2
+MEDIAMTX_SUBDOMAIN ?= mediamtx.racetrackstreaming.com
 MEDIAMTX_SERVICE_URL := http://$(MEDIAMTX_SUBDOMAIN):$(MEDIAMTX_PORT_API)
 
 ###############################################
