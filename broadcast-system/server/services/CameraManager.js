@@ -124,12 +124,10 @@ class CameraManager {
         // Check if we already have this camera configured
         if (!this.cameras.has(pathName)) {
           // Auto-discover new camera
-          // Use BROADCAST_URL for WebRTC to avoid mixed content errors (HTTPS page loading HTTP content)
-          // WebRTC streams are proxied through nginx (configured in nginx-ssl.conf)
-          // Note: Don't include /whep here - WebRTCPreview component adds it
-          const webrtcUrl = this.broadcastUrl 
-            ? `${this.broadcastUrl}/${pathName}`
-            : `http://${this.mediamtxHost}:8889/${pathName}`;
+          // WebRTC requires direct access to MediaMTX for ICE/UDP connectivity
+          // Cannot proxy WebRTC media through nginx/ALB (only signaling works via HTTP)
+          // Use MediaMTX public domain directly on port 8889
+          const webrtcUrl = `http://mediamtx.racetrackstreaming.com:8889/${pathName}`;
           
           const discoveredCamera = {
             id: pathName,
