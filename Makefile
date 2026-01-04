@@ -457,7 +457,8 @@ broadcast-task-def: broadcast-ecr-push broadcast-logs ## 📋 Create broadcast-s
 	    \"environment\": [ \
 	      {\"name\": \"NODE_ENV\", \"value\": \"production\"}, \
 	      {\"name\": \"PORT\", \"value\": \"80\"}, \
-	      {\"name\": \"MEDIAMTX_URL\", \"value\": \"$(MEDIAMTX_SERVICE_URL)\"} \
+	      {\"name\": \"MEDIAMTX_URL\", \"value\": \"$(MEDIAMTX_SERVICE_URL)\"}, \
+	      {\"name\": \"BROADCAST_URL\", \"value\": \"https://admin.racetrackstreaming.com\"} \
 	    ], \
 	    \"logConfiguration\": { \
 	      \"logDriver\": \"awslogs\", \

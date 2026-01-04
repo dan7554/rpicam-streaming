@@ -14,6 +14,8 @@ class CameraManager {
     
     this.mediamtxApiUrl = process.env.MEDIAMTX_API_URL || `${mediaProtocol}://${mediaHost}:${mediaPort}`;
     this.mediamtxHost = mediaHost;
+    // Use BROADCAST_URL for client-facing WebRTC URLs (avoids mixed content errors)
+    this.broadcastUrl = process.env.BROADCAST_URL || null;
     this.cameras = new Map();
     this.activeCameras = new Set();
     this.previewCache = new Map();
@@ -122,12 +124,17 @@ class CameraManager {
         // Check if we already have this camera configured
         if (!this.cameras.has(pathName)) {
           // Auto-discover new camera
-          // Use HTTP instead of HTTPS, and remove hardcoded port to use service discovery
+          // Use BROADCAST_URL for WebRTC to avoid mixed content errors (HTTPS page loading HTTP content)
+          // WebRTC streams are proxied through nginx (configured in nginx-ssl.conf)
+          const webrtcUrl = this.broadcastUrl 
+            ? `${this.broadcastUrl}/${pathName}/whep`
+            : `http://${this.mediamtxHost}:8889/${pathName}/`;
+          
           const discoveredCamera = {
             id: pathName,
             name: `${pathName}`,
             type: 'webrtc',
-            url: `http://${this.mediamtxHost}:8889/${pathName}/`,
+            url: webrtcUrl,
             rtspUrl: `rtsp://${this.mediamtxHost}:8554/${pathName}`,
             enabled: true,
             autodiscovered: true,

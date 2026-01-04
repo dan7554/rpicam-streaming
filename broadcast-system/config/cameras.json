@@ -4,8 +4,8 @@
       "id": "2378c1d2-a85f-496a-88a8-e9189c3b16ff",
       "name": "Camera 2",
       "type": "webrtc",
-      "url": "http://broadcast-alb-1927473588.us-east-1.elb.amazonaws.com/rpicam2/",
-      "rtspUrl": "rtsp://3.94.206.123:8554/rpicam2",
+      "url": "https://admin.racetrackstreaming.com/rpicam2/whep",
+      "rtspUrl": "rtsp://mediamtx.racetrackstreaming.com:8554/rpicam2",
       "enabled": true,
       "position": {
         "x": 0,
@@ -26,8 +26,8 @@
       "id": "7319760a-e9ab-45e4-ab00-93f286ff9590",
       "name": "Camera 3",
       "type": "webrtc",
-      "url": "http://broadcast-alb-1927473588.us-east-1.elb.amazonaws.com/rpicam3/",
-      "rtspUrl": "rtsp://3.94.206.123:8554/rpicam3",
+      "url": "https://admin.racetrackstreaming.com/rpicam3/whep",
+      "rtspUrl": "rtsp://mediamtx.racetrackstreaming.com:8554/rpicam3",
       "enabled": true,
       "position": {
         "x": 0,
