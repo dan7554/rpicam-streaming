@@ -126,9 +126,10 @@ class CameraManager {
           // Auto-discover new camera
           // Use BROADCAST_URL for WebRTC to avoid mixed content errors (HTTPS page loading HTTP content)
           // WebRTC streams are proxied through nginx (configured in nginx-ssl.conf)
+          // Note: Don't include /whep here - WebRTCPreview component adds it
           const webrtcUrl = this.broadcastUrl 
-            ? `${this.broadcastUrl}/${pathName}/whep`
-            : `http://${this.mediamtxHost}:8889/${pathName}/`;
+            ? `${this.broadcastUrl}/${pathName}`
+            : `http://${this.mediamtxHost}:8889/${pathName}`;
           
           const discoveredCamera = {
             id: pathName,
