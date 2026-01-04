@@ -143,16 +143,11 @@ if [ $DEPLOY_ALL -eq 1 ]; then
     fi
     echo ""
     
-    # Query AWS for MediaMTX IP once (shared across all cameras)
-    echo "🔍 Querying AWS for MediaMTX IP..."
-    MEDIAMTX_IP=$(aws ecs list-tasks --cluster broadcast-cluster --service-name mediamtx-service --desired-status RUNNING --region us-east-1 --query 'taskArns[0]' --output text 2>/dev/null | xargs -I {} aws ecs describe-tasks --cluster broadcast-cluster --tasks {} --region us-east-1 --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' --output text 2>/dev/null | xargs -I {} aws ec2 describe-network-interfaces --network-interface-ids {} --region us-east-1 --query 'NetworkInterfaces[0].Association.PublicIp' --output text 2>/dev/null)
-    
-    if [ -n "$MEDIAMTX_IP" ] && [ "$MEDIAMTX_IP" != "None" ]; then
-        echo "✅ MediaMTX IP: $MEDIAMTX_IP"
-        echo "$MEDIAMTX_IP" > /tmp/mediamtx-host.tmp
-    else
-        echo "⚠️  Could not get MediaMTX IP from AWS. Using existing config if available."
-    fi
+    # Use public MediaMTX domain (no need to query AWS)
+    echo "🔍 Configuring MediaMTX host..."
+    MEDIAMTX_HOST="mediamtx.racetrackstreaming.com"
+    echo "✅ MediaMTX Host: $MEDIAMTX_HOST"
+    echo "$MEDIAMTX_HOST" > /tmp/mediamtx-host.tmp
     echo ""
     
     # Deploy to each camera
@@ -172,17 +167,12 @@ else
     echo "🎯 Target Host: $PI_HOST"
     echo ""
 
-    # Query AWS for current MediaMTX Fargate IP
-    echo "🔍 Querying AWS for MediaMTX IP..."
-    MEDIAMTX_IP=$(aws ecs list-tasks --cluster broadcast-cluster --service-name mediamtx-service --desired-status RUNNING --region us-east-1 --query 'taskArns[0]' --output text 2>/dev/null | xargs -I {} aws ecs describe-tasks --cluster broadcast-cluster --tasks {} --region us-east-1 --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' --output text 2>/dev/null | xargs -I {} aws ec2 describe-network-interfaces --network-interface-ids {} --region us-east-1 --query 'NetworkInterfaces[0].Association.PublicIp' --output text 2>/dev/null)
-
-    if [ -n "$MEDIAMTX_IP" ] && [ "$MEDIAMTX_IP" != "None" ]; then
-        echo "✅ MediaMTX IP: $MEDIAMTX_IP"
-        # Create a temporary config file with the IP
-        echo "$MEDIAMTX_IP" > /tmp/mediamtx-host.tmp
-    else
-        echo "⚠️  Could not get MediaMTX IP from AWS. Using existing config if available."
-    fi
+    # Use public MediaMTX domain (no need to query AWS)
+    echo "🔍 Configuring MediaMTX host..."
+    MEDIAMTX_HOST="mediamtx.racetrackstreaming.com"
+    echo "✅ MediaMTX Host: $MEDIAMTX_HOST"
+    # Create a temporary config file with the host
+    echo "$MEDIAMTX_HOST" > /tmp/mediamtx-host.tmp
     echo ""
 
     deploy_to_camera "$PI_HOST" "rpicam"

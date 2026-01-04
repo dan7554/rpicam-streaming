@@ -57,7 +57,7 @@ MEDIAMTX_IMAGE := bluenviron/mediamtx:latest
 MEDIAMTX_REPO := mediamtx
 MEDIAMTX_ECR := $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(MEDIAMTX_REPO):latest
 MEDIAMTX_TASK_FAMILY := mediamtx-task
-MEDIAMTX_SERVICE := mediamtx-service
+MEDIAMTX_SERVICE := mediamtx-service-v2
 MEDIAMTX_LOG_GROUP := /ecs/mediamtx
 MEDIAMTX_PORT_RTSP := 8554
 MEDIAMTX_PORT_HLS := 8888
@@ -86,10 +86,11 @@ BROADCAST_HEALTH_PATH := /health
 BROADCAST_CPU := 256         # 0.25 vCPU
 BROADCAST_MEMORY := 512      # 512 MB
 
-# Service discovery: MediaMTX service via Route53 DNS (survives task restarts)
-# Updated by: ./scripts/update-mediamtx-dns.sh after deployment
-MEDIAMTX_SUBDOMAIN ?= mediamtx.racetrackstreaming.com
-MEDIAMTX_SERVICE_URL := http://$(MEDIAMTX_SUBDOMAIN):$(MEDIAMTX_PORT_HLS)
+# Service discovery: MediaMTX accessible via ECS private IP (Fargate task)
+# Internal communication: use private task IP for direct connection within VPC
+# Use API port (9997) for admin connections
+MEDIAMTX_SUBDOMAIN ?= 172.31.82.2
+MEDIAMTX_SERVICE_URL := http://$(MEDIAMTX_SUBDOMAIN):$(MEDIAMTX_PORT_API)
 
 ###############################################
 # ALB & Security Group Configuration
@@ -103,9 +104,17 @@ ECS_SECURITY_GROUP := sg-0a39a0404cc7eac61
 MEDIAMTX_TG_NAME := mediamtx-targets
 MEDIAMTX_RTSP_TG_NAME := mediamtx-rtsp
 
+# Network Load Balancer for MediaMTX (supports TCP/UDP for RTSP, WebRTC, RTMP)
+NLB_NAME := mediamtx-nlb
+NLB_TG_RTSP := mediamtx-nlb-rtsp
+NLB_TG_WEBRTC := mediamtx-nlb-webrtc
+NLB_TG_API := mediamtx-nlb-api
+NLB_TG_RTMP := mediamtx-nlb-rtmp
+
 # Domain Configuration
 ADMIN_DOMAIN := admin.racetrackstreaming.com    # Broadcast admin dashboard
 STREAM_DOMAIN := stream.racetrackstreaming.com   # MediaMTX HLS/RTSP streaming
+MEDIAMTX_DOMAIN := mediamtx.racetrackstreaming.com  # MediaMTX public API/RTSP/WebRTC
 DOMAIN := $(ADMIN_DOMAIN)                        # Default domain (for backward compatibility)
 
 # SSL/TLS Configuration
@@ -844,6 +853,8 @@ deploy-fargate: ## 🚀 Deploy both services to Fargate (idempotent end-to-end)
 	$(MAKE) -s broadcast-ecr-repo broadcast-build broadcast-ecr-push broadcast-logs broadcast-task-def broadcast-deploy; \
 	# Ensure ALB attach/config for broadcast
 	$(MAKE) -s fix-broadcast-service; \
+	echo "\n--- Setup Cloudflare DNS CNAME records ---\n"; \
+	./scripts/setup-dns-cname.sh; \
 	# Final status
 	$(MAKE) -s status; \
 	echo "\n✅ Full deploy (Fargate) complete"
@@ -893,7 +904,25 @@ logs: ## 📝 Tail logs for both services
 # DNS & Access
 ###############################################
 
-.PHONY: dns-info dns-check
+###############################################
+# DNS & Access
+###############################################
+
+.PHONY: dns-info dns-check dns-setup
+
+dns-setup: ## 🌐 Setup Cloudflare CNAME records for broadcast subdomains
+	@echo "🔧 Setting up Cloudflare DNS records..."
+	@if [ -z "$(CLOUDFLARE_API_TOKEN)" ]; then \
+	  echo "⚠️  CLOUDFLARE_API_TOKEN not set. Skipping DNS setup."; \
+	  echo "   To enable: export CLOUDFLARE_API_TOKEN='your-token'"; \
+	  exit 0; \
+	fi
+	@if [ -z "$(CLOUDFLARE_ZONE_ID)" ]; then \
+	  echo "⚠️  CLOUDFLARE_ZONE_ID not set. Skipping DNS setup."; \
+	  echo "   To enable: export CLOUDFLARE_ZONE_ID='your-zone-id'"; \
+	  exit 0; \
+	fi
+	@CLOUDFLARE_API_TOKEN="$(CLOUDFLARE_API_TOKEN)" CLOUDFLARE_ZONE_ID="$(CLOUDFLARE_ZONE_ID)" ./scripts/setup-dns-cname.sh
 
 dns-info: ## 🌐 Show DNS and access information
 	@echo "🌐 Subdomain Configuration"
@@ -901,6 +930,7 @@ dns-info: ## 🌐 Show DNS and access information
 	@echo ""
 	@echo "Admin Dashboard Domain: $(ADMIN_DOMAIN)"
 	@echo "Streaming Domain:       $(STREAM_DOMAIN)"
+	@echo "MediaMTX API Domain:    $(MEDIAMTX_DOMAIN)"
 	@ALB_DNS=$$(aws elbv2 describe-load-balancers --region $(AWS_REGION) --query "LoadBalancers[?LoadBalancerName=='$(ALB_NAME)'].DNSName" --output text 2>/dev/null); \
 	if [ -n "$$ALB_DNS" ]; then \
 	  echo ""; \
@@ -914,14 +944,20 @@ dns-info: ## 🌐 Show DNS and access information
 	  echo "  Name:    $(STREAM_DOMAIN)"; \
 	  echo "  Type:    CNAME"; \
 	  echo "  Target:  $$ALB_DNS"; \
+	  echo ""; \
+	  echo "  Name:    $(MEDIAMTX_DOMAIN)"; \
+	  echo "  Type:    CNAME"; \
+	  echo "  Target:  $$ALB_DNS (or NLB if created)"; \
 	else \
 	  echo "❌ ALB not found"; \
 	fi
 	@echo ""
 	@echo "📱 Access URLs:"
 	@echo "  • Admin Dashboard:     https://$(ADMIN_DOMAIN)"
-	@echo "  • HLS Streams:         https://$(STREAM_DOMAIN)/hls/<stream>/index.m3u8"
-	@echo "  • MediaMTX Direct:     http://<mediamtx-ip>:9997"
+	@echo "  • Stream Dashboard:    https://$(STREAM_DOMAIN)/hls/<stream>/index.m3u8"
+	@echo "  • MediaMTX API:        http://$(MEDIAMTX_DOMAIN):9997/v3/paths/list"
+	@echo "  • MediaMTX RTSP:       rtsp://$(MEDIAMTX_DOMAIN):8554/<stream>"
+	@echo "  • MediaMTX WebRTC:     http://$(MEDIAMTX_DOMAIN):8889/<stream>"
 	@echo ""
 
 dns-check: ## ✅ Check if domains are accessible
@@ -945,80 +981,282 @@ dns-check: ## ✅ Check if domains are accessible
 	@echo "  Run: make dns-info"
 
 ###############################################
-# NLB DEPLOYMENT FOR RTMP (Port 1935)
+# MEDIAMTX NLB - Multi-Protocol Public Access
 ###############################################
+# Network Load Balancer for MediaMTX supporting:
+# - RTSP (8554) for camera streams
+# - WebRTC (8889) for browser playback  
+# - API (9997) for management
+# - RTMP (1935) for streaming
 
-.PHONY: nlb-create nlb-deploy nlb-register nlb-status nlb-delete
+.PHONY: mediamtx-nlb-create mediamtx-nlb-targets mediamtx-nlb-listeners mediamtx-nlb-register mediamtx-nlb-status mediamtx-nlb-delete mediamtx-nlb-deploy
 
-nlb-create: ## 🔨 Create Network Load Balancer for RTMP streaming
-	@echo "🔨 Creating NLB for RTMP (port 1935)..."
-	@aws cloudformation create-stack \
-	  --stack-name broadcast-rtmp-nlb \
-	  --template-body file://rtmp-nlb-cloudformation.json \
-	  --region $(AWS_REGION) \
-	  --capabilities CAPABILITY_IAM 2>&1 | grep -E "StackId|Error" || echo "Stack creation initiated"
+mediamtx-nlb-create: ## 🔨 Create Network Load Balancer for MediaMTX
+	@echo "🔨 Creating MediaMTX NLB..."
+	@NLB_ARN=$$(aws elbv2 describe-load-balancers --region $(AWS_REGION) --query "LoadBalancers[?LoadBalancerName=='$(NLB_NAME)'].LoadBalancerArn" --output text 2>/dev/null); \
+	if [ -n "$$NLB_ARN" ]; then \
+	  echo "✅ NLB already exists: $$NLB_ARN"; \
+	  aws elbv2 describe-load-balancers --load-balancer-arns $$NLB_ARN --region $(AWS_REGION) --query 'LoadBalancers[0].{DNS:DNSName,State:State}' --output table; \
+	else \
+	  SUBNETS=$$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$(AWS_VPC_ID)" --region $(AWS_REGION) --query "Subnets[*].SubnetId" --output text | tr '\t' ' '); \
+	  echo "Creating NLB in subnets: $$SUBNETS"; \
+	  NLB_ARN=$$(aws elbv2 create-load-balancer \
+	    --name $(NLB_NAME) \
+	    --type network \
+	    --scheme internet-facing \
+	    --subnets $$SUBNETS \
+	    --region $(AWS_REGION) \
+	    --query 'LoadBalancers[0].LoadBalancerArn' \
+	    --output text); \
+	  echo "✅ Created NLB: $$NLB_ARN"; \
+	  echo "🔧 Enabling cross-zone load balancing..."; \
+	  aws elbv2 modify-load-balancer-attributes \
+	    --load-balancer-arn $$NLB_ARN \
+	    --region $(AWS_REGION) \
+	    --attributes Key=load_balancing.cross_zone.enabled,Value=true > /dev/null; \
+	  echo "✅ Cross-zone load balancing enabled"; \
+	  aws elbv2 describe-load-balancers --load-balancer-arns $$NLB_ARN --region $(AWS_REGION) --query 'LoadBalancers[0].{DNS:DNSName,State:State}' --output table; \
+	fi
+
+mediamtx-nlb-targets: ## 🎯 Create NLB target groups for all MediaMTX ports
+	@echo "🎯 Creating MediaMTX NLB target groups..."
 	@echo ""
-	@echo "⏳ Waiting for NLB to be active (this takes ~5 minutes)..."
-	@echo "   Check status: make nlb-status"
-
-nlb-status: ## 📊 Check NLB status and get DNS name
-	@echo "📊 NLB Status:"
-	@aws cloudformation describe-stacks \
-	  --stack-name broadcast-rtmp-nlb \
-	  --region $(AWS_REGION) \
-	  --query 'Stacks[0].[StackStatus,StackStatusReason]' \
-	  --output text 2>/dev/null || echo "Stack not found"
-	@echo ""
-	@echo "📍 NLB DNS Name:"
-	@aws cloudformation describe-stacks \
-	  --stack-name broadcast-rtmp-nlb \
-	  --region $(AWS_REGION) \
-	  --query 'Stacks[0].Outputs[?OutputKey==`NLBDNSName`].OutputValue' \
-	  --output text 2>/dev/null || echo "Not available yet"
-	@echo ""
-	@echo "🎯 Target Group Status:"
-	@aws elbv2 describe-target-health \
-	  --target-group-arn $(shell aws cloudformation describe-stacks --stack-name broadcast-rtmp-nlb --region $(AWS_REGION) --query 'Stacks[0].Outputs[?OutputKey==`RTMPTargetGroupArn`].OutputValue' --output text 2>/dev/null) \
-	  --region $(AWS_REGION) \
-	  --query 'TargetHealthDescriptions[*].[Target.Id,TargetHealth.State,TargetHealth.Reason]' \
-	  --output table 2>/dev/null || echo "Target group not ready"
-
-nlb-register: ## 🎯 Register Fargate tasks with NLB target group
-	@echo "🎯 Registering MediaMTX tasks with RTMP target group..."
-	@TG_ARN=$$(aws cloudformation describe-stacks --stack-name broadcast-rtmp-nlb --region $(AWS_REGION) --query 'Stacks[0].Outputs[?OutputKey==`RTMPTargetGroupArn`].OutputValue' --output text 2>/dev/null); \
+	@echo "Creating RTSP target group (port 8554)..."
+	@TG_ARN=$$(aws elbv2 describe-target-groups --region $(AWS_REGION) --query "TargetGroups[?TargetGroupName=='$(NLB_TG_RTSP)'].TargetGroupArn" --output text 2>/dev/null); \
 	if [ -z "$$TG_ARN" ]; then \
-	  echo "❌ Target group not found. Run 'make nlb-create' first."; \
+	  aws elbv2 create-target-group \
+	    --name $(NLB_TG_RTSP) \
+	    --protocol TCP \
+	    --port $(MEDIAMTX_PORT_RTSP) \
+	    --vpc-id $(AWS_VPC_ID) \
+	    --target-type ip \
+	    --health-check-protocol TCP \
+	    --health-check-interval-seconds 30 \
+	    --healthy-threshold-count 2 \
+	    --unhealthy-threshold-count 2 \
+	    --region $(AWS_REGION) --query 'TargetGroups[0].TargetGroupArn' --output text; \
+	  echo "✅ Created RTSP target group"; \
+	else \
+	  echo "✅ RTSP target group exists: $$TG_ARN"; \
+	fi
+	@echo ""
+	@echo "Creating WebRTC target group (port 8889)..."
+	@TG_ARN=$$(aws elbv2 describe-target-groups --region $(AWS_REGION) --query "TargetGroups[?TargetGroupName=='$(NLB_TG_WEBRTC)'].TargetGroupArn" --output text 2>/dev/null); \
+	if [ -z "$$TG_ARN" ]; then \
+	  aws elbv2 create-target-group \
+	    --name $(NLB_TG_WEBRTC) \
+	    --protocol TCP \
+	    --port $(MEDIAMTX_PORT_WEBRTC) \
+	    --vpc-id $(AWS_VPC_ID) \
+	    --target-type ip \
+	    --health-check-protocol TCP \
+	    --health-check-interval-seconds 30 \
+	    --healthy-threshold-count 2 \
+	    --unhealthy-threshold-count 2 \
+	    --region $(AWS_REGION) --query 'TargetGroups[0].TargetGroupArn' --output text; \
+	  echo "✅ Created WebRTC target group"; \
+	else \
+	  echo "✅ WebRTC target group exists: $$TG_ARN"; \
+	fi
+	@echo ""
+	@echo "Creating API target group (port 9997)..."
+	@TG_ARN=$$(aws elbv2 describe-target-groups --region $(AWS_REGION) --query "TargetGroups[?TargetGroupName=='$(NLB_TG_API)'].TargetGroupArn" --output text 2>/dev/null); \
+	if [ -z "$$TG_ARN" ]; then \
+	  aws elbv2 create-target-group \
+	    --name $(NLB_TG_API) \
+	    --protocol TCP \
+	    --port $(MEDIAMTX_PORT_API) \
+	    --vpc-id $(AWS_VPC_ID) \
+	    --target-type ip \
+	    --health-check-protocol TCP \
+	    --health-check-interval-seconds 30 \
+	    --healthy-threshold-count 2 \
+	    --unhealthy-threshold-count 2 \
+	    --region $(AWS_REGION) --query 'TargetGroups[0].TargetGroupArn' --output text; \
+	  echo "✅ Created API target group"; \
+	else \
+	  echo "✅ API target group exists: $$TG_ARN"; \
+	fi
+	@echo ""
+	@echo "Creating RTMP target group (port 1935)..."
+	@TG_ARN=$$(aws elbv2 describe-target-groups --region $(AWS_REGION) --query "TargetGroups[?TargetGroupName=='$(NLB_TG_RTMP)'].TargetGroupArn" --output text 2>/dev/null); \
+	if [ -z "$$TG_ARN" ]; then \
+	  aws elbv2 create-target-group \
+	    --name $(NLB_TG_RTMP) \
+	    --protocol TCP \
+	    --port $(MEDIAMTX_PORT_RTMP) \
+	    --vpc-id $(AWS_VPC_ID) \
+	    --target-type ip \
+	    --health-check-protocol TCP \
+	    --health-check-interval-seconds 30 \
+	    --healthy-threshold-count 2 \
+	    --unhealthy-threshold-count 2 \
+	    --region $(AWS_REGION) --query 'TargetGroups[0].TargetGroupArn' --output text; \
+	  echo "✅ Created RTMP target group"; \
+	else \
+	  echo "✅ RTMP target group exists: $$TG_ARN"; \
+	fi
+	@echo ""
+	@echo "✅ All target groups ready"
+
+mediamtx-nlb-listeners: ## 🔊 Create NLB listeners for all MediaMTX ports
+	@echo "🔊 Creating MediaMTX NLB listeners..."
+	@NLB_ARN=$$(aws elbv2 describe-load-balancers --region $(AWS_REGION) --query "LoadBalancers[?LoadBalancerName=='$(NLB_NAME)'].LoadBalancerArn" --output text 2>/dev/null); \
+	if [ -z "$$NLB_ARN" ]; then \
+	  echo "❌ NLB not found. Run 'make mediamtx-nlb-create' first."; \
 	  exit 1; \
 	fi; \
-	echo "Target Group: $$TG_ARN"; \
-	TASK_IPS=$$(aws ecs describe-tasks \
+	echo "NLB: $$NLB_ARN"; \
+	echo ""; \
+	echo "Creating RTSP listener (port 8554)..."; \
+	TG_RTSP=$$(aws elbv2 describe-target-groups --region $(AWS_REGION) --query "TargetGroups[?TargetGroupName=='$(NLB_TG_RTSP)'].TargetGroupArn" --output text); \
+	aws elbv2 create-listener \
+	  --load-balancer-arn $$NLB_ARN \
+	  --protocol TCP \
+	  --port $(MEDIAMTX_PORT_RTSP) \
+	  --default-actions Type=forward,TargetGroupArn=$$TG_RTSP \
+	  --region $(AWS_REGION) 2>&1 | grep -E "ListenerArn|Error" || echo "✅ RTSP listener ready"; \
+	echo ""; \
+	echo "Creating WebRTC listener (port 8889)..."; \
+	TG_WEBRTC=$$(aws elbv2 describe-target-groups --region $(AWS_REGION) --query "TargetGroups[?TargetGroupName=='$(NLB_TG_WEBRTC)'].TargetGroupArn" --output text); \
+	aws elbv2 create-listener \
+	  --load-balancer-arn $$NLB_ARN \
+	  --protocol TCP \
+	  --port $(MEDIAMTX_PORT_WEBRTC) \
+	  --default-actions Type=forward,TargetGroupArn=$$TG_WEBRTC \
+	  --region $(AWS_REGION) 2>&1 | grep -E "ListenerArn|Error" || echo "✅ WebRTC listener ready"; \
+	echo ""; \
+	echo "Creating API listener (port 9997)..."; \
+	TG_API=$$(aws elbv2 describe-target-groups --region $(AWS_REGION) --query "TargetGroups[?TargetGroupName=='$(NLB_TG_API)'].TargetGroupArn" --output text); \
+	aws elbv2 create-listener \
+	  --load-balancer-arn $$NLB_ARN \
+	  --protocol TCP \
+	  --port $(MEDIAMTX_PORT_API) \
+	  --default-actions Type=forward,TargetGroupArn=$$TG_API \
+	  --region $(AWS_REGION) 2>&1 | grep -E "ListenerArn|Error" || echo "✅ API listener ready"; \
+	echo ""; \
+	echo "Creating RTMP listener (port 1935)..."; \
+	TG_RTMP=$$(aws elbv2 describe-target-groups --region $(AWS_REGION) --query "TargetGroups[?TargetGroupName=='$(NLB_TG_RTMP)'].TargetGroupArn" --output text); \
+	aws elbv2 create-listener \
+	  --load-balancer-arn $$NLB_ARN \
+	  --protocol TCP \
+	  --port $(MEDIAMTX_PORT_RTMP) \
+	  --default-actions Type=forward,TargetGroupArn=$$TG_RTMP \
+	  --region $(AWS_REGION) 2>&1 | grep -E "ListenerArn|Error" || echo "✅ RTMP listener ready"; \
+	echo ""; \
+	echo "✅ All listeners configured"
+
+mediamtx-nlb-register: ## 📝 Register MediaMTX tasks with NLB target groups
+	@echo "📝 Registering MediaMTX tasks with NLB..."
+	@TASK_IPS=$$(aws ecs describe-tasks \
 	  --cluster $(ECS_CLUSTER) \
 	  --tasks $$(aws ecs list-tasks --cluster $(ECS_CLUSTER) --service-name $(MEDIAMTX_SERVICE) --region $(AWS_REGION) --query 'taskArns[*]' --output text 2>/dev/null) \
 	  --region $(AWS_REGION) \
 	  --query 'tasks[*].attachments[0].details[?name==`privateIPv4Address`].value' \
 	  --output text 2>/dev/null); \
 	if [ -z "$$TASK_IPS" ]; then \
-	  echo "❌ No running tasks found"; \
+	  echo "❌ No running MediaMTX tasks found"; \
 	  exit 1; \
 	fi; \
 	echo "Found task IPs: $$TASK_IPS"; \
-	for IP in $$TASK_IPS; do \
-	  echo "Registering $$IP:1935..."; \
-	  aws elbv2 register-targets \
-	    --target-group-arn $$TG_ARN \
-	    --targets Id=$$IP,Port=1935 \
-	    --region $(AWS_REGION) 2>&1 | grep -E "Error|Warning" || echo "✅ Registered"; \
+	echo ""; \
+	for TG_NAME in $(NLB_TG_RTSP) $(NLB_TG_WEBRTC) $(NLB_TG_API) $(NLB_TG_RTMP); do \
+	  TG_ARN=$$(aws elbv2 describe-target-groups --region $(AWS_REGION) --query "TargetGroups[?TargetGroupName=='$$TG_NAME'].TargetGroupArn" --output text); \
+	  PORT=$$(aws elbv2 describe-target-groups --target-group-arns $$TG_ARN --region $(AWS_REGION) --query 'TargetGroups[0].Port' --output text); \
+	  echo "Registering with $$TG_NAME (port $$PORT)..."; \
+	  for IP in $$TASK_IPS; do \
+	    aws elbv2 register-targets \
+	      --target-group-arn $$TG_ARN \
+	      --targets Id=$$IP,Port=$$PORT \
+	      --region $(AWS_REGION) 2>&1 | grep -E "Error|Warning" || echo "  ✅ $$IP:$$PORT"; \
+	  done; \
+	  echo ""; \
+	done; \
+	echo "✅ Registration complete"
+
+mediamtx-nlb-status: ## 📊 Show MediaMTX NLB status and health
+	@echo "📊 MediaMTX NLB Status"
+	@echo "===================="
+	@echo ""
+	@NLB_DNS=$$(aws elbv2 describe-load-balancers --region $(AWS_REGION) --query "LoadBalancers[?LoadBalancerName=='$(NLB_NAME)'].DNSName" --output text 2>/dev/null); \
+	if [ -z "$$NLB_DNS" ]; then \
+	  echo "❌ NLB not found"; \
+	else \
+	  echo "NLB DNS: $$NLB_DNS"; \
+	  aws elbv2 describe-load-balancers --region $(AWS_REGION) --query "LoadBalancers[?LoadBalancerName=='$(NLB_NAME)'].{Name:LoadBalancerName,State:State.Code,Type:Type}" --output table; \
+	fi
+	@echo ""
+	@echo "Target Group Health:"
+	@echo "-------------------"
+	@for TG_NAME in $(NLB_TG_RTSP) $(NLB_TG_WEBRTC) $(NLB_TG_API) $(NLB_TG_RTMP); do \
+	  TG_ARN=$$(aws elbv2 describe-target-groups --region $(AWS_REGION) --query "TargetGroups[?TargetGroupName=='$$TG_NAME'].TargetGroupArn" --output text 2>/dev/null); \
+	  if [ -n "$$TG_ARN" ]; then \
+	    echo ""; \
+	    echo "$$TG_NAME:"; \
+	    aws elbv2 describe-target-health --target-group-arn $$TG_ARN --region $(AWS_REGION) --query 'TargetHealthDescriptions[*].{Target:Target.Id,Port:Target.Port,State:TargetHealth.State}' --output table 2>/dev/null || echo "  No targets"; \
+	  fi; \
 	done
 	@echo ""
-	@echo "✅ Task registration complete"
+	@echo "Listeners:"
+	@echo "----------"
+	@NLB_ARN=$$(aws elbv2 describe-load-balancers --region $(AWS_REGION) --query "LoadBalancers[?LoadBalancerName=='$(NLB_NAME)'].LoadBalancerArn" --output text 2>/dev/null); \
+	if [ -n "$$NLB_ARN" ]; then \
+	  aws elbv2 describe-listeners --load-balancer-arn $$NLB_ARN --region $(AWS_REGION) --query 'Listeners[*].{Port:Port,Protocol:Protocol}' --output table 2>/dev/null || echo "No listeners"; \
+	fi
 
-nlb-deploy: nlb-create nlb-register ## 🚀 Full NLB deployment (create + register targets)
-	@echo "✅ NLB deployment initiated!"
+mediamtx-nlb-disable-healthchecks: ## ⚠️  Disable all NLB health checks (relaxes intervals and thresholds)
+	@echo "⚠️  Relaxing health checks for all MediaMTX NLB target groups..."
 	@echo ""
-	@echo "📋 Next steps:"
-	@echo "  1. Wait 5-10 minutes for NLB to become active"
-	@echo "  2. Check status:  make nlb-status"
-	@echo "  3. Update RPi:    make update-rpi-rtmp"
+	@for TG_NAME in $(NLB_TG_RTSP) $(NLB_TG_WEBRTC) $(NLB_TG_API) $(NLB_TG_RTMP) mediamtx-nlb-hls; do \
+	  echo "Processing $$TG_NAME..."; \
+	  TG_ARN=$$(aws elbv2 describe-target-groups --names "$$TG_NAME" --region $(AWS_REGION) --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null); \
+	  if [ -n "$$TG_ARN" ] && [ "$$TG_ARN" != "None" ]; then \
+	    aws elbv2 modify-target-group \
+	      --target-group-arn "$$TG_ARN" \
+	      --region $(AWS_REGION) \
+	      --health-check-interval-seconds 300 \
+	      --unhealthy-threshold-count 10 > /dev/null 2>&1 && echo "  ✅ Relaxed: $$TG_NAME (300s interval, 10 unhealthy threshold)"; \
+	  else \
+	    echo "  ⚠️  Not found: $$TG_NAME"; \
+	  fi; \
+	done
+	@echo ""
+	@echo "✅ All health checks relaxed"
+
+mediamtx-nlb-deploy: mediamtx-nlb-create mediamtx-nlb-targets mediamtx-nlb-listeners mediamtx-nlb-register ## 🚀 Complete NLB deployment (create + configure + register)
+	@echo ""
+	@echo "✅ MediaMTX NLB deployment complete!"
+	@echo ""
+	@$(MAKE) -s mediamtx-nlb-status
+	@echo ""
+	@echo "📝 Update DNS to point mediamtx.racetrackstreaming.com to NLB:"
+	@echo "   Run: make dns-setup"
+	@echo ""
+	@echo "🧪 Test access:"
+	@NLB_DNS=$$(aws elbv2 describe-load-balancers --region $(AWS_REGION) --query "LoadBalancers[?LoadBalancerName=='$(NLB_NAME)'].DNSName" --output text 2>/dev/null); \
+	echo "   RTSP:   rtsp://$$NLB_DNS:8554/stream"; \
+	echo "   WebRTC: http://$$NLB_DNS:8889/stream"; \
+	echo "   API:    http://$$NLB_DNS:9997/v3/paths/list"
+
+mediamtx-nlb-delete: ## 🗑️  Delete MediaMTX NLB and all target groups
+	@echo "🗑️  Deleting MediaMTX NLB..."
+	@NLB_ARN=$$(aws elbv2 describe-load-balancers --region $(AWS_REGION) --query "LoadBalancers[?LoadBalancerName=='$(NLB_NAME)'].LoadBalancerArn" --output text 2>/dev/null); \
+	if [ -n "$$NLB_ARN" ]; then \
+	  aws elbv2 delete-load-balancer --load-balancer-arn $$NLB_ARN --region $(AWS_REGION); \
+	  echo "✅ NLB deleted"; \
+	else \
+	  echo "⚠️  NLB not found"; \
+	fi
+	@echo ""
+	@echo "Deleting target groups..."
+	@for TG_NAME in $(NLB_TG_RTSP) $(NLB_TG_WEBRTC) $(NLB_TG_API) $(NLB_TG_RTMP); do \
+	  TG_ARN=$$(aws elbv2 describe-target-groups --region $(AWS_REGION) --query "TargetGroups[?TargetGroupName=='$$TG_NAME'].TargetGroupArn" --output text 2>/dev/null); \
+	  if [ -n "$$TG_ARN" ]; then \
+	    aws elbv2 delete-target-group --target-group-arn $$TG_ARN --region $(AWS_REGION) 2>/dev/null && echo "  ✅ Deleted $$TG_NAME" || echo "  ⚠️  Could not delete $$TG_NAME"; \
+	  fi; \
+	done
+	@echo ""
+	@echo "✅ Cleanup complete"
 
 nlb-delete: ## 🗑️ Delete NLB and associated resources
 	@echo "🗑️ Deleting NLB stack..."
