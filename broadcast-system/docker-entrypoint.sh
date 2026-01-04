@@ -23,19 +23,18 @@ export NODE_ENV=production
 export PORT=3001
 cd /app
 node server/index.js &
-sleep 5
-echo "✅ Express server started"
+sleep 15
+echo "✅ Express server started (initialization complete)"
 
 # Fix Nginx config if needed (remove HTTP->HTTPS redirect)
 echo "🔧 Configuring Nginx..."
 
-# Use localhost:8888 as fallback if MediaMTX service is not available via service discovery
-# The resolver in nginx.conf will handle DNS lookups dynamically
-MEDIAMTX_HOST="${MEDIAMTX_SERVICE_HOST:-localhost}"
-MEDIAMTX_PORT="${MEDIAMTX_SERVICE_PORT:-8888}"
+# The nginx upstream for MediaMTX is set to use DNS resolution
+# Nginx will resolve the hostname dynamically using the AWS VPC DNS resolver (169.254.169.253)
+# No replacement needed - let nginx handle DNS resolution
 
-# Update the upstream server in the nginx config
-sed -i "s|mediamtx-service.broadcast-cluster.ecs.local:8888|${MEDIAMTX_HOST}:${MEDIAMTX_PORT}|g" /etc/nginx/conf.d/default.conf
+echo "   ℹ️  Using nginx DNS resolver for MediaMTX upstream"
+echo "   ✅ Nginx will resolve mediamtx-service.broadcast-cluster.ecs.local dynamically"
 
 # Also remove any HTTP->HTTPS redirects to prevent ALB loops
 if grep -q "return 301 https" /etc/nginx/conf.d/default.conf 2>/dev/null; then

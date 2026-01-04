@@ -9,10 +9,9 @@ log() {
 }
 
 # Configuration
-# NOTE: Use direct IP address to bypass CloudFlare proxy (CloudFlare doesn't support RTMP/RTSP)
-# When MediaMTX ECS task is redeployed, update IP using:
-# aws ecs describe-tasks --cluster mediamtx-cluster --tasks $(aws ecs list-tasks --cluster mediamtx-cluster --region us-east-2 --query 'taskArns[0]' --output text) --region us-east-2 --query 'tasks[0].attachments[?type==`ElasticNetworkInterface`].details[?name==`primaryPublicIpv4Address`].value' --output text
-RTSP_SERVER_DOMAIN="13.59.160.208"  # Direct public IP of MediaMTX ECS task (bypasses CloudFlare proxy)
+# NOTE: MediaMTX is now accessible via public domain through AWS NLB
+# The NLB supports RTSP (8554), RTMP (1935), WebRTC (8889), and API (9997)
+RTSP_SERVER_DOMAIN="mediamtx.racetrackstreaming.com"  # Public MediaMTX domain via NLB
 
 # Check if config file exists and use it if no CLI host is provided
 if [ -f "$HOME/.mediamtx-host" ] && [ -z "$MEDIAMTX_HOST_OVERRIDE" ]; then
@@ -20,7 +19,7 @@ if [ -f "$HOME/.mediamtx-host" ] && [ -z "$MEDIAMTX_HOST_OVERRIDE" ]; then
     log "Using MediaMTX host from config: $RTSP_SERVER_DOMAIN"
 fi
 
-RTSP_SERVER_PORT="1935"  # RTMP port (not RTSP 8554)
+RTSP_SERVER_PORT="8554"  # RTSP port (primary streaming protocol)
 
 # Auto-detect camera name from hostname or Tailscale
 # Try: tailscale status, fallback to system hostname, fallback to hardcoded rpicam2
@@ -161,8 +160,8 @@ check_rtsp_server() {
 # Function to run the streaming command
 run_stream() {
     local ip=$1
-    local rtmp_url="rtmp://$ip:$RTSP_SERVER_PORT/$STREAM_NAME"
-    log "Starting RPiCam RTMP stream to $rtmp_url"
+    local rtsp_url="rtsp://$ip:$RTSP_SERVER_PORT/$STREAM_NAME"
+    log "Starting RPiCam RTSP stream to $rtsp_url"
     
 
 #                                      number
@@ -173,9 +172,9 @@ run_stream() {
 #   --sharpness arg (=1)                  Adjust the sharpness of the output image, where 1.0 = normal sharpening
 #   --framerate arg (=-1)                 Set the fixed framerate for preview and video modes
 
-    # Stream to MediaMTX via RTMP (uses FLV container format for RTMP compatibility)
+    # Stream to MediaMTX via RTSP (native protocol, lower latency than RTMP)
     rpicam-vid -t 0 --camera 0 --nopreview --codec yuv420 --brightness 0 --contrast 1 --saturation 1 --width 1280 --height 720 --framerate 30 --inline -o - | \
-    ffmpeg -f rawvideo -pix_fmt yuv420p -s:v 1280x720 -r 30 -i - -c:v libx264 -preset veryfast -tune zerolatency -f flv "$rtmp_url"
+    ffmpeg -f rawvideo -pix_fmt yuv420p -s:v 1280x720 -r 30 -i - -c:v libx264 -preset veryfast -tune zerolatency -f rtsp "$rtsp_url"
 }
 
 # Main loop with retry logic
@@ -188,14 +187,14 @@ while true; do
         exit 1
     fi
     
-    # Wait for RTMP server to be available
-    log "Checking RTMP server availability..."
+    # Wait for RTSP server to be available
+    log "Checking RTSP server availability..."
     while ! check_rtsp_server "$RTSP_SERVER_DOMAIN" "$RTSP_SERVER_PORT"; do
-        log "RTMP server at $RTSP_SERVER_DOMAIN:$RTSP_SERVER_PORT not reachable. Waiting $RETRY_DELAY seconds..."
+        log "RTSP server at $RTSP_SERVER_DOMAIN:$RTSP_SERVER_PORT not reachable. Waiting $RETRY_DELAY seconds..."
         sleep $RETRY_DELAY
     done
     
-    log "RTMP server is reachable. Starting stream (attempt $((retry_count + 1)))"
+    log "RTSP server is reachable. Starting stream (attempt $((retry_count + 1)))"
     
     # Get resolved IP for streaming
     resolved_ip=$(resolve_hostname "$RTSP_SERVER_DOMAIN")

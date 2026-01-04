@@ -18,6 +18,7 @@ class CameraManager {
     this.activeCameras = new Set();
     this.previewCache = new Map();
     this.healthCheckInterval = null;
+    this.newCamerasDiscovered = false; // Track if new cameras were discovered
     
     // Configure axios to handle self-signed certificates
     this.axiosConfig = {
@@ -44,18 +45,25 @@ class CameraManager {
       const fs = require('fs').promises;
       const configPath = require('path').join(__dirname, '../../config/cameras.json');
       
+      console.log(`🔍 Loading camera config from: ${configPath}`);
+      
       try {
         const configData = await fs.readFile(configPath, 'utf8');
         const config = JSON.parse(configData);
         
+        console.log(`📚 Config loaded successfully. Found ${config.cameras?.length || 0} cameras`);
+        
         for (const camera of config.cameras) {
+          console.log(`   ✅ Adding camera: ${camera.name} (${camera.id})`);
           this.addCamera(camera);
         }
       } catch (error) {
         // If config doesn't exist, create a default one
         if (error.code === 'ENOENT') {
+          console.log(`⚠️  Config file not found at ${configPath}, creating default`);
           await this.createDefaultConfig(configPath);
         } else {
+          console.error(`❌ Error reading config: ${error.message}`);
           throw error;
         }
       }
@@ -105,6 +113,8 @@ class CameraManager {
       const response = await axios.get(`${this.mediamtxApiUrl}/v3/paths/list`, this.axiosConfig);
       const paths = response.data.items || [];
       
+      console.log(`🔍 Auto-discovery found ${paths.length} active MediaMTX paths`);
+      
       // The response is now an array of path objects, not a key-value object
       for (const pathInfo of paths) {
         const pathName = pathInfo.name;
@@ -112,11 +122,12 @@ class CameraManager {
         // Check if we already have this camera configured
         if (!this.cameras.has(pathName)) {
           // Auto-discover new camera
+          // Use HTTP instead of HTTPS, and remove hardcoded port to use service discovery
           const discoveredCamera = {
             id: pathName,
-            name: `Auto-discovered: ${pathName}`,
+            name: `${pathName}`,
             type: 'webrtc',
-            url: `https://${this.mediamtxHost}:8889/${pathName}/`,
+            url: `http://${this.mediamtxHost}:8889/${pathName}/`,
             rtspUrl: `rtsp://${this.mediamtxHost}:8554/${pathName}`,
             enabled: true,
             autodiscovered: true,
@@ -125,14 +136,23 @@ class CameraManager {
             lastSeen: pathInfo.readyTime || new Date().toISOString()
           };
           
-          // Commenting out adding auto-discovered cameras for now
-          // this.addCamera(discoveredCamera);
+          console.log(`✅ Auto-discovered camera: ${pathName} (${pathInfo.ready ? 'online' : 'offline'})`);
+          this.addCamera(discoveredCamera);
+          this.newCamerasDiscovered = true; // Flag that new cameras were found
         } else {
           // Update existing camera status
           const camera = this.cameras.get(pathName);
           if (camera) {
-            camera.status = pathInfo.ready ? 'online' : 'offline';
+            const wasOnline = camera.status === 'online';
+            const isNowOnline = pathInfo.ready;
+            
+            camera.status = isNowOnline ? 'online' : 'offline';
             camera.lastSeen = pathInfo.readyTime || new Date().toISOString();
+            
+            // Log status changes
+            if (wasOnline !== isNowOnline) {
+              console.log(`🔄 Camera ${pathName} status changed: ${wasOnline ? 'online' : 'offline'} → ${isNowOnline ? 'online' : 'offline'}`);
+            }
           }
         }
       }
@@ -290,8 +310,10 @@ class CameraManager {
 
   startHealthMonitoring() {
     this.healthCheckInterval = setInterval(async () => {
+      // Check camera health and auto-discover new streams
       await this.checkHealth();
-    }, 10000); // Check every 10 seconds for faster updates
+      await this.discoverExistingStreams();
+    }, 10000); // Check every 10 seconds for faster updates and discovery
   }
 
   getStatus() {
@@ -327,6 +349,13 @@ class CameraManager {
     }
 
     return null;
+  }
+
+  // Check if new cameras were discovered and reset the flag
+  hasNewCameras() {
+    const hasNew = this.newCamerasDiscovered;
+    this.newCamerasDiscovered = false; // Reset flag after checking
+    return hasNew;
   }
 
   // Save current configuration

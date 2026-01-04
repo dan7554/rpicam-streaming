@@ -42,141 +42,31 @@ module.exports = (cameraManager, io) => {
     }
   });
 
-  // Add new camera
+  // Add new camera - DISABLED (auto-discovery only)
   router.post('/', async (req, res) => {
-    try {
-      const { name, type, url, rtspUrl, enabled, position, resolution, framerate } = req.body;
-
-      if (!name || !url) {
-        return res.status(400).json({
-          success: false,
-          error: 'Name and URL are required'
-        });
-      }
-
-      const cameraId = cameraManager.addCamera({
-        name,
-        type: type || 'webrtc',
-        url,
-        rtspUrl,
-        settings: {
-          resolution: resolution || '1920x1080',
-          framerate: framerate || 30
-        },
-        position: position || { x: 0, y: 0, width: 1920, height: 1080 },
-        enabled: enabled !== undefined ? enabled : true
-      });
-
-      // Immediately check camera health after adding
-      try {
-        await cameraManager.checkCameraHealth(cameraId);
-      } catch (error) {
-        console.log(`Initial health check failed for camera ${cameraId}:`, error.message);
-      }
-
-      const camera = cameraManager.getCamera(cameraId);
-      
-      // Save configuration
-      await cameraManager.saveConfig();
-
-      // Notify clients
-      io.emit('camera-added', camera);
-
-      res.status(201).json({
-        success: true,
-        data: camera,
-        message: 'Camera added successfully'
-      });
-    } catch (error) {
-      res.status(500).json({
-        success: false,
-        error: error.message
-      });
-    }
+    return res.status(403).json({
+      success: false,
+      error: 'Manual camera add is disabled. Cameras are auto-discovered from MediaMTX.',
+      hint: 'Make sure your camera streams are active in MediaMTX'
+    });
   });
 
-  // Update camera
+  // Update camera - DISABLED (auto-discovery only)
   router.put('/:id', async (req, res) => {
-    try {
-      const { name, type, url, rtspUrl, enabled, position, resolution, framerate, ...otherUpdates } = req.body;
-      
-      // Structure the updates properly
-      const updates = {
-        ...otherUpdates,
-        ...(name !== undefined && { name }),
-        ...(type !== undefined && { type }),
-        ...(url !== undefined && { url }),
-        ...(rtspUrl !== undefined && { rtspUrl }),
-        ...(enabled !== undefined && { enabled }),
-        ...(position !== undefined && { position }),
-      };
-
-      // Handle settings separately
-      if (resolution !== undefined || framerate !== undefined) {
-        const existingCamera = cameraManager.getCamera(req.params.id);
-        updates.settings = {
-          ...(existingCamera?.settings || {}),
-          ...(resolution !== undefined && { resolution }),
-          ...(framerate !== undefined && { framerate })
-        };
-      }
-
-      const camera = cameraManager.updateCamera(req.params.id, updates);
-      
-      if (!camera) {
-        return res.status(404).json({
-          success: false,
-          error: 'Camera not found'
-        });
-      }
-
-      // Save configuration
-      await cameraManager.saveConfig();
-
-      // Notify clients
-      io.emit('camera-updated', camera);
-
-      res.json({
-        success: true,
-        data: camera,
-        message: 'Camera updated successfully'
-      });
-    } catch (error) {
-      res.status(500).json({
-        success: false,
-        error: error.message
-      });
-    }
+    return res.status(403).json({
+      success: false,
+      error: 'Manual camera edit is disabled. Cameras are auto-discovered from MediaMTX.',
+      hint: 'Edit your camera streams directly in MediaMTX'
+    });
   });
 
-  // Delete camera
+  // Delete camera - DISABLED (auto-discovery only)
   router.delete('/:id', async (req, res) => {
-    try {
-      const success = cameraManager.removeCamera(req.params.id);
-      
-      if (!success) {
-        return res.status(404).json({
-          success: false,
-          error: 'Camera not found'
-        });
-      }
-
-      // Save configuration
-      await cameraManager.saveConfig();
-
-      // Notify clients
-      io.emit('camera-removed', { cameraId: req.params.id });
-
-      res.json({
-        success: true,
-        message: 'Camera removed successfully'
-      });
-    } catch (error) {
-      res.status(500).json({
-        success: false,
-        error: error.message
-      });
-    }
+    return res.status(403).json({
+      success: false,
+      error: 'Manual camera delete is disabled. Cameras are auto-discovered from MediaMTX.',
+      hint: 'Stop the stream in MediaMTX to remove the camera'
+    });
   });
 
   // Switch to camera

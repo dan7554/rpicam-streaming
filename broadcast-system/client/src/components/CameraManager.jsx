@@ -10,44 +10,22 @@ import {
   Chip,
   Box,
   IconButton,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  TextField,
-  Switch,
-  FormControlLabel,
   Alert
 } from '@mui/material';
 import {
   Videocam,
   VideocamOff,
-  Settings,
-  Refresh,
-  Add,
-  Delete,
-  Edit
+  Refresh
 } from '@mui/icons-material';
 import WebRTCPreview from './WebRTCPreview';
 
 const CameraManager = ({ socket }) => {
   const [cameras, setCameras] = useState([]);
   const [selectedCamera, setSelectedCamera] = useState(null);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingCamera, setEditingCamera] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  // Camera form state
-  const [cameraForm, setCameraForm] = useState({
-    name: '',
-    url: '',
-    type: 'webrtc',
-    enabled: true,
-    position: { x: 0, y: 0 },
-    resolution: '1920x1080',
-    framerate: 30
-  });
+  // Auto-discovery only - no manual camera management
 
   useEffect(() => {
     if (socket) {
@@ -91,89 +69,6 @@ const CameraManager = ({ socket }) => {
       setCameras(Array.isArray(data) ? data : []);
     } catch (err) {
       setError('Failed to fetch cameras');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleAddCamera = () => {
-    setEditingCamera(null);
-    setCameraForm({
-      name: '',
-      url: '',
-      type: 'webrtc',
-      enabled: true,
-      position: { x: 0, y: 0 },
-      resolution: '1920x1080',
-      framerate: 30
-    });
-    setDialogOpen(true);
-  };
-
-  const handleEditCamera = (camera) => {
-    if (!camera) return;
-    
-    setEditingCamera(camera);
-    setCameraForm({
-      name: camera.name || '',
-      url: camera.url || '',
-      type: camera.type || 'webrtc',
-      enabled: camera.enabled !== undefined ? camera.enabled : true,
-      position: camera.position || { x: 0, y: 0 },
-      resolution: camera.settings?.resolution || camera.resolution || '1920x1080',
-      framerate: camera.settings?.framerate || camera.framerate || 30
-    });
-    setDialogOpen(true);
-  };
-
-  const handleSaveCamera = async () => {
-    try {
-      setLoading(true);
-      const url = editingCamera 
-        ? `/api/cameras/${editingCamera.id}`
-        : '/api/cameras';
-      
-      const method = editingCamera ? 'PUT' : 'POST';
-      
-      const response = await fetch(url, {
-        method,
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(cameraForm),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to save camera');
-      }
-
-      setDialogOpen(false);
-      fetchCameras();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleDeleteCamera = async (cameraId) => {
-    if (!window.confirm('Are you sure you want to delete this camera?')) {
-      return;
-    }
-
-    try {
-      setLoading(true);
-      const response = await fetch(`/api/cameras/${cameraId}`, {
-        method: 'DELETE',
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to delete camera');
-      }
-
-      fetchCameras();
-    } catch (err) {
-      setError(err.message);
     } finally {
       setLoading(false);
     }
@@ -224,19 +119,9 @@ const CameraManager = ({ socket }) => {
         <Typography variant="h6" component="h2" sx={{ color: 'white' }}>
           Camera Manager
         </Typography>
-        <Box>
-          <IconButton onClick={fetchCameras} sx={{ color: 'white', mr: 1 }}>
-            <Refresh />
-          </IconButton>
-          <Button 
-            variant="contained" 
-            startIcon={<Add />}
-            onClick={handleAddCamera}
-            sx={{ bgcolor: '#1976d2' }}
-          >
-            Add Camera
-          </Button>
-        </Box>
+        <IconButton onClick={fetchCameras} sx={{ color: 'white' }}>
+          <Refresh />
+        </IconButton>
       </Box>
 
       {error && (
@@ -311,12 +196,6 @@ const CameraManager = ({ socket }) => {
                     )}
                     
                     <div className="video-preview-overlay">
-                      <IconButton 
-                        sx={{ color: 'white', mr: 1 }}
-                        onClick={() => handleEditCamera(safeCamera)}
-                      >
-                        <Settings />
-                      </IconButton>
                     </div>
                   </div>
 
@@ -332,24 +211,10 @@ const CameraManager = ({ socket }) => {
                     color={selectedCamera === safeCamera.id ? "success" : "primary"}
                     onClick={() => handleSwitchCamera(safeCamera.id)}
                     disabled={safeCamera.status !== 'online'}
-                    sx={{ mr: 1, flex: 1 }}
+                    sx={{ flex: 1 }}
                   >
                     {selectedCamera === safeCamera.id ? 'Active' : 'Switch To'}
                   </Button>
-                  <IconButton 
-                    size="small" 
-                    onClick={() => handleEditCamera(safeCamera)}
-                    sx={{ color: '#1976d2' }}
-                  >
-                    <Edit />
-                  </IconButton>
-                  <IconButton 
-                    size="small" 
-                    onClick={() => handleDeleteCamera(safeCamera.id)}
-                    sx={{ color: '#f44336' }}
-                  >
-                    <Delete />
-                  </IconButton>
                 </CardActions>
               </Card>
             </Grid>
@@ -359,120 +224,11 @@ const CameraManager = ({ socket }) => {
 
       {cameras.length === 0 && !loading && (
         <Box sx={{ textAlign: 'center', py: 4 }}>
-          <Typography variant="body1" sx={{ color: '#ccc', mb: 2 }}>
-            No cameras configured
+          <Typography variant="body1" sx={{ color: '#ccc' }}>
+            Waiting for auto-discovery... Make sure MediaMTX streams are active.
           </Typography>
-          <Button variant="contained" startIcon={<Add />} onClick={handleAddCamera}>
-            Add Your First Camera
-          </Button>
         </Box>
       )}
-
-      {/* Add/Edit Camera Dialog */}
-      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle sx={{ bgcolor: '#1d1d1d', color: 'white' }}>
-          {editingCamera ? 'Edit Camera' : 'Add Camera'}
-        </DialogTitle>
-        <DialogContent sx={{ bgcolor: '#1d1d1d', color: 'white' }}>
-          <Grid container spacing={2} sx={{ mt: 1 }}>
-            <Grid item xs={12}>
-              <TextField
-                fullWidth
-                label="Camera Name"
-                value={cameraForm.name}
-                onChange={(e) => setCameraForm({ ...cameraForm, name: e.target.value })}
-                sx={{ 
-                  '& .MuiInputLabel-root': { color: '#ccc' },
-                  '& .MuiOutlinedInput-root': { 
-                    color: 'white',
-                    '& fieldset': { borderColor: '#555' },
-                    '&:hover fieldset': { borderColor: '#777' },
-                    '&.Mui-focused fieldset': { borderColor: '#1976d2' }
-                  }
-                }}
-              />
-            </Grid>
-            <Grid item xs={12}>
-              <TextField
-                fullWidth
-                label="Stream URL"
-                value={cameraForm.url}
-                onChange={(e) => setCameraForm({ ...cameraForm, url: e.target.value })}
-                placeholder="rtsp://camera-ip:554/stream"
-                sx={{ 
-                  '& .MuiInputLabel-root': { color: '#ccc' },
-                  '& .MuiOutlinedInput-root': { 
-                    color: 'white',
-                    '& fieldset': { borderColor: '#555' },
-                    '&:hover fieldset': { borderColor: '#777' },
-                    '&.Mui-focused fieldset': { borderColor: '#1976d2' }
-                  }
-                }}
-              />
-            </Grid>
-            <Grid item xs={6}>
-              <TextField
-                fullWidth
-                label="Resolution"
-                value={cameraForm.resolution}
-                onChange={(e) => setCameraForm({ ...cameraForm, resolution: e.target.value })}
-                sx={{ 
-                  '& .MuiInputLabel-root': { color: '#ccc' },
-                  '& .MuiOutlinedInput-root': { 
-                    color: 'white',
-                    '& fieldset': { borderColor: '#555' },
-                    '&:hover fieldset': { borderColor: '#777' },
-                    '&.Mui-focused fieldset': { borderColor: '#1976d2' }
-                  }
-                }}
-              />
-            </Grid>
-            <Grid item xs={6}>
-              <TextField
-                fullWidth
-                label="Frame Rate"
-                type="number"
-                value={cameraForm.framerate}
-                onChange={(e) => setCameraForm({ ...cameraForm, framerate: parseInt(e.target.value) })}
-                sx={{ 
-                  '& .MuiInputLabel-root': { color: '#ccc' },
-                  '& .MuiOutlinedInput-root': { 
-                    color: 'white',
-                    '& fieldset': { borderColor: '#555' },
-                    '&:hover fieldset': { borderColor: '#777' },
-                    '&.Mui-focused fieldset': { borderColor: '#1976d2' }
-                  }
-                }}
-              />
-            </Grid>
-            <Grid item xs={12}>
-              <FormControlLabel
-                control={
-                  <Switch
-                    checked={cameraForm.enabled}
-                    onChange={(e) => setCameraForm({ ...cameraForm, enabled: e.target.checked })}
-                    color="primary"
-                  />
-                }
-                label="Enable Camera"
-                sx={{ color: 'white' }}
-              />
-            </Grid>
-          </Grid>
-        </DialogContent>
-        <DialogActions sx={{ bgcolor: '#1d1d1d', color: 'white' }}>
-          <Button onClick={() => setDialogOpen(false)} sx={{ color: '#ccc' }}>
-            Cancel
-          </Button>
-          <Button 
-            onClick={handleSaveCamera} 
-            variant="contained"
-            disabled={!cameraForm.name || !cameraForm.url}
-          >
-            {editingCamera ? 'Update' : 'Add'} Camera
-          </Button>
-        </DialogActions>
-      </Dialog>
     </Paper>
   );
 };

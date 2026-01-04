@@ -39,7 +39,11 @@ class BroadcastServer {
     this.setupMiddleware();
     this.setupRoutes();
     this.setupWebSocket();
-    this.initializeServices();
+    
+    // Initialize services asynchronously but don't block startup
+    this.initializeServices().catch(err => {
+      console.error('Failed to initialize services:', err);
+    });
   }
 
   setupMiddleware() {
@@ -370,6 +374,17 @@ class BroadcastServer {
         this.io.emit('camera-status-changed', camera.id, camera.status);
       });
     }, 30000);
+
+    // Monitor for newly discovered cameras every 10 seconds
+    setInterval(async () => {
+      // Auto-discovery is now part of health check in CameraManager.startHealthMonitoring()
+      // Just check if new cameras were discovered
+      if (this.cameraManager.hasNewCameras()) {
+        const cameras = this.cameraManager.getCameras();
+        console.log(`📢 Cameras updated - broadcasting to clients (total: ${cameras.length})`);
+        this.io.emit('cameras-updated', cameras);
+      }
+    }, 10000);
 
     // Monitor stream health every 10 seconds
     setInterval(async () => {
