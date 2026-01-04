@@ -11,6 +11,9 @@ const WebRTCPreview = ({ url }) => {
   useEffect(() => {
     if (!url) return;
 
+    let isActive = true;
+    let pc = null;
+
     const connect = async () => {
       try {
         // console.log('WebRTCPreview','🚀 Starting WebRTC connection to:', url);
@@ -21,6 +24,7 @@ const WebRTCPreview = ({ url }) => {
         if (pcRef.current) {
           // console.log('WebRTCPreview','🧹 Cleaning up existing peer connection');
           pcRef.current.close();
+          pcRef.current = null;
         }
 
         // Create WHEP URL
@@ -29,7 +33,7 @@ const WebRTCPreview = ({ url }) => {
 
         // Create peer connection
         // console.log('WebRTCPreview','🌐 Creating RTCPeerConnection');
-        const pc = new RTCPeerConnection({
+        pc = new RTCPeerConnection({
           iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
           iceCandidatePoolSize: 10
         });
@@ -112,7 +116,13 @@ const WebRTCPreview = ({ url }) => {
           throw new Error('Invalid SDP answer: Missing ICE credentials (ice-ufrag or ice-pwd)');
         }
 
-        // console.log('WebRTCPreview','�🔧 Setting remote description');
+        // Check if connection is still active before setting remote description
+        if (!isActive || !pc || pc.signalingState === 'closed') {
+          console.warn('WebRTCPreview', '⚠️ Connection closed before completing setup');
+          return;
+        }
+
+        // console.log('WebRTCPreview','🔧 Setting remote description');
         await pc.setRemoteDescription({ type: 'answer', sdp: answer });
         // console.log('WebRTCPreview','✅ WebRTC setup complete, waiting for tracks...');
 
@@ -126,8 +136,10 @@ const WebRTCPreview = ({ url }) => {
     connect();
 
     return () => {
+      isActive = false;
       if (pcRef.current) {
         pcRef.current.close();
+        pcRef.current = null;
       }
     };
   }, [url]);
