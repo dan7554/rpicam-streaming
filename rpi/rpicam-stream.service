@@ -1,5 +1,5 @@
 [Unit]
-Description=RPiCam RTSP Stream
+Description=RPiCam RTMP Stream to MediaMTX
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=0
@@ -8,16 +8,13 @@ StartLimitIntervalSec=0
 Type=simple
 User=dan7554
 Group=video
-WorkingDirectory=/home/dan7554
-ExecStart=/home/dan7554/rpicam-stream.sh
+EnvironmentFile=-/etc/rpicam-stream.conf
+ExecStart=/opt/rpicam-stream/rpicam-stream.sh
 Restart=always
 RestartSec=10
 KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=30
-
-# Environment variables
-Environment=DISPLAY=:0
 
 # Logging
 StandardOutput=journal

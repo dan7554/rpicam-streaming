@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stream Switcher</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+</head>
+<body>
+    <header>
+        <h1>Stream Switcher</h1>
+        <div id="live-badge" class="badge hidden">LIVE</div>
+    </header>
+
+    <main>
+        <!-- Stream Previews -->
+        <section id="previews">
+            <h2>Camera Feeds</h2>
+            <div class="grid" id="camera-grid">
+                <!-- Populated by JS -->
+            </div>
+        </section>
+
+        <!-- Live Output Controls -->
+        <section id="youtube-controls">
+            <h2>Live Output</h2>
+            <div class="controls">
+                <input type="text" id="youtube-key" placeholder="YouTube Stream Key (leave empty for local preview)" autocomplete="off">
+                <div class="btn-group">
+                    <button id="btn-go-live" onclick="goLive()">Go Live</button>
+                    <button id="btn-stop" onclick="stopLive()" disabled>Stop</button>
+                </div>
+            </div>
+            <div id="status-bar">
+                <span id="status-text">Idle</span>
+                <span id="active-stream"></span>
+            </div>
+        </section>
+
+        <!-- Live Output Preview -->
+        <section id="output-section" class="hidden">
+            <h2>Live Output Preview</h2>
+            <div class="output-card">
+                <video id="video-output" muted autoplay playsinline controls></video>
+            </div>
+        </section>
+    </main>
+
+    <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,28 @@
+[Unit]
+Description=SSH reverse tunnel to MediaMTX server
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=dan7554
+# Forward Pi's localhost:1935 → server's localhost:1935 (RTMP)
+# Pi initiates SSH to server; rpicam-stream.sh pushes RTMP to 127.0.0.1:1935
+ExecStart=/usr/bin/ssh -N -T \
+    -o ServerAliveInterval=30 \
+    -o ServerAliveCountMax=3 \
+    -o ExitOnForwardFailure=yes \
+    -o StrictHostKeyChecking=accept-new \
+    -L 1935:localhost:1935 \
+    MEDIAMTX_SERVER
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mediamtx-tunnel
+
+[Install]
+WantedBy=multi-user.target

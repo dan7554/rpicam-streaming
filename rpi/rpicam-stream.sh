@@ -1,211 +1,84 @@
 #!/bin/bash
 
-# RPiCam RTSP Stream Script with Retry Logic
-# This script runs the rpicam-vid command with automatic retry on failure
+# RPiCam Camera Stream Script
+# Streams the Pi camera to a MediaMTX server via RTMP
+# Designed to run as a systemd service on boot
+#
+# The RTMP server is reached via an SSH reverse tunnel (see mediamtx-tunnel.service)
+# so the target is always 127.0.0.1:1935.
 
-# Logging function (defined first so it can be used in config)
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1"
 }
 
-# Configuration
-# NOTE: MediaMTX is now accessible via public domain through AWS NLB
-# The NLB supports RTSP (8554), RTMP (1935), WebRTC (8889), and API (9997)
-RTSP_SERVER_DOMAIN="mediamtx.racetrackstreaming.com"  # Public MediaMTX domain via NLB
+# --- Configuration (override with env vars or /etc/rpicam-stream.conf) ---
+[ -f /etc/rpicam-stream.conf ] && . /etc/rpicam-stream.conf
 
-# Check if config file exists and use it if no CLI host is provided
-if [ -f "$HOME/.mediamtx-host" ] && [ -z "$MEDIAMTX_HOST_OVERRIDE" ]; then
-    RTSP_SERVER_DOMAIN=$(cat "$HOME/.mediamtx-host")
-    log "Using MediaMTX host from config: $RTSP_SERVER_DOMAIN"
-fi
+RTMP_HOST="${MEDIAMTX_HOST:-192.168.50.208}"
+RTMP_PORT="${MEDIAMTX_RTMP_PORT:-1935}"
+RETRY_DELAY="${RETRY_DELAY:-5}"
+WIDTH="${WIDTH:-1280}"
+HEIGHT="${HEIGHT:-720}"
+FPS="${FPS:-30}"
 
-RTSP_SERVER_PORT="8554"  # RTSP port (primary streaming protocol)
-
-# Auto-detect camera name from hostname or Tailscale
-# Try: tailscale status, fallback to system hostname, fallback to hardcoded rpicam2
-detect_camera_name() {
-    # Try Tailscale hostname first
-    if command -v tailscale >/dev/null 2>&1; then
-        local ts_name=$(tailscale status --json 2>/dev/null | jq -r '.Self.HostName' 2>/dev/null)
-        if [ -n "$ts_name" ] && [ "$ts_name" != "null" ]; then
-            echo "$ts_name"
-            return
-        fi
+# Stream name: rpicamN → camN, or use hostname as-is
+detect_stream_name() {
+    local name
+    name=$(hostname 2>/dev/null | sed 's/\.local$//')
+    if [[ "$name" =~ ^rpicam(.+)$ ]]; then
+        echo "cam${BASH_REMATCH[1]}"
+    else
+        echo "$name"
     fi
-    
-    # Fallback to system hostname
-    local sys_name=$(hostname 2>/dev/null | sed 's/\.local$//')
-    if [ -n "$sys_name" ]; then
-        echo "$sys_name"
-        return
-    fi
-    
-    # Last resort fallback
-    echo "rpicam2"
 }
+STREAM_NAME="${STREAM_NAME:-$(detect_stream_name)}"
 
-STREAM_NAME=$(detect_camera_name)
-MAX_RETRIES=0  # 0 means infinite retries
-RETRY_DELAY=5  # seconds between retries
-CONNECTION_TIMEOUT=30  # seconds to wait for RTSP server
-DNS_SERVER="8.8.8.8"  # Google DNS - works on cellular when carrier DNS fails
+# --- Main ---
+log "Camera stream service starting"
+log "  Stream: $STREAM_NAME → rtmp://$RTMP_HOST:$RTMP_PORT/$STREAM_NAME"
+log "  Resolution: ${WIDTH}x${HEIGHT}@${FPS}fps"
 
-# Usage/help
-usage() {
-    cat <<EOF
-Usage: $(basename "$0") [options]
-
-Options:
-  --mediamtx-host HOST     Use HOST as the MediaMTX host (IP or hostname)
-  --local-mediamtx         Detect the SSH client IP and use it as MediaMTX host
-  -h, --help               Show this help message
-
-Stream Name:
-  The camera stream name is auto-detected from:
-  1. Tailscale hostname (TS_NAME.ts.net) -> TS_NAME
-  2. System hostname (rpicam2.local) -> rpicam2
-  3. Fallback to 'rpicam2'
-
-When --local-mediamtx is used the script will try to extract the SSH client IP
-from the SSH environment (SSH_CONNECTION / SSH_CLIENT). This is useful when
-running the script on a Raspberry Pi while MediaMTX runs on your machine.
-EOF
-}
-
-# Parse CLI args (allow overriding the RTMP/RTSP host)
-while [ "$#" -gt 0 ]; do
-    case "$1" in
-        --mediamtx-host)
-            RTSP_SERVER_DOMAIN="$2"
-            MEDIAMTX_HOST_OVERRIDE=1
-            shift 2
-            ;;
-        --mediamtx-host=*)
-            RTSP_SERVER_DOMAIN="${1#*=}"
-            MEDIAMTX_HOST_OVERRIDE=1
-            shift
-            ;;
-        --local-mediamtx)
-            # Prefer SSH-provided client IP if available
-            if [ -n "$SSH_CONNECTION" ]; then
-                client_ip=$(echo "$SSH_CONNECTION" | awk '{print $1}')
-            elif [ -n "$SSH_CLIENT" ]; then
-                client_ip=$(echo "$SSH_CLIENT" | awk '{print $1}')
-            else
-                # Fallback: try to infer local IP used for outbound traffic
-                if command -v ip >/dev/null 2>&1; then
-                    client_ip=$(ip route get 1.1.1.1 2>/dev/null | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
-                else
-                    client_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
-                fi
-            fi
-            if [ -n "$client_ip" ]; then
-                RTSP_SERVER_DOMAIN="$client_ip"
-                MEDIAMTX_HOST_OVERRIDE=1
-                log "Using detected local MediaMTX host: $RTSP_SERVER_DOMAIN"
-            else
-                log "Could not detect local MediaMTX host via SSH vars or route; leaving default host"
-            fi
-            shift
-            ;;
-        -h|--help)
-            usage
-            exit 0
-            ;;
-        *)
-            echo "Unknown option: $1"
-            usage
-            exit 1
-            ;;
-    esac
-done
-
-# Function to resolve hostname - bypasses cache by always using fresh lookup
-resolve_hostname() {
-    local hostname=$1
-    # Use Python for fresh DNS resolution
-    local ip=$(python3 -c "import socket; print(socket.gethostbyname('$hostname'))" 2>/dev/null)
-    # If python3 fails, try getent
-    if [ -z "$ip" ] || [ "$ip" = "127.0.0.1" ]; then
-        ip=$(getent hosts "$hostname" 2>/dev/null | awk '{print $1}' | head -1)
-    fi
-    if [ -n "$ip" ] && [ "$ip" != "127.0.0.1" ]; then
-        echo "$ip"
-        return 0
-    fi
-    return 1
-}
-
-# Function to check if RTMP server is reachable
-check_rtsp_server() {
-    local hostname=$1
-    local port=$2
-    
-    # If hostname is already an IP, use it directly; otherwise resolve it
-    local ip=$hostname
-    if [[ ! $hostname =~ ^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$ ]]; then
-        ip=$(resolve_hostname "$hostname")
-        if [ -z "$ip" ]; then
-            log "Failed to resolve $hostname"
+# Wait for camera hardware
+wait_for_camera() {
+    local attempts=0
+    while ! rpicam-vid --list-cameras 2>&1 | grep -q "Available cameras"; do
+        attempts=$((attempts + 1))
+        if [ $attempts -ge 60 ]; then
+            log "ERROR: No camera detected after 60 attempts"
             return 1
         fi
-        log "Resolved $hostname to $ip"
-    fi
-    
-    # Test connection to RTMP server using resolved IP
-    timeout $CONNECTION_TIMEOUT bash -c "</dev/tcp/$ip/$port" 2>/dev/null
-    return $?
-}
-
-# Function to run the streaming command
-run_stream() {
-    local ip=$1
-    local rtsp_url="rtsp://$ip:$RTSP_SERVER_PORT/$STREAM_NAME"
-    log "Starting RPiCam RTSP stream to $rtsp_url"
-    
-
-#                                      number
-#   --brightness arg (=0)                 Adjust the brightness of the output images, in the range -1.0 to 1.0
-#   --contrast arg (=1)                   Adjust the contrast of the output image, where 1.0 = normal contrast
-#   --saturation arg (=1)                 Adjust the colour saturation of the output, where 1.0 = normal and 0.0 = 
-#                                         greyscale
-#   --sharpness arg (=1)                  Adjust the sharpness of the output image, where 1.0 = normal sharpening
-#   --framerate arg (=-1)                 Set the fixed framerate for preview and video modes
-
-    # Stream to MediaMTX via RTSP (native protocol, lower latency than RTMP)
-    rpicam-vid -t 0 --camera 0 --nopreview --codec yuv420 --brightness 0 --contrast 1 --saturation 1 --width 1280 --height 720 --framerate 30 --inline -o - | \
-    ffmpeg -f rawvideo -pix_fmt yuv420p -s:v 1280x720 -r 30 -i - -c:v libx264 -preset veryfast -tune zerolatency -f rtsp "$rtsp_url"
-}
-
-# Main loop with retry logic
-retry_count=0
-
-while true; do
-    # Check if we've exceeded max retries (if set)
-    if [ $MAX_RETRIES -gt 0 ] && [ $retry_count -ge $MAX_RETRIES ]; then
-        log "Maximum retry attempts ($MAX_RETRIES) reached. Exiting."
-        exit 1
-    fi
-    
-    # Wait for RTSP server to be available
-    log "Checking RTSP server availability..."
-    while ! check_rtsp_server "$RTSP_SERVER_DOMAIN" "$RTSP_SERVER_PORT"; do
-        log "RTSP server at $RTSP_SERVER_DOMAIN:$RTSP_SERVER_PORT not reachable. Waiting $RETRY_DELAY seconds..."
-        sleep $RETRY_DELAY
+        log "Waiting for camera... (attempt $attempts)"
+        sleep 2
     done
-    
-    log "RTSP server is reachable. Starting stream (attempt $((retry_count + 1)))"
-    
-    # Get resolved IP for streaming
-    resolved_ip=$(resolve_hostname "$RTSP_SERVER_DOMAIN")
-    
-    # Run the streaming command
-    run_stream "$resolved_ip"
-    
-    # If we reach here, the command failed
-    exit_code=$?
+    log "Camera detected"
+}
+
+# Wait for RTMP port (tunnel must be up first)
+wait_for_server() {
+    while ! timeout 3 bash -c "</dev/tcp/$RTMP_HOST/$RTMP_PORT" 2>/dev/null; do
+        log "Waiting for RTMP tunnel at $RTMP_HOST:$RTMP_PORT..."
+        sleep "$RETRY_DELAY"
+    done
+    log "RTMP server reachable"
+}
+
+# Stream loop with auto-retry
+retry_count=0
+while true; do
+    wait_for_camera
+    wait_for_server
+
     retry_count=$((retry_count + 1))
-    
-    log "Stream failed with exit code $exit_code. Retrying in $RETRY_DELAY seconds..."
-    sleep $RETRY_DELAY
+    rtmp_url="rtmp://$RTMP_HOST:$RTMP_PORT/$STREAM_NAME"
+    log "Starting stream (attempt $retry_count) → $rtmp_url"
+
+    rpicam-vid -t 0 --camera 0 --nopreview \
+        --width "$WIDTH" --height "$HEIGHT" --framerate "$FPS" \
+        --codec libav --libav-format flv \
+        --libav-video-codec libx264 \
+        --libav-video-codec-opts "preset=ultrafast;tune=zerolatency;g=60" \
+        -o "$rtmp_url" || true
+
+    log "Stream exited (attempt $retry_count). Retrying in ${RETRY_DELAY}s..."
+    sleep "$RETRY_DELAY"
 done
