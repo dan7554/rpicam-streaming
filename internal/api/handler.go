@@ -8,8 +8,11 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
+	"path/filepath"
 
 	"github.com/dchristiani/media-mtx/internal/config"
+	"github.com/dchristiani/media-mtx/internal/overlay"
 	"github.com/dchristiani/media-mtx/internal/switcher"
 )
 
@@ -18,6 +21,7 @@ type Handler struct {
 	sw       *switcher.Switcher
 	mux      *http.ServeMux
 	hlsProxy *httputil.ReverseProxy
+	overlay  *overlay.Overlay
 }
 
 func NewHandler(cfg *config.Config, sw *switcher.Switcher) *Handler {
@@ -37,6 +41,9 @@ func (h *Handler) routes() {
 	h.mux.HandleFunc("POST /api/switch", h.switchStream)
 	h.mux.HandleFunc("POST /api/live/start", h.startLive)
 	h.mux.HandleFunc("POST /api/live/stop", h.stopLive)
+	h.mux.HandleFunc("POST /api/overlay/start", h.startOverlay)
+	h.mux.HandleFunc("POST /api/overlay/stop", h.stopOverlay)
+	h.mux.HandleFunc("GET /api/overlay/status", h.overlayStatus)
 
 	// Serve web UI
 	h.mux.Handle("GET /", http.FileServer(http.Dir("web")))
@@ -139,6 +146,81 @@ func (h *Handler) stopLive(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Stopped live stream")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+}
+
+type overlayStartReq struct {
+	EventID   string `json:"event_id"`
+	SessionID string `json:"session_id"` // optional — uses /active if empty
+	MaxRows   int    `json:"max_rows"`
+}
+
+func (h *Handler) startOverlay(w http.ResponseWriter, r *http.Request) {
+	var req overlayStartReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: %v", err)
+		return
+	}
+	if req.EventID == "" {
+		writeError(w, http.StatusBadRequest, "event_id required")
+		return
+	}
+
+	// Stop existing overlay
+	if h.overlay != nil {
+		h.overlay.Stop()
+		h.overlay = nil
+	}
+
+	// Ensure overlay dir exists
+	if err := os.MkdirAll(h.cfg.OverlayDir, 0755); err != nil {
+		writeError(w, http.StatusInternalServerError, "overlay dir: %v", err)
+		return
+	}
+
+	pngPath := filepath.Join(h.cfg.OverlayDir, "timing.png")
+
+	h.overlay = overlay.New(overlay.Config{
+		EventID:   req.EventID,
+		SessionID: req.SessionID,
+		PNGPath:   pngPath,
+		MaxRows:   req.MaxRows,
+	})
+	h.overlay.Start()
+
+	// Tell the switcher to use the overlay
+	h.sw.SetOverlay(pngPath)
+
+	log.Printf("Overlay started: event=%s session=%s", req.EventID, req.SessionID)
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":   "started",
+		"event_id": req.EventID,
+		"png_path": pngPath,
+	})
+}
+
+func (h *Handler) stopOverlay(w http.ResponseWriter, r *http.Request) {
+	if h.overlay == nil {
+		writeError(w, http.StatusConflict, "no overlay running")
+		return
+	}
+	h.overlay.Stop()
+	h.overlay = nil
+	h.sw.SetOverlay("")
+
+	log.Printf("Overlay stopped")
+	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+}
+
+func (h *Handler) overlayStatus(w http.ResponseWriter, r *http.Request) {
+	if h.overlay == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"active": false})
+		return
+	}
+	comps := h.overlay.Competitors()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"active":      true,
+		"competitors": len(comps),
+	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

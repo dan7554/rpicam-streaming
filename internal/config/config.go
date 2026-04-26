@@ -13,6 +13,7 @@ type Config struct {
 	RTMPOutput   string   // Default RTMP output URL (e.g. rtmp://localhost:1935/live-output)
 	BridgeAddr   string   // RTSP bridge proxy listen address (e.g. :8555)
 	Cameras      []string // Camera path names (e.g. [cam1, cam2, cam3])
+	OverlayDir   string   // Directory for overlay PNG files
 }
 
 func Load() *Config {
@@ -33,6 +34,7 @@ func Load() *Config {
 		RTMPOutput:   getEnv("RTMP_OUTPUT", "rtmp://localhost:1935/live-output"),
 		BridgeAddr:   getEnv("BRIDGE_ADDR", ":8555"),
 		Cameras:      cameras,
+		OverlayDir:   getEnv("OVERLAY_DIR", "/tmp/media-mtx-overlay"),
 	}
 }
 

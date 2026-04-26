@@ -3,6 +3,7 @@ package switcher
 import (
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"sync"
 	"time"
@@ -39,6 +40,7 @@ type Switcher struct {
 	cameras       []string
 	bridgeFactory BridgeFactory
 	bridge        Bridger
+	overlayPath   string // path to overlay PNG, empty = no overlay
 }
 
 func defaultCmdFactory(rtspURL, rtmpURL string) *exec.Cmd {
@@ -58,6 +60,30 @@ func defaultCmdFactory(rtspURL, rtmpURL string) *exec.Cmd {
 	)
 }
 
+func overlayCmdFactory(overlayPath string) CmdFactory {
+	return func(rtspURL, rtmpURL string) *exec.Cmd {
+		return exec.Command("ffmpeg",
+			"-rtsp_transport", "tcp",
+			"-i", rtspURL,
+			"-loop", "1",
+			"-f", "image2", "-r", "1",
+			"-i", overlayPath,
+			"-filter_complex", "[1:v]format=rgba[ovr];[0:v][ovr]overlay=x=20:y=20:shortest=1[out]",
+			"-map", "[out]", "-map", "0:a?",
+			"-c:v", "libx264",
+			"-preset", "ultrafast",
+			"-tune", "zerolatency",
+			"-g", "60",
+			"-keyint_min", "60",
+			"-c:a", "aac",
+			"-b:a", "128k",
+			"-f", "flv",
+			"-flvflags", "no_duration_filesize",
+			rtmpURL,
+		)
+	}
+}
+
 func New(rtspBase, mediaMTXAPI string, bf BridgeFactory, cameras []string) *Switcher {
 	return &Switcher{
 		rtspBase:      rtspBase,
@@ -65,6 +91,20 @@ func New(rtspBase, mediaMTXAPI string, bf BridgeFactory, cameras []string) *Swit
 		cmdFactory:    defaultCmdFactory,
 		bridgeFactory: bf,
 		cameras:       cameras,
+	}
+}
+
+// SetOverlay enables the PNG overlay on the RTMP output.
+func (s *Switcher) SetOverlay(pngPath string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.overlayPath = pngPath
+	if pngPath != "" {
+		s.cmdFactory = overlayCmdFactory(pngPath)
+		log.Printf("Overlay enabled: %s", pngPath)
+	} else {
+		s.cmdFactory = defaultCmdFactory
+		log.Printf("Overlay disabled")
 	}
 }
 
@@ -203,6 +243,7 @@ func (s *Switcher) startFFmpeg() error {
 	log.Printf("Starting FFmpeg: %s → %s (active: %s)", rtspURL, rtmpURL, s.activeStream)
 
 	s.cmd = s.cmdFactory(rtspURL, rtmpURL)
+	s.cmd.Stderr = os.Stderr
 
 	if err := s.cmd.Start(); err != nil {
 		return fmt.Errorf("ffmpeg start failed: %w", err)
