@@ -34,6 +34,11 @@ type Competitor struct {
 // sessionResp is the raw MYLAPS API response.
 type sessionResp struct {
 	Competitors []Competitor `json:"l"`
+	Laps        int          `json:"ls"`    // laps completed by leader
+	LapsToGo    int          `json:"lsTg"`  // laps remaining
+	RaceName    string       `json:"rnNam"` // session/race name
+	RaceTime    string       `json:"rcTm"`  // race elapsed time
+	EventName   string       `json:"eNam"`  // event name
 }
 
 // Overlay polls a MYLAPS live timing session and renders a PNG timing tower.
@@ -45,6 +50,9 @@ type Overlay struct {
 	pngPath     string
 	competitors []Competitor
 	sessionName string
+	laps        int
+	lapsToGo    int
+	raceTime    string
 	maxRows     int
 	interval    time.Duration
 	stopCh      chan struct{}
@@ -83,6 +91,7 @@ func (o *Overlay) Start() {
 	o.wg.Add(1)
 	go func() {
 		defer o.wg.Done()
+		log.Printf("[overlay] starting initial poll")
 		o.poll() // immediate first poll
 		ticker := time.NewTicker(o.interval)
 		defer ticker.Stop()
@@ -91,18 +100,20 @@ func (o *Overlay) Start() {
 			case <-ticker.C:
 				o.poll()
 			case <-o.stopCh:
+				log.Printf("[overlay] stop signal received")
 				return
 			}
 		}
 	}()
-	log.Printf("Overlay started: event=%s session=%s interval=%s", o.eventID, o.sessionID, o.interval)
+	log.Printf("[overlay] started: event=%s session=%s interval=%s maxRows=%d pngPath=%s", o.eventID, o.sessionID, o.interval, o.maxRows, o.pngPath)
 }
 
 // Stop halts polling.
 func (o *Overlay) Stop() {
+	log.Printf("[overlay] stopping...")
 	close(o.stopCh)
 	o.wg.Wait()
-	log.Printf("Overlay stopped")
+	log.Printf("[overlay] stopped")
 }
 
 func (o *Overlay) poll() {
@@ -113,9 +124,11 @@ func (o *Overlay) poll() {
 		url = fmt.Sprintf("%s/events/%s/active", o.apiBase, o.eventID)
 	}
 
+	log.Printf("[overlay] poll: GET %s", url)
+
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		log.Printf("overlay request error: %v", err)
+		log.Printf("[overlay] poll: request create error: %v", err)
 		return
 	}
 	req.Header.Set("Accept", "application/json")
@@ -124,32 +137,42 @@ func (o *Overlay) poll() {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Printf("overlay poll error: %v", err)
+		log.Printf("[overlay] poll: HTTP error: %v", err)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		io.Copy(io.Discard, resp.Body)
-		log.Printf("overlay poll: HTTP %d", resp.StatusCode)
+		log.Printf("[overlay] poll: HTTP %d (non-200)", resp.StatusCode)
 		return
 	}
 
 	var data sessionResp
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		log.Printf("overlay decode error: %v", err)
+		log.Printf("[overlay] poll: JSON decode error: %v", err)
 		return
 	}
 
+	log.Printf("[overlay] poll: got %d competitors, laps=%d lapsToGo=%d raceTime=%q raceName=%q",
+		len(data.Competitors), data.Laps, data.LapsToGo, data.RaceTime, data.RaceName)
+
 	o.mu.Lock()
 	o.competitors = data.Competitors
-	if len(o.competitors) > 0 {
+	if data.RaceName != "" {
+		o.sessionName = data.RaceName
+	} else if len(o.competitors) > 0 {
 		o.sessionName = o.competitors[0].Class
 	}
+	o.laps = data.Laps
+	o.lapsToGo = data.LapsToGo
+	o.raceTime = data.RaceTime
 	o.mu.Unlock()
 
 	if err := o.render(); err != nil {
-		log.Printf("overlay render error: %v", err)
+		log.Printf("[overlay] poll: render error: %v", err)
+	} else {
+		log.Printf("[overlay] poll: rendered %d rows to %s", min(len(data.Competitors), o.maxRows), o.pngPath)
 	}
 }
 
@@ -167,6 +190,9 @@ func (o *Overlay) render() error {
 	o.mu.RLock()
 	comps := o.competitors
 	sessionName := o.sessionName
+	laps := o.laps
+	lapsToGo := o.lapsToGo
+	raceTime := o.raceTime
 	o.mu.RUnlock()
 
 	n := len(comps)
@@ -182,15 +208,17 @@ func (o *Overlay) render() error {
 	const (
 		rowH      = 22
 		headerH   = 28
+		subHeaderH = 20
 		padX      = 8
 		charW     = 8 // inconsolata monospace char width
 		colPos    = 30
 		colNum    = 60
 		colName   = 170
+		colLaps   = 50
 		colGap    = 90
-		totalW    = colPos + colNum + colName + colGap + padX*2
+		totalW    = colPos + colNum + colName + colLaps + colGap + padX*2
 	)
-	totalH := headerH + rowH*n + 4
+	totalH := headerH + subHeaderH + rowH*n + 4
 
 	img := image.NewRGBA(image.Rect(0, 0, totalW, totalH))
 
@@ -214,22 +242,40 @@ func (o *Overlay) render() error {
 	yellow := color.RGBA{255, 255, 0, 255}
 	gray := color.RGBA{180, 180, 180, 255}
 	green := color.RGBA{0, 220, 100, 255}
+	cyan := color.RGBA{0, 200, 255, 255}
 
-	// Header text
+	// Header text: session name on the left
 	title := sessionName
-	if len(title) > 40 {
-		title = title[:40]
+	if len(title) > 30 {
+		title = title[:30]
 	}
 	drawString(img, face, padX, headerH-8, title, white)
 
-	// Column headers
-	y0 := headerH
-	drawString(img, face, padX, y0+rowH-6, "P", gray)
-	drawString(img, face, padX+colPos, y0+rowH-6, "#", gray)
-	drawString(img, face, padX+colPos+colNum, y0+rowH-6, "Name", gray)
-	drawString(img, face, padX+colPos+colNum+colName, y0+rowH-6, "Gap", gray)
+	// Laps info on the right side of header
+	lapsInfo := ""
+	if lapsToGo > 0 {
+		lapsInfo = fmt.Sprintf("Lap %d  %d to go", laps, lapsToGo)
+	} else if laps > 0 {
+		lapsInfo = fmt.Sprintf("Lap %d", laps)
+	}
+	if lapsInfo != "" {
+		lapsInfoX := totalW - padX - len(lapsInfo)*charW
+		drawString(img, face, lapsInfoX, headerH-8, lapsInfo, yellow)
+	}
 
-	// Stripe row header
+	// Sub-header: race time
+	subHeaderColor := color.RGBA{15, 15, 60, 220}
+	for y := headerH; y < headerH+subHeaderH; y++ {
+		for x := 0; x < totalW; x++ {
+			img.SetRGBA(x, y, subHeaderColor)
+		}
+	}
+	if raceTime != "" {
+		drawString(img, face, padX, headerH+subHeaderH-5, "Race: "+raceTime, cyan)
+	}
+
+	// Column headers row
+	y0 := headerH + subHeaderH
 	headerRowColor := color.RGBA{40, 40, 40, 200}
 	for x := 0; x < totalW; x++ {
 		for dy := 0; dy < rowH; dy++ {
@@ -239,7 +285,8 @@ func (o *Overlay) render() error {
 	drawString(img, face, padX, y0+rowH-6, "P", gray)
 	drawString(img, face, padX+colPos, y0+rowH-6, "#", gray)
 	drawString(img, face, padX+colPos+colNum, y0+rowH-6, "Name", gray)
-	drawString(img, face, padX+colPos+colNum+colName, y0+rowH-6, "Gap", gray)
+	drawString(img, face, padX+colPos+colNum+colName, y0+rowH-6, "Laps", gray)
+	drawString(img, face, padX+colPos+colNum+colName+colLaps, y0+rowH-6, "Gap", gray)
 
 	// Data rows
 	for i := 0; i < n; i++ {
@@ -273,10 +320,13 @@ func (o *Overlay) render() error {
 			gap = "-"
 		}
 
+		lapsStr := fmt.Sprintf("%d", c.Laps)
+
 		drawString(img, face, padX, ry+rowH-6, c.Pos, posColor)
 		drawString(img, face, padX+colPos, ry+rowH-6, c.Number, white)
 		drawString(img, face, padX+colPos+colNum, ry+rowH-6, name, white)
-		drawString(img, face, padX+colPos+colNum+colName, ry+rowH-6, gap, green)
+		drawString(img, face, padX+colPos+colNum+colName, ry+rowH-6, lapsStr, cyan)
+		drawString(img, face, padX+colPos+colNum+colName+colLaps, ry+rowH-6, gap, green)
 	}
 
 	// Write to temp file then rename (atomic)

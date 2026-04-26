@@ -44,9 +44,15 @@ type Switcher struct {
 }
 
 func defaultCmdFactory(rtspURL, rtmpURL string) *exec.Cmd {
+	log.Printf("[switcher] building DEFAULT FFmpeg cmd: %s → %s", rtspURL, rtmpURL)
 	return exec.Command("ffmpeg",
+		"-use_wallclock_as_timestamps", "1",
 		"-rtsp_transport", "tcp",
+		"-fflags", "+discardcorrupt",
+		"-err_detect", "ignore_err",
 		"-i", rtspURL,
+		"-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono",
+		"-map", "0:v", "-map", "1:a",
 		"-c:v", "libx264",
 		"-preset", "ultrafast",
 		"-tune", "zerolatency",
@@ -62,14 +68,19 @@ func defaultCmdFactory(rtspURL, rtmpURL string) *exec.Cmd {
 
 func overlayCmdFactory(overlayPath string) CmdFactory {
 	return func(rtspURL, rtmpURL string) *exec.Cmd {
+		log.Printf("[switcher] building OVERLAY FFmpeg cmd: %s → %s (overlay=%s)", rtspURL, rtmpURL, overlayPath)
 		return exec.Command("ffmpeg",
+			"-use_wallclock_as_timestamps", "1",
 			"-rtsp_transport", "tcp",
+			"-fflags", "+discardcorrupt",
+			"-err_detect", "ignore_err",
 			"-i", rtspURL,
 			"-loop", "1",
 			"-f", "image2", "-r", "1",
 			"-i", overlayPath,
+			"-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono",
 			"-filter_complex", "[1:v]format=rgba[ovr];[0:v][ovr]overlay=x=20:y=20:shortest=1[out]",
-			"-map", "[out]", "-map", "0:a?",
+			"-map", "[out]", "-map", "2:a",
 			"-c:v", "libx264",
 			"-preset", "ultrafast",
 			"-tune", "zerolatency",
@@ -85,6 +96,7 @@ func overlayCmdFactory(overlayPath string) CmdFactory {
 }
 
 func New(rtspBase, mediaMTXAPI string, bf BridgeFactory, cameras []string) *Switcher {
+	log.Printf("[switcher] New: rtspBase=%s mediaMTXAPI=%s cameras=%v", rtspBase, mediaMTXAPI, cameras)
 	return &Switcher{
 		rtspBase:      rtspBase,
 		mediaMTXAPI:   mediaMTXAPI,
@@ -94,17 +106,30 @@ func New(rtspBase, mediaMTXAPI string, bf BridgeFactory, cameras []string) *Swit
 	}
 }
 
-// SetOverlay enables the PNG overlay on the RTMP output.
+// SetOverlay enables/disables the PNG overlay. Restarts FFmpeg with the
+// appropriate filter chain.
 func (s *Switcher) SetOverlay(pngPath string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.overlayPath = pngPath
+	log.Printf("[switcher] SetOverlay called: pngPath=%q live=%v localMode=%v activeStream=%s", pngPath, s.live, s.localMode, s.activeStream)
 	if pngPath != "" {
+		s.overlayPath = pngPath
 		s.cmdFactory = overlayCmdFactory(pngPath)
-		log.Printf("Overlay enabled: %s", pngPath)
+		log.Printf("[switcher] overlay ENABLED → cmdFactory=overlay path=%s", pngPath)
 	} else {
+		s.overlayPath = ""
 		s.cmdFactory = defaultCmdFactory
-		log.Printf("Overlay disabled")
+		log.Printf("[switcher] overlay DISABLED → cmdFactory=default")
+	}
+	// Restart FFmpeg with the new filter chain if currently live
+	if s.live && !s.localMode {
+		log.Printf("[switcher] restarting FFmpeg for overlay change (was live)...")
+		s.stopFFmpeg()
+		if err := s.startFFmpeg(); err != nil {
+			log.Printf("[switcher] FFmpeg restart after overlay change FAILED: %v", err)
+		}
+	} else {
+		log.Printf("[switcher] not restarting FFmpeg (live=%v localMode=%v)", s.live, s.localMode)
 	}
 }
 
@@ -124,15 +149,19 @@ type Status struct {
 	Live         bool   `json:"live"`
 	ActiveStream string `json:"active_stream"`
 	RTMPDest     string `json:"rtmp_dest,omitempty"`
+	LocalMode    bool   `json:"local_mode"`
 }
 
 func (s *Switcher) Status() Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return Status{
+	st := Status{
 		Live:         s.live,
 		ActiveStream: s.activeStream,
+		LocalMode:    s.localMode,
 	}
+	log.Printf("[switcher] Status() → live=%v active=%s localMode=%v overlayPath=%q", st.Live, st.ActiveStream, st.LocalMode, s.overlayPath)
+	return st
 }
 
 // StartLive begins streaming. In local mode, no FFmpeg is started — switching
@@ -141,7 +170,10 @@ func (s *Switcher) StartLive(stream, rtmpDest string, localMode bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	log.Printf("[switcher] StartLive called: stream=%s rtmpDest=%s localMode=%v", stream, rtmpDest, localMode)
+
 	if s.live {
+		log.Printf("[switcher] StartLive REJECTED: already live")
 		return fmt.Errorf("already live, stop first")
 	}
 
@@ -150,20 +182,25 @@ func (s *Switcher) StartLive(stream, rtmpDest string, localMode bool) error {
 	s.localMode = localMode
 
 	if localMode {
-		log.Printf("Started live (local): %s", stream)
+		log.Printf("[switcher] started live (local mode): %s", stream)
 		s.live = true
 		return nil
 	}
 
 	// RTMP mode: start bridge proxy, then FFmpeg
+	log.Printf("[switcher] starting RTMP mode: bridge + FFmpeg")
 	if s.bridgeFactory != nil {
+		log.Printf("[switcher] creating bridge proxy...")
 		s.bridge = s.bridgeFactory()
 		if err := s.bridge.Start(s.cameras, stream); err != nil {
+			log.Printf("[switcher] bridge start FAILED: %v", err)
 			return fmt.Errorf("bridge start: %w", err)
 		}
+		log.Printf("[switcher] bridge proxy started, URL=%s", s.bridge.ProxyURL())
 	}
 
 	if err := s.startFFmpeg(); err != nil {
+		log.Printf("[switcher] FFmpeg start FAILED: %v, stopping bridge", err)
 		if s.bridge != nil {
 			s.bridge.Stop()
 			s.bridge = nil
@@ -171,6 +208,7 @@ func (s *Switcher) StartLive(stream, rtmpDest string, localMode bool) error {
 		return err
 	}
 	s.live = true
+	log.Printf("[switcher] now LIVE: stream=%s dest=%s", stream, rtmpDest)
 	return nil
 }
 
@@ -179,11 +217,15 @@ func (s *Switcher) StopLive() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	log.Printf("[switcher] StopLive called: live=%v localMode=%v activeStream=%s", s.live, s.localMode, s.activeStream)
+
 	if !s.live {
+		log.Printf("[switcher] StopLive REJECTED: not currently live")
 		return fmt.Errorf("not currently live")
 	}
 
 	if !s.localMode {
+		log.Printf("[switcher] stopping FFmpeg and bridge...")
 		s.stopFFmpeg()
 		if s.bridge != nil {
 			s.bridge.Stop()
@@ -193,6 +235,7 @@ func (s *Switcher) StopLive() error {
 	s.live = false
 	s.activeStream = ""
 	s.localMode = false
+	log.Printf("[switcher] live session STOPPED")
 	return nil
 }
 
@@ -203,19 +246,25 @@ func (s *Switcher) Switch(stream string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	log.Printf("[switcher] Switch called: %s → %s (live=%v)", s.activeStream, stream, s.live)
+
 	if !s.live {
+		log.Printf("[switcher] Switch REJECTED: not live")
 		return fmt.Errorf("not currently live, start live first")
 	}
 
 	if stream == s.activeStream {
-		return nil // already on this stream
+		log.Printf("[switcher] Switch NOOP: already on %s", stream)
+		return nil
 	}
 
 	if !s.localMode && s.bridge != nil {
+		log.Printf("[switcher] delegating switch to bridge: %s", stream)
 		s.bridge.Switch(stream)
 	}
 
 	s.activeStream = stream
+	log.Printf("[switcher] switched to %s", stream)
 	return nil
 }
 
@@ -223,11 +272,13 @@ func (s *Switcher) Switch(stream string) error {
 func (s *Switcher) StopAll() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	log.Printf("[switcher] StopAll: shutting down everything")
 	s.stopFFmpeg()
 	if s.bridge != nil {
 		s.bridge.Stop()
 		s.bridge = nil
 	}
+	log.Printf("[switcher] StopAll complete")
 }
 
 func (s *Switcher) startFFmpeg() error {
@@ -235,33 +286,44 @@ func (s *Switcher) startFFmpeg() error {
 	var rtspURL string
 	if s.bridge != nil {
 		rtspURL = s.bridge.ProxyURL()
+		log.Printf("[switcher] startFFmpeg: using bridge proxy URL=%s", rtspURL)
 	} else {
 		rtspURL = fmt.Sprintf("%s/program", s.rtspBase)
+		log.Printf("[switcher] startFFmpeg: using direct RTSP URL=%s", rtspURL)
 	}
 	rtmpURL := s.rtmpDest
 
-	log.Printf("Starting FFmpeg: %s → %s (active: %s)", rtspURL, rtmpURL, s.activeStream)
+	log.Printf("[switcher] startFFmpeg: %s → %s (active=%s overlayPath=%q)", rtspURL, rtmpURL, s.activeStream, s.overlayPath)
 
 	s.cmd = s.cmdFactory(rtspURL, rtmpURL)
 	s.cmd.Stderr = os.Stderr
 
+	log.Printf("[switcher] startFFmpeg: launching ffmpeg with args: %v", s.cmd.Args)
+
 	if err := s.cmd.Start(); err != nil {
+		log.Printf("[switcher] startFFmpeg: FAILED to start: %v", err)
 		return fmt.Errorf("ffmpeg start failed: %w", err)
 	}
 
+	log.Printf("[switcher] startFFmpeg: FFmpeg started, PID=%d", s.cmd.Process.Pid)
+
 	// Monitor in background — auto-restart if FFmpeg exits while still live
 	cmd := s.cmd
+	pid := cmd.Process.Pid
 	go func() {
+		log.Printf("[switcher] monitor: watching FFmpeg PID=%d", pid)
 		err := cmd.Wait()
 		if err != nil {
-			log.Printf("FFmpeg exited: %v", err)
+			log.Printf("[switcher] monitor: FFmpeg PID=%d exited with error: %v", pid, err)
+		} else {
+			log.Printf("[switcher] monitor: FFmpeg PID=%d exited cleanly", pid)
 		}
 
 		s.mu.Lock()
 		// Only restart if we're still live and this is still the current cmd
 		// (not killed by stopFFmpeg)
 		if s.live && s.cmd == cmd {
-			log.Printf("FFmpeg crashed while live, restarting in 2s...")
+			log.Printf("[switcher] monitor: FFmpeg PID=%d crashed while live, restarting in 2s...", pid)
 			s.cmd = nil
 			s.mu.Unlock()
 
@@ -270,12 +332,16 @@ func (s *Switcher) startFFmpeg() error {
 
 			s.mu.Lock()
 			if s.live {
+				log.Printf("[switcher] monitor: attempting FFmpeg restart after crash...")
 				if err := s.startFFmpeg(); err != nil {
-					log.Printf("FFmpeg restart failed: %v", err)
+					log.Printf("[switcher] monitor: FFmpeg restart FAILED: %v", err)
 				}
+			} else {
+				log.Printf("[switcher] monitor: no longer live, skipping restart")
 			}
 			s.mu.Unlock()
 		} else {
+			log.Printf("[switcher] monitor: FFmpeg PID=%d exit was intentional (cmd replaced or not live)", pid)
 			s.mu.Unlock()
 		}
 	}()
@@ -285,9 +351,16 @@ func (s *Switcher) startFFmpeg() error {
 
 func (s *Switcher) stopFFmpeg() {
 	if s.cmd != nil && s.cmd.Process != nil {
-		log.Printf("Stopping FFmpeg (PID %d)", s.cmd.Process.Pid)
+		pid := s.cmd.Process.Pid
+		log.Printf("[switcher] stopFFmpeg: killing PID=%d", pid)
 		cmd := s.cmd
 		s.cmd = nil // clear before kill so monitor goroutine knows it was intentional
-		_ = cmd.Process.Kill()
+		if err := cmd.Process.Kill(); err != nil {
+			log.Printf("[switcher] stopFFmpeg: kill PID=%d error: %v", pid, err)
+		} else {
+			log.Printf("[switcher] stopFFmpeg: killed PID=%d", pid)
+		}
+	} else {
+		log.Printf("[switcher] stopFFmpeg: no running FFmpeg process to stop")
 	}
 }

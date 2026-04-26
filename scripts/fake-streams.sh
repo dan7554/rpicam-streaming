@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Launch 2 fake FFmpeg streams into MediaMTX via RTSP
-# cam3 is a real RPi camera (rpicam3) pushing RTSP to this server
+# Launch cam1 fake FFmpeg stream into MediaMTX via RTSP
+# cam2 = rpicam2, cam3 = rpicam3 (real RPi cameras pushing RTMP)
 set -e
 
 RTSP_HOST="${RTSP_HOST:-localhost}"
@@ -16,10 +16,10 @@ cleanup() {
 }
 trap cleanup SIGINT SIGTERM
 
-echo "Starting fake streams → rtsp://${RTSP_HOST}:${RTSP_PORT}/cam{1,2}"
-echo "(cam3 = rpicam3 via Tailscale)"
+echo "Starting fake stream → rtsp://${RTSP_HOST}:${RTSP_PORT}/cam1"
+echo "(cam2 = rpicam2, cam3 = rpicam3 via Tailscale/RTMP)"
 
-# cam1: SMPTE color bars
+# cam1: SMPTE color bars (fake test stream)
 ffmpeg -re -f lavfi \
     -i "smptebars=size=1280x720:rate=30" \
     -f lavfi -i "sine=frequency=400:sample_rate=48000" \
@@ -28,14 +28,6 @@ ffmpeg -re -f lavfi \
     -f rtsp "rtsp://${RTSP_HOST}:${RTSP_PORT}/cam1" &
 PIDS+=($!)
 
-# cam2: Mandelbrot fractal zoom
-ffmpeg -re -f lavfi \
-    -i "mandelbrot=size=1280x720:rate=30" \
-    -f lavfi -i "sine=frequency=600:sample_rate=48000" \
-    -c:v libx264 -preset ultrafast -tune zerolatency -b:v 2M \
-    -c:a aac -b:a 128k \
-    -f rtsp "rtsp://${RTSP_HOST}:${RTSP_PORT}/cam2" &
-PIDS+=($!)
-
-echo "Fake streams running (PIDs: ${PIDS[*]}). Press Ctrl+C to stop."
+echo "Fake stream running (PID: ${PIDS[*]}). Press Ctrl+C to stop."
+echo "Waiting for rpicam2 → cam2 and rpicam3 → cam3 to push RTMP..."
 wait

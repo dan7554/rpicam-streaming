@@ -27,6 +27,10 @@ function init() {
     // Poll status
     setInterval(pollStatus, 2000);
     pollStatus();
+
+    // Poll overlay status
+    setInterval(pollOverlayStatus, 3000);
+    pollOverlayStatus();
 }
 
 function startHLS(name) {
@@ -140,7 +144,9 @@ function updateUI(status) {
         activeStream.textContent = `Active: ${status.active_stream}`;
         btnLive.disabled = true;
         btnStop.disabled = false;
-        showOutputPreview(status.active_stream);
+        // Always show live-output — HLS.js retries automatically if
+        // FFmpeg is restarting (e.g. overlay toggle)
+        showOutputPreview('live-output');
     } else {
         badge.classList.add('hidden');
         statusText.textContent = 'Idle';
@@ -210,4 +216,81 @@ function hideOutputPreview() {
         outputPlayer = null;
     }
     currentOutputStream = null;
+}
+
+// --- Overlay Controls ---
+
+async function startOverlay() {
+    const input = document.getElementById('overlay-url').value.trim();
+    if (!input) {
+        alert('Enter a SpeedHive URL or Event ID');
+        return;
+    }
+
+    const body = {};
+    if (input.startsWith('http')) {
+        body.url = input;
+    } else {
+        body.event_id = input;
+    }
+    body.max_rows = 10;
+
+    try {
+        const res = await fetch(`${API_BASE}/api/overlay/start`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+            alert(data.error || 'Failed to start overlay');
+        }
+        pollOverlayStatus();
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+
+async function stopOverlay() {
+    try {
+        const res = await fetch(`${API_BASE}/api/overlay/stop`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) {
+            alert(data.error || 'Failed to stop overlay');
+        }
+        pollOverlayStatus();
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+
+async function pollOverlayStatus() {
+    try {
+        const res = await fetch(`${API_BASE}/api/overlay/status`);
+        const data = await res.json();
+        updateOverlayUI(data);
+    } catch {
+        // Server not reachable
+    }
+}
+
+function updateOverlayUI(data) {
+    const statusText = document.getElementById('overlay-status-text');
+    const competitors = document.getElementById('overlay-competitors');
+    const btnStart = document.getElementById('btn-overlay-start');
+    const btnStop = document.getElementById('btn-overlay-stop');
+
+    if (data.active) {
+        statusText.textContent = 'Active';
+        statusText.className = 'overlay-active';
+        competitors.textContent = `${data.competitors} competitors`;
+        btnStart.disabled = true;
+        btnStop.disabled = false;
+    } else {
+        statusText.textContent = 'Off';
+        statusText.className = '';
+        competitors.textContent = '';
+        btnStart.disabled = false;
+        btnStop.disabled = true;
+    }
 }

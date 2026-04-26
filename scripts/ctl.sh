@@ -15,8 +15,9 @@ Commands:
   switch <cam>                  Switch active camera (cam1, cam2, cam3)
   live-start <cam> [rtmp_dest]  Start RTMP output (default: local live-output)
   live-stop                     Stop RTMP output
-  overlay-start <event_id> [session_id] [max_rows]
+  overlay-start <url|event_id> [session_id] [max_rows]
                                 Start timing overlay from MYLAPS SpeedHive
+                                Accepts a full SpeedHive URL or event/session IDs
   overlay-stop                  Stop timing overlay
   overlay-status                Show overlay state
 
@@ -28,6 +29,7 @@ Examples:
   $0 switch cam2
   $0 live-start cam1
   $0 live-start cam1 rtmp://a.rtmp.youtube.com/live2/YOUR-KEY
+  $0 overlay-start https://speedhive.mylaps.com/livetiming/1CDCD1BA383B88F4-2147485280/sessions/...
   $0 overlay-start 1CDCD1BA383B88F4-2147485280
   $0 overlay-start 1CDCD1BA383B88F4-2147485280 1CDCD1BA383B88F4-2147485280-1073743690 8
 EOF
@@ -71,13 +73,19 @@ for s in d.get('items',[]):
         post /api/live/stop '{}' | pp
         ;;
     overlay-start)
-        [ $# -ge 2 ] || { echo "Usage: $0 overlay-start <event_id> [session_id] [max_rows]"; exit 1; }
-        event_id="$2"
-        session_id="${3:-}"
-        max_rows="${4:-10}"
-        body="{\"event_id\":\"$event_id\""
-        [ -n "$session_id" ] && body="$body,\"session_id\":\"$session_id\""
-        body="$body,\"max_rows\":$max_rows}"
+        [ $# -ge 2 ] || { echo "Usage: $0 overlay-start <url|event_id> [session_id] [max_rows]"; exit 1; }
+        arg="$2"
+        if [[ "$arg" == http* ]]; then
+            max_rows="${3:-10}"
+            body="{\"url\":\"$arg\",\"max_rows\":$max_rows}"
+        else
+            event_id="$arg"
+            session_id="${3:-}"
+            max_rows="${4:-10}"
+            body="{\"event_id\":\"$event_id\""
+            [ -n "$session_id" ] && body="$body,\"session_id\":\"$session_id\""
+            body="$body,\"max_rows\":$max_rows}"
+        fi
         post /api/overlay/start "$body" | pp
         ;;
     overlay-stop)

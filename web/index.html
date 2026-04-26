@@ -38,6 +38,22 @@
             </div>
         </section>
 
+        <!-- Overlay Controls -->
+        <section id="overlay-controls">
+            <h2>Timing Overlay</h2>
+            <div class="controls">
+                <input type="text" id="overlay-url" placeholder="SpeedHive URL or Event ID" autocomplete="off">
+                <div class="btn-group">
+                    <button id="btn-overlay-start" onclick="startOverlay()">Start Overlay</button>
+                    <button id="btn-overlay-stop" onclick="stopOverlay()" disabled>Stop</button>
+                </div>
+            </div>
+            <div id="overlay-status-bar">
+                <span id="overlay-status-text">Off</span>
+                <span id="overlay-competitors"></span>
+            </div>
+        </section>
+
         <!-- Live Output Preview -->
         <section id="output-section" class="hidden">
             <h2>Live Output Preview</h2>
@@ -47,6 +63,6 @@
         </section>
     </main>
 
-    <script src="app.js"></script>
+    <script src="app.js?v=7"></script>
 </body>
 </html>

@@ -225,3 +225,39 @@ h2 {
     display: block;
     margin: 0 auto;
 }
+
+/* Overlay Controls */
+#overlay-controls {
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 16px;
+    margin-top: 16px;
+}
+
+#overlay-status-bar {
+    margin-top: 12px;
+    display: flex;
+    gap: 16px;
+    font-size: 13px;
+    color: #888;
+}
+
+.overlay-active {
+    color: #4caf50;
+    font-weight: 600;
+}
+
+#btn-overlay-start {
+    background: #4caf50;
+    color: white;
+}
+
+#btn-overlay-start:hover {
+    background: #388e3c;
+}
+
+#btn-overlay-start:disabled {
+    background: #555;
+    cursor: not-allowed;
+}
