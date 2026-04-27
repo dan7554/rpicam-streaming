@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 )
@@ -52,54 +53,46 @@ type Switcher struct {
 }
 
 func defaultCmdFactory(rtspURL, rtmpURL, audioDevice string) *exec.Cmd {
-	log.Printf("[switcher] building DEFAULT FFmpeg cmd: %s → %s (audio=%q)", rtspURL, rtmpURL, audioDevice)
-
-	args := []string{
-		"-use_wallclock_as_timestamps", "1",
-		"-probesize", "256000",
-		"-analyzeduration", "500000",
-		"-rtsp_transport", "tcp",
-		"-fflags", "+nobuffer+discardcorrupt",
-		"-err_detect", "ignore_err",
-		"-i", rtspURL,
-	}
-
-	var vMap, aMap string
-	if audioDevice != "" {
-		// Mac mic as audio source (overrides camera audio)
-		args = append(args, "-f", "avfoundation", "-i", ":"+audioDevice)
-		vMap = "0:v"
-		aMap = "1:a"
-	} else {
-		// Use audio from RTSP stream (camera mic via bridge)
-		vMap = "0:v"
-		aMap = "0:a?"
-	}
-
-	// Output 1: RTMP + AAC (YouTube / RTMP consumers)
-	args = append(args,
-		"-map", vMap, "-map", aMap,
-		"-c:v", "libx264",
-		"-preset", "ultrafast",
-		"-tune", "zerolatency",
-		"-g", "30",
-		"-keyint_min", "30",
-		"-c:a", "aac", "-b:a", "128k",
-		"-f", "flv", "-flvflags", "no_duration_filesize", "-flush_packets", "1",
-		rtmpURL,
-	)
-
-	// Output 2: RTSP + Opus (WebRTC browser preview)
+	log.Printf("[switcher] building GStreamer cmd: %s → %s + preview (audio=%q)", rtspURL, rtmpURL, audioDevice)
 	previewURL := previewRTSPURL(rtmpURL)
-	args = append(args,
-		"-map", vMap, "-map", aMap,
-		"-c:v", "copy",
-		"-c:a", "libopus", "-b:a", "128k",
-		"-f", "rtsp", "-rtsp_transport", "tcp",
-		previewURL,
-	)
 
-	return exec.Command("ffmpeg", args...)
+	// GStreamer pipeline: RTSP source → tee video/audio → dual output
+	// Output 1: RTMP + H264 passthrough + AAC passthrough
+	// Output 2: RTSP + H264 passthrough + Opus (decoded from AAC)
+	// Video is never re-encoded, audio is decoded+re-encoded only for Opus output
+	var pipeline string
+	if audioDevice != "" {
+		// Mac mic overrides camera audio
+		pipeline = fmt.Sprintf(
+			"rtspsrc location=%s protocols=tcp latency=0 name=src "+
+				"osxaudiosrc device=%s name=mic "+
+				"src. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! tee name=vt "+
+				"mic. ! audioconvert ! audioresample ! tee name=at "+
+				"vt. ! queue leaky=downstream ! flvmux streamable=true name=flvm "+
+				"at. ! queue leaky=downstream ! avenc_aac ! aacparse ! flvm. "+
+				"flvm. ! rtmp2sink location=%s "+
+				"rtspclientsink location=%s protocols=tcp name=rsink "+
+				"vt. ! queue leaky=downstream ! rsink. "+
+				"at. ! queue leaky=downstream ! opusenc bitrate=128000 ! rsink.",
+			rtspURL, audioDevice, rtmpURL, previewURL)
+	} else {
+		// Camera audio from RTSP stream
+		pipeline = fmt.Sprintf(
+			"rtspsrc location=%s protocols=tcp latency=0 name=src "+
+				"src. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! tee name=vt "+
+				"src. ! rtpmp4gdepay ! aacparse ! tee name=at "+
+				"vt. ! queue leaky=downstream ! flvmux streamable=true name=flvm "+
+				"at. ! queue leaky=downstream ! flvm. "+
+				"flvm. ! rtmp2sink location=%s "+
+				"rtspclientsink location=%s protocols=tcp name=rsink "+
+				"vt. ! queue leaky=downstream ! rsink. "+
+				"at. ! queue leaky=downstream ! avdec_aac ! audioconvert ! audioresample ! opusenc bitrate=128000 ! rsink.",
+			rtspURL, rtmpURL, previewURL)
+	}
+
+	log.Printf("[switcher] GStreamer pipeline: %s", pipeline)
+	args := append([]string{"-e"}, strings.Fields(pipeline)...)
+	return exec.Command("gst-launch-1.0", args...)
 }
 
 func overlayCmdFactory(overlayPath string) CmdFactory {
@@ -419,15 +412,21 @@ func (s *Switcher) startFFmpeg() error {
 func (s *Switcher) stopFFmpeg() {
 	if s.cmd != nil && s.cmd.Process != nil {
 		pid := s.cmd.Process.Pid
-		log.Printf("[switcher] stopFFmpeg: killing PID=%d", pid)
+		log.Printf("[switcher] stopFFmpeg: stopping PID=%d", pid)
 		cmd := s.cmd
 		s.cmd = nil // clear before kill so monitor goroutine knows it was intentional
-		if err := cmd.Process.Kill(); err != nil {
-			log.Printf("[switcher] stopFFmpeg: kill PID=%d error: %v", pid, err)
+		// Send SIGINT first (allows GStreamer EOS / FFmpeg clean shutdown)
+		if err := cmd.Process.Signal(os.Interrupt); err != nil {
+			log.Printf("[switcher] stopFFmpeg: SIGINT PID=%d error: %v, trying SIGKILL", pid, err)
+			cmd.Process.Kill()
 		} else {
-			log.Printf("[switcher] stopFFmpeg: killed PID=%d", pid)
+			// Give it a moment to shut down, then force-kill if still running
+			go func() {
+				time.Sleep(3 * time.Second)
+				cmd.Process.Kill() // no-op if already exited
+			}()
 		}
 	} else {
-		log.Printf("[switcher] stopFFmpeg: no running FFmpeg process to stop")
+		log.Printf("[switcher] stopFFmpeg: no running process to stop")
 	}
 }
