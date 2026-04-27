@@ -54,12 +54,10 @@ type Switcher struct {
 
 func defaultCmdFactory(rtspURL, rtmpURL, audioDevice string) *exec.Cmd {
 	log.Printf("[switcher] building GStreamer cmd: %s → %s + preview (audio=%q)", rtspURL, rtmpURL, audioDevice)
-	previewURL := previewRTSPURL(rtmpURL)
 
 	// GStreamer pipeline: RTSP source → tee video/audio → dual output
 	// Output 1: RTMP + H264 passthrough + AAC passthrough
-	// Output 2: RTSP + H264 passthrough + Opus (decoded from AAC)
-	// Video is never re-encoded, audio is decoded+re-encoded only for Opus output
+	// Video is never re-encoded; keep the default path to a single RTMP sink.
 	var pipeline string
 	if audioDevice != "" {
 		// Mac mic overrides camera audio
@@ -67,27 +65,21 @@ func defaultCmdFactory(rtspURL, rtmpURL, audioDevice string) *exec.Cmd {
 			"rtspsrc location=%s protocols=tcp latency=0 name=src "+
 				"osxaudiosrc device=%s name=mic "+
 				"src. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! tee name=vt "+
-				"mic. ! audioconvert ! audioresample ! tee name=at "+
 				"vt. ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! flvmux streamable=true name=flvm "+
-				"at. ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! avenc_aac ! aacparse ! flvm. "+
+				"mic. ! audioconvert ! audioresample ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! avenc_aac ! aacparse ! flvm. "+
 				"flvm. ! rtmp2sink location=%s "+
-				"rtspclientsink location=%s protocols=tcp latency=0 name=rsink "+
-				"vt. ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! rsink. "+
-				"at. ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! opusenc bitrate=128000 frame-size=5 ! rsink.",
-			rtspURL, audioDevice, rtmpURL, previewURL)
+				"vt. ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! rtspclientsink location=rtsp://localhost:8554/live-preview",
+			rtspURL, audioDevice, rtmpURL)
 	} else {
 		// Camera audio from RTSP stream
 		pipeline = fmt.Sprintf(
 			"rtspsrc location=%s protocols=tcp latency=0 name=src "+
 				"src. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! tee name=vt "+
-				"src. ! rtpmp4gdepay ! aacparse ! tee name=at "+
 				"vt. ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! flvmux streamable=true name=flvm "+
-				"at. ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! flvm. "+
+				"src. ! rtpmp4gdepay ! aacparse ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! flvm. "+
 				"flvm. ! rtmp2sink location=%s "+
-				"rtspclientsink location=%s protocols=tcp latency=0 name=rsink "+
-				"vt. ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! rsink. "+
-				"at. ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! avdec_aac ! audioconvert ! audioresample ! opusenc bitrate=128000 frame-size=5 ! rsink.",
-			rtspURL, rtmpURL, previewURL)
+				"vt. ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! rtspclientsink location=rtsp://localhost:8554/live-preview",
+			rtspURL, rtmpURL)
 	}
 
 	log.Printf("[switcher] GStreamer pipeline: %s", pipeline)
@@ -97,60 +89,40 @@ func defaultCmdFactory(rtspURL, rtmpURL, audioDevice string) *exec.Cmd {
 
 func overlayCmdFactory(overlayPath string) CmdFactory {
 	return func(rtspURL, rtmpURL, audioDevice string) *exec.Cmd {
-		log.Printf("[switcher] building OVERLAY FFmpeg cmd: %s → %s (overlay=%s audio=%q)", rtspURL, rtmpURL, overlayPath, audioDevice)
+		log.Printf("[switcher] building OVERLAY GStreamer cmd: %s → %s (overlay=%s audio=%q)", rtspURL, rtmpURL, overlayPath, audioDevice)
 
-		args := []string{
-			"-use_wallclock_as_timestamps", "1",
-			"-probesize", "32000",
-			"-analyzeduration", "100000",
-			"-rtsp_transport", "tcp",
-			"-fflags", "+nobuffer+discardcorrupt",
-			"-err_detect", "ignore_err",
-			"-i", rtspURL,
-			"-loop", "1",
-			"-f", "image2", "-r", "1",
-			"-i", overlayPath,
-		}
+		// Overlay mode stays in GStreamer by compositing the PNG over the video,
+		// then pushing to the RTMP output.
+		videoOverlay := fmt.Sprintf(
+			"filesrc location=%s ! pngdec ! imagefreeze ! video/x-raw,framerate=30/1 ! queue name=overlay_img "+
+			"rtspsrc location=%s protocols=tcp latency=0 name=cam "+
+			"cam. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! avdec_h264 ! videoconvert ! video/x-raw,format=RGBA ! queue ! compositor name=mixer sink_1::xpos=20 sink_1::ypos=20 ! videoconvert ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast key-int-max=8 bframes=0 ! h264parse ! tee name=enc_tee "+
+			"overlay_img. ! mixer. "+
+			"enc_tee. ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! flvmux streamable=true name=rtmp_mux "+
+			"rtmp_mux. ! rtmp2sink location=%s "+
+			"cam. ! rtpmp4gdepay ! aacparse ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! avdec_aac ! audioconvert ! audioresample ! avenc_aac ! aacparse ! rtmp_mux. "+
+			"enc_tee. ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! rtspclientsink location=rtsp://localhost:8554/live-preview",
+			overlayPath, rtspURL, rtmpURL,
+		)
 
-		var aMap string
-		// Audio: avfoundation mic (stream 2) or camera audio from RTSP (stream 0)
 		if audioDevice != "" {
-			args = append(args, "-f", "avfoundation", "-i", ":"+audioDevice)
-			args = append(args,
-				"-filter_complex", "[1:v]format=rgba[ovr];[0:v][ovr]overlay=x=20:y=20:shortest=1[vout];[vout]split[vout_rtmp][vout_rtsp]",
+			// Replace camera audio with the selected mic in overlay mode.
+			videoOverlay = fmt.Sprintf(
+				"filesrc location=%s ! pngdec ! imagefreeze ! video/x-raw,framerate=30/1 ! queue name=overlay_img "+
+				"rtspsrc location=%s protocols=tcp latency=0 name=cam "+
+				"cam. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! avdec_h264 ! videoconvert ! video/x-raw,format=RGBA ! queue ! compositor name=mixer sink_1::xpos=20 sink_1::ypos=20 ! videoconvert ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast key-int-max=8 bframes=0 ! h264parse ! tee name=enc_tee "+
+				"overlay_img. ! mixer. "+
+				"enc_tee. ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! flvmux streamable=true name=rtmp_mux "+
+				"rtmp_mux. ! rtmp2sink location=%s "+
+				"osxaudiosrc device=%s ! audioconvert ! audioresample ! avenc_aac ! aacparse ! rtmp_mux. "+
+				"enc_tee. ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! rtspclientsink location=rtsp://localhost:8554/live-preview",
+				overlayPath, rtspURL, rtmpURL, audioDevice,
 			)
-			aMap = "2:a"
-		} else {
-			args = append(args,
-				"-filter_complex", "[1:v]format=rgba[ovr];[0:v][ovr]overlay=x=20:y=20:shortest=1[vout];[vout]split[vout_rtmp][vout_rtsp]",
-			)
-			aMap = "0:a?"
 		}
 
-		// Output 1: RTMP + AAC (YouTube / RTMP consumers)
-		args = append(args,
-			"-map", "[vout_rtmp]", "-map", aMap,
-			"-c:v", "libx264",
-			"-preset", "ultrafast",
-			"-tune", "zerolatency",
-			"-g", "8",
-			"-keyint_min", "8",
-			"-c:a", "aac", "-b:a", "128k",
-			"-f", "flv", "-flvflags", "no_duration_filesize", "-flush_packets", "1",
-			rtmpURL,
-		)
-
-		// Output 2: RTSP + Opus (WebRTC browser preview)
-		previewURL := previewRTSPURL(rtmpURL)
-		args = append(args,
-			"-map", "[vout_rtsp]", "-map", aMap,
-			"-c:v", "copy",
-			"-c:a", "libopus", "-b:a", "128k",
-			"-f", "rtsp", "-rtsp_transport", "tcp",
-			previewURL,
-		)
-
-		return exec.Command("ffmpeg", args...)
+		log.Printf("[switcher] GStreamer overlay pipeline: %s", videoOverlay)
+		args := append([]string{"-e"}, strings.Fields(videoOverlay)...)
+		return exec.Command("gst-launch-1.0", args...)
 	}
 }
 
@@ -174,18 +146,37 @@ func (s *Switcher) SetOverlay(pngPath string) {
 	if pngPath != "" {
 		s.overlayPath = pngPath
 		s.cmdFactory = overlayCmdFactory(pngPath)
-		log.Printf("[switcher] overlay ENABLED → cmdFactory=overlay path=%s", pngPath)
+		log.Printf("[switcher] overlay ENABLED → cmdFactory=overlay path=%s (live=%v active=%s localMode=%v)", pngPath, s.live, s.activeStream, s.localMode)
 	} else {
 		s.overlayPath = ""
 		s.cmdFactory = defaultCmdFactory
-		log.Printf("[switcher] overlay DISABLED → cmdFactory=default")
+		log.Printf("[switcher] overlay DISABLED → cmdFactory=default (live=%v active=%s localMode=%v)", s.live, s.activeStream, s.localMode)
 	}
 	// Restart FFmpeg with the new filter chain if currently live
 	if s.live && !s.localMode {
-		log.Printf("[switcher] restarting FFmpeg for overlay change (was live)...")
-		s.stopFFmpeg()
+		log.Printf("[switcher] restarting streaming process for overlay change (was live)...")
+		oldCmd := s.cmd
+		wasLive := s.live
+		wasActiveStream := s.activeStream
+		wasLocalMode := s.localMode
+		log.Printf("[switcher] overlay restart details: oldPID=%v overlayPath=%s cmdFactory=%T", func() any { if oldCmd != nil && oldCmd.Process != nil { return oldCmd.Process.Pid }; return nil }(), s.overlayPath, s.cmdFactory)
 		if err := s.startFFmpeg(); err != nil {
-			log.Printf("[switcher] FFmpeg restart after overlay change FAILED: %v", err)
+			log.Printf("[switcher] overlay restart FAILED, restoring previous process: %v", err)
+			s.cmd = oldCmd
+			s.live = wasLive
+			s.activeStream = wasActiveStream
+			s.localMode = wasLocalMode
+			return
+		}
+		s.live = wasLive
+		s.activeStream = wasActiveStream
+		s.localMode = wasLocalMode
+		if oldCmd != nil && oldCmd.Process != nil {
+			log.Printf("[switcher] overlay restart succeeded, stopping old PID=%d", oldCmd.Process.Pid)
+			if err := oldCmd.Process.Signal(os.Interrupt); err != nil {
+				log.Printf("[switcher] old process SIGINT failed: %v, killing PID=%d", err, oldCmd.Process.Pid)
+				_ = oldCmd.Process.Kill()
+			}
 		}
 	} else {
 		log.Printf("[switcher] not restarting FFmpeg (live=%v localMode=%v)", s.live, s.localMode)
@@ -358,7 +349,7 @@ func (s *Switcher) startFFmpeg() error {
 	s.cmd = s.cmdFactory(rtspURL, rtmpURL, s.audioDevice)
 	s.cmd.Stderr = os.Stderr
 
-	log.Printf("[switcher] startFFmpeg: launching ffmpeg with args: %v", s.cmd.Args)
+	log.Printf("[switcher] startFFmpeg: launching process %q with args: %v", s.cmd.Path, s.cmd.Args)
 
 	if err := s.cmd.Start(); err != nil {
 		log.Printf("[switcher] startFFmpeg: FAILED to start: %v", err)

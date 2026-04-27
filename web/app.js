@@ -342,8 +342,10 @@ function connectOutput(stream) {
     if (currentOutputStream !== stream) return;
 
     startOutputWebRTC(stream).catch(() => {
-        console.warn('Output WebRTC failed, falling back to HLS');
-        if (currentOutputStream === stream) startOutputHLS(stream);
+        console.warn('Output WebRTC failed, retrying in 3s');
+        if (currentOutputStream === stream) {
+            setTimeout(() => connectOutput(stream), 3000);
+        }
     });
 }
 
