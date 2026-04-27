@@ -1,4 +1,4 @@
-const STREAMS = ['cam1', 'cam2', 'cam3'];
+let STREAMS = [];
 const HLS_BASE = '/hls';
 const WEBRTC_BASE = '/webrtc';
 const API_BASE = '';
@@ -6,7 +6,16 @@ const API_BASE = '';
 const players = {};
 
 // Initialize camera grid
-function init() {
+async function init() {
+    // Fetch camera list from server
+    try {
+        const res = await fetch(`${API_BASE}/api/streams`);
+        const data = await res.json();
+        STREAMS = (data.items || []).map(i => i.name);
+    } catch {
+        STREAMS = ['cam2', 'cam3']; // fallback
+    }
+
     const grid = document.getElementById('camera-grid');
     STREAMS.forEach(name => {
         const card = document.createElement('div');
@@ -32,6 +41,10 @@ function init() {
     // Poll overlay status
     setInterval(pollOverlayStatus, 3000);
     pollOverlayStatus();
+
+    // Restore saved overlay URL
+    const savedUrl = localStorage.getItem('overlay-url');
+    if (savedUrl) document.getElementById('overlay-url').value = savedUrl;
 
     // Update default max rows when format changes
     document.getElementById('overlay-format').addEventListener('change', function() {
@@ -248,28 +261,30 @@ function updateUI(status) {
 document.addEventListener('DOMContentLoaded', init);
 
 let currentOutputStream = null;
-let outputConnecting = false; // guard against duplicate connection attempts
 
 function showOutputPreview(stream) {
     const section = document.getElementById('output-section');
 
-    // If already showing or connecting to the same stream, nothing to do
-    if (currentOutputStream === stream && (outputPlayer || outputConnecting)) {
+    // Already showing/connecting/retrying this stream — no-op
+    if (currentOutputStream === stream) {
         section.classList.remove('hidden');
         return;
     }
 
     hideOutputPreview();
     currentOutputStream = stream;
-    outputConnecting = true;
     section.classList.remove('hidden');
 
-    // Try WebRTC first, fall back to HLS
+    connectOutput(stream);
+}
+
+function connectOutput(stream) {
+    // Stream changed while we were waiting to retry — abort
+    if (currentOutputStream !== stream) return;
+
     startOutputWebRTC(stream).catch(() => {
         console.warn('Output WebRTC failed, falling back to HLS');
-        startOutputHLS(stream);
-    }).finally(() => {
-        outputConnecting = false;
+        if (currentOutputStream === stream) startOutputHLS(stream);
     });
 }
 
@@ -312,8 +327,10 @@ async function startOutputWebRTC(stream) {
     pc.onconnectionstatechange = () => {
         if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
             if (currentOutputStream === stream) {
-                hideOutputPreview();
-                setTimeout(() => showOutputPreview(stream), 2000);
+                // Cleanup player but keep currentOutputStream so poll doesn't re-trigger
+                if (outputPlayer && outputPlayer.pc) outputPlayer.pc.close();
+                outputPlayer = null;
+                setTimeout(() => connectOutput(stream), 2000);
             }
         }
     };
@@ -340,8 +357,10 @@ function startOutputHLS(stream) {
         hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
         hls.on(Hls.Events.ERROR, (_, data) => {
             if (data.fatal) {
-                hideOutputPreview();
-                setTimeout(() => showOutputPreview(stream), 3000);
+                hls.destroy();
+                outputPlayer = null;
+                // Retry without resetting currentOutputStream (prevents poll race)
+                setTimeout(() => connectOutput(stream), 3000);
             }
         });
         outputPlayer = { hls, type: 'hls' };
@@ -362,7 +381,6 @@ function hideOutputPreview() {
     }
     video.srcObject = null;
     currentOutputStream = null;
-    outputConnecting = false;
 }
 
 // --- Overlay Controls ---
@@ -373,6 +391,7 @@ async function startOverlay() {
         alert('Enter a SpeedHive URL or Event ID');
         return;
     }
+    localStorage.setItem('overlay-url', input);
 
     const format = document.getElementById('overlay-format').value;
     const maxRows = parseInt(document.getElementById('overlay-max-rows').value, 10) || 0;

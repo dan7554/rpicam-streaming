@@ -18,7 +18,7 @@ type Config struct {
 }
 
 func Load() *Config {
-	camerasStr := getEnv("CAMERAS", "cam1,cam2,cam3")
+	camerasStr := getEnv("CAMERAS", "cam2,cam3")
 	var cameras []string
 	for _, c := range strings.Split(camerasStr, ",") {
 		c = strings.TrimSpace(c)

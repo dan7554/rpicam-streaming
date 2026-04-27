@@ -4,6 +4,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+echo "==> Stopping old server (if running)..."
+pkill -f 'bin/server' 2>/dev/null && sleep 1 || true
+
 echo "==> Building Go server..."
 go build -o bin/server ./cmd/server/
 

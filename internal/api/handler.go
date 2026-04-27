@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -86,18 +85,39 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mux.ServeHTTP(w, r)
 }
 
-// getStreams queries MediaMTX API for active paths.
+// getStreams returns the configured camera list with ready status from MediaMTX.
 func (h *Handler) getStreams(w http.ResponseWriter, r *http.Request) {
+	// Query MediaMTX for path status
+	readyPaths := map[string]bool{}
 	resp, err := http.Get(h.cfg.MediaMTXAPI + "/v3/paths/list")
-	if err != nil {
-		writeError(w, http.StatusBadGateway, "cannot reach MediaMTX: %v", err)
-		return
+	if err == nil {
+		defer resp.Body.Close()
+		var data struct {
+			Items []struct {
+				Name  string `json:"name"`
+				Ready bool   `json:"ready"`
+			} `json:"items"`
+		}
+		if json.NewDecoder(resp.Body).Decode(&data) == nil {
+			for _, item := range data.Items {
+				readyPaths[item.Name] = item.Ready
+			}
+		}
 	}
-	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(body)
+	// Return only configured cameras
+	type streamItem struct {
+		Name  string `json:"name"`
+		Ready bool   `json:"ready"`
+	}
+	items := make([]streamItem, 0, len(h.cfg.Cameras))
+	for _, cam := range h.cfg.Cameras {
+		items = append(items, streamItem{Name: cam, Ready: readyPaths[cam]})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"itemCount": len(items),
+		"items":     items,
+	})
 }
 
 // getStatus returns current switcher state.
