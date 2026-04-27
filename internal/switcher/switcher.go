@@ -64,29 +64,29 @@ func defaultCmdFactory(rtspURL, rtmpURL, audioDevice string) *exec.Cmd {
 	if audioDevice != "" {
 		// Mac mic overrides camera audio
 		pipeline = fmt.Sprintf(
-			"rtspsrc location=%s protocols=tcp latency=0 name=src "+
+			"rtspsrc location=%s protocols=tcp latency=200 name=src "+
 				"osxaudiosrc device=%s name=mic "+
 				"src. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! tee name=vt "+
 				"mic. ! audioconvert ! audioresample ! tee name=at "+
-				"vt. ! queue leaky=downstream ! flvmux streamable=true name=flvm "+
-				"at. ! queue leaky=downstream ! avenc_aac ! aacparse ! flvm. "+
+				"vt. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 ! flvmux streamable=true name=flvm "+
+				"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 ! avenc_aac ! aacparse ! flvm. "+
 				"flvm. ! rtmp2sink location=%s "+
 				"rtspclientsink location=%s protocols=tcp name=rsink "+
-				"vt. ! queue leaky=downstream ! rsink. "+
-				"at. ! queue leaky=downstream ! opusenc bitrate=128000 ! rsink.",
+				"vt. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 ! rsink. "+
+				"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 ! opusenc bitrate=128000 ! rsink.",
 			rtspURL, audioDevice, rtmpURL, previewURL)
 	} else {
 		// Camera audio from RTSP stream
 		pipeline = fmt.Sprintf(
-			"rtspsrc location=%s protocols=tcp latency=0 name=src "+
+			"rtspsrc location=%s protocols=tcp latency=200 name=src "+
 				"src. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! tee name=vt "+
 				"src. ! rtpmp4gdepay ! aacparse ! tee name=at "+
-				"vt. ! queue leaky=downstream ! flvmux streamable=true name=flvm "+
-				"at. ! queue leaky=downstream ! flvm. "+
+				"vt. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 ! flvmux streamable=true name=flvm "+
+				"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 ! flvm. "+
 				"flvm. ! rtmp2sink location=%s "+
 				"rtspclientsink location=%s protocols=tcp name=rsink "+
-				"vt. ! queue leaky=downstream ! rsink. "+
-				"at. ! queue leaky=downstream ! avdec_aac ! audioconvert ! audioresample ! opusenc bitrate=128000 ! rsink.",
+				"vt. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 ! rsink. "+
+				"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 ! avdec_aac ! audioconvert ! audioresample ! opusenc bitrate=128000 ! rsink.",
 			rtspURL, rtmpURL, previewURL)
 	}
 
