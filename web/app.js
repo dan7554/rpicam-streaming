@@ -32,6 +32,16 @@ function init() {
     // Poll overlay status
     setInterval(pollOverlayStatus, 3000);
     pollOverlayStatus();
+
+    // Update default max rows when format changes
+    document.getElementById('overlay-format').addEventListener('change', function() {
+        const rowsInput = document.getElementById('overlay-max-rows');
+        switch (this.value) {
+            case 'condensed': rowsInput.value = 20; break;
+            case 'minimal':   rowsInput.value = 15; break;
+            default:          rowsInput.value = 10; break;
+        }
+    });
 }
 
 function startPreview(name) {
@@ -364,13 +374,17 @@ async function startOverlay() {
         return;
     }
 
+    const format = document.getElementById('overlay-format').value;
+    const maxRows = parseInt(document.getElementById('overlay-max-rows').value, 10) || 0;
+
     const body = {};
     if (input.startsWith('http')) {
         body.url = input;
     } else {
         body.event_id = input;
     }
-    body.max_rows = 10;
+    body.format = format;
+    body.max_rows = maxRows;
 
     try {
         const res = await fetch(`${API_BASE}/api/overlay/start`, {

@@ -43,6 +43,16 @@
             <h2>Timing Overlay</h2>
             <div class="controls">
                 <input type="text" id="overlay-url" placeholder="SpeedHive URL or Event ID" autocomplete="off">
+                <div class="overlay-options">
+                    <label for="overlay-format">Format:</label>
+                    <select id="overlay-format">
+                        <option value="full">Full (P, #, Name, Laps, Gap)</option>
+                        <option value="condensed" selected>Condensed (P, #, J. Doe, Gap)</option>
+                        <option value="minimal">Minimal (P, #, Gap)</option>
+                    </select>
+                    <label for="overlay-max-rows">Rows:</label>
+                    <input type="number" id="overlay-max-rows" min="3" max="30" value="20">
+                </div>
                 <div class="btn-group">
                     <button id="btn-overlay-start" onclick="startOverlay()">Start Overlay</button>
                     <button id="btn-overlay-stop" onclick="stopOverlay()" disabled>Stop</button>

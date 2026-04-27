@@ -8,6 +8,7 @@ import (
 	"image/png"
 	"io"
 	"log"
+	"strings"
 	"net/http"
 	"os"
 	"sync"
@@ -41,6 +42,13 @@ type sessionResp struct {
 	EventName   string       `json:"eNam"`  // event name
 }
 
+// Format controls the overlay layout style.
+const (
+	FormatFull      = "full"      // P, #, Name, Laps, Gap (wide, default 10 rows)
+	FormatCondensed = "condensed" // P, #, "J. Doe", Gap (narrow left-side tower, up to 20 rows)
+	FormatMinimal   = "minimal"   // P, #, Gap (ultra-compact)
+)
+
 // Overlay polls a MYLAPS live timing session and renders a PNG timing tower.
 type Overlay struct {
 	mu          sync.RWMutex
@@ -53,6 +61,7 @@ type Overlay struct {
 	laps        int
 	lapsToGo    int
 	raceTime    string
+	format      string
 	maxRows     int
 	interval    time.Duration
 	stopCh      chan struct{}
@@ -64,13 +73,22 @@ type Config struct {
 	EventID   string
 	SessionID string // if empty, uses /active endpoint
 	PNGPath   string // where to write the overlay PNG
+	Format    string // "full", "condensed", "minimal" (default "full")
 	MaxRows   int    // max competitors to show (default 10)
 	Interval  time.Duration
 }
 
 func New(cfg Config) *Overlay {
+	if cfg.Format == "" {
+		cfg.Format = FormatFull
+	}
 	if cfg.MaxRows == 0 {
-		cfg.MaxRows = 10
+		switch cfg.Format {
+		case FormatCondensed:
+			cfg.MaxRows = 20
+		default:
+			cfg.MaxRows = 10
+		}
 	}
 	if cfg.Interval == 0 {
 		cfg.Interval = 4 * time.Second
@@ -80,6 +98,7 @@ func New(cfg Config) *Overlay {
 		sessionID: cfg.SessionID,
 		apiBase:   "https://lt-api.speedhive.com/api",
 		pngPath:   cfg.PNGPath,
+		format:    cfg.Format,
 		maxRows:   cfg.MaxRows,
 		interval:  cfg.Interval,
 		stopCh:    make(chan struct{}),
@@ -193,7 +212,11 @@ func (o *Overlay) render() error {
 	laps := o.laps
 	lapsToGo := o.lapsToGo
 	raceTime := o.raceTime
+	format := o.format
 	o.mu.RUnlock()
+
+	// Filter out DNS/DNF entries
+	comps = filterStatus(comps)
 
 	n := len(comps)
 	if n > o.maxRows {
@@ -203,40 +226,93 @@ func (o *Overlay) render() error {
 		return nil
 	}
 
+	switch format {
+	case FormatCondensed:
+		return o.renderCondensed(comps[:n], sessionName, laps, lapsToGo, raceTime)
+	case FormatMinimal:
+		return o.renderMinimal(comps[:n], sessionName, laps, lapsToGo, raceTime)
+	default:
+		return o.renderFull(comps[:n], sessionName, laps, lapsToGo, raceTime)
+	}
+}
+
+// filterStatus removes competitors with DNS (Did Not Start) status.
+func filterStatus(comps []Competitor) []Competitor {
+	out := make([]Competitor, 0, len(comps))
+	for _, c := range comps {
+		upper := strings.ToUpper(strings.TrimSpace(c.Gap))
+		if upper == "DNS" {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// truncGap truncates a gap string to hundredths (2 decimal places).
+// "+1.234" → "+1.23", "12.3456" → "12.34", "1 Lap" → "1 Lap"
+func truncGap(gap string) string {
+	dot := strings.LastIndex(gap, ".")
+	if dot < 0 {
+		return gap
+	}
+	decimals := gap[dot+1:]
+	if len(decimals) > 2 {
+		return gap[:dot+3]
+	}
+	return gap
+}
+
+// condensedName formats "John Smith" → "J. Smith", "JOHN SMITH" → "J. Smith"
+func condensedName(full string) string {
+	parts := strings.Fields(strings.TrimSpace(full))
+	if len(parts) == 0 {
+		return ""
+	}
+	if len(parts) == 1 {
+		return titleCase(parts[0])
+	}
+	initial := strings.ToUpper(string([]rune(parts[0])[0]))
+	last := titleCase(parts[len(parts)-1])
+	return initial + ". " + last
+}
+
+func titleCase(s string) string {
+	if len(s) == 0 {
+		return s
+	}
+	r := []rune(strings.ToLower(s))
+	r[0] = []rune(strings.ToUpper(string(r[0])))[0]
+	return string(r)
+}
+
+// renderFull is the original wide format: P, #, Name, Laps, Gap
+func (o *Overlay) renderFull(comps []Competitor, sessionName string, laps, lapsToGo int, raceTime string) error {
 	face := inconsolata.Bold8x16
 
 	const (
-		rowH      = 22
-		headerH   = 28
+		rowH       = 22
+		headerH    = 28
 		subHeaderH = 20
-		padX      = 8
-		charW     = 8 // inconsolata monospace char width
-		colPos    = 30
-		colNum    = 60
-		colName   = 170
-		colLaps   = 50
-		colGap    = 90
-		totalW    = colPos + colNum + colName + colLaps + colGap + padX*2
+		padX       = 8
+		charW      = 8
+		colPos     = 30
+		colNum     = 60
+		colName    = 170
+		colLaps    = 50
+		colGap     = 90
+		totalW     = colPos + colNum + colName + colLaps + colGap + padX*2
 	)
+	n := len(comps)
 	totalH := headerH + subHeaderH + rowH*n + 4
 
 	img := image.NewRGBA(image.Rect(0, 0, totalW, totalH))
 
-	// Semi-transparent dark background
 	bgColor := color.RGBA{0, 0, 0, 200}
-	for y := 0; y < totalH; y++ {
-		for x := 0; x < totalW; x++ {
-			img.SetRGBA(x, y, bgColor)
-		}
-	}
+	fillRect(img, 0, 0, totalW, totalH, bgColor)
 
-	// Header bar
 	headerColor := color.RGBA{20, 20, 80, 230}
-	for y := 0; y < headerH; y++ {
-		for x := 0; x < totalW; x++ {
-			img.SetRGBA(x, y, headerColor)
-		}
-	}
+	fillRect(img, 0, 0, totalW, headerH, headerColor)
 
 	white := color.RGBA{255, 255, 255, 255}
 	yellow := color.RGBA{255, 255, 0, 255}
@@ -244,14 +320,12 @@ func (o *Overlay) render() error {
 	green := color.RGBA{0, 220, 100, 255}
 	cyan := color.RGBA{0, 200, 255, 255}
 
-	// Header text: session name on the left
 	title := sessionName
 	if len(title) > 30 {
 		title = title[:30]
 	}
 	drawString(img, face, padX, headerH-8, title, white)
 
-	// Laps info on the right side of header
 	lapsInfo := ""
 	if lapsToGo > 0 {
 		lapsInfo = fmt.Sprintf("Lap %d  %d to go", laps, lapsToGo)
@@ -263,63 +337,42 @@ func (o *Overlay) render() error {
 		drawString(img, face, lapsInfoX, headerH-8, lapsInfo, yellow)
 	}
 
-	// Sub-header: race time
 	subHeaderColor := color.RGBA{15, 15, 60, 220}
-	for y := headerH; y < headerH+subHeaderH; y++ {
-		for x := 0; x < totalW; x++ {
-			img.SetRGBA(x, y, subHeaderColor)
-		}
-	}
+	fillRect(img, 0, headerH, totalW, subHeaderH, subHeaderColor)
 	if raceTime != "" {
 		drawString(img, face, padX, headerH+subHeaderH-5, "Race: "+raceTime, cyan)
 	}
 
-	// Column headers row
 	y0 := headerH + subHeaderH
 	headerRowColor := color.RGBA{40, 40, 40, 200}
-	for x := 0; x < totalW; x++ {
-		for dy := 0; dy < rowH; dy++ {
-			img.SetRGBA(x, y0+dy, headerRowColor)
-		}
-	}
+	fillRect(img, 0, y0, totalW, rowH, headerRowColor)
 	drawString(img, face, padX, y0+rowH-6, "P", gray)
 	drawString(img, face, padX+colPos, y0+rowH-6, "#", gray)
 	drawString(img, face, padX+colPos+colNum, y0+rowH-6, "Name", gray)
 	drawString(img, face, padX+colPos+colNum+colName, y0+rowH-6, "Laps", gray)
 	drawString(img, face, padX+colPos+colNum+colName+colLaps, y0+rowH-6, "Gap", gray)
 
-	// Data rows
 	for i := 0; i < n; i++ {
 		c := comps[i]
 		ry := y0 + rowH*(i+1)
 
-		// Alternating row backgrounds
 		if i%2 == 1 {
-			rowBg := color.RGBA{30, 30, 30, 200}
-			for x := 0; x < totalW; x++ {
-				for dy := 0; dy < rowH; dy++ {
-					img.SetRGBA(x, ry+dy, rowBg)
-				}
-			}
+			fillRect(img, 0, ry, totalW, rowH, color.RGBA{30, 30, 30, 200})
 		}
 
-		// Position with color coding
 		posColor := white
 		if c.Pos == "1" {
 			posColor = yellow
 		}
 
-		// Truncate name
 		name := c.Name
 		if len(name) > 18 {
 			name = name[:18]
 		}
-
 		gap := c.Gap
 		if gap == "" {
 			gap = "-"
 		}
-
 		lapsStr := fmt.Sprintf("%d", c.Laps)
 
 		drawString(img, face, padX, ry+rowH-6, c.Pos, posColor)
@@ -329,7 +382,165 @@ func (o *Overlay) render() error {
 		drawString(img, face, padX+colPos+colNum+colName+colLaps, ry+rowH-6, gap, green)
 	}
 
-	// Write to temp file then rename (atomic)
+	return o.writePNG(img)
+}
+
+// renderCondensed draws a narrow left-side tower: P, #, "J. Doe", Gap
+// Header is a separate bar; data rows are compact underneath.
+func (o *Overlay) renderCondensed(comps []Competitor, sessionName string, laps, lapsToGo int, raceTime string) error {
+	face := inconsolata.Bold8x16
+
+	const (
+		rowH     = 22
+		headerH  = 30
+		gapH     = 4 // space between header and data
+		padX     = 8
+		charW    = 8
+		colPos   = 28  // "1" / "20"
+		colNum   = 40  // "919"
+		colName  = 112 // "J. Giannotto" (14 chars)
+		colGap   = 64  // "+1.23"
+		dataW    = colPos + colNum + colName + colGap + padX*2
+	)
+	n := len(comps)
+
+	// Header width: fit the full session name
+	titleChars := len(sessionName)
+	if titleChars < 20 {
+		titleChars = 20
+	}
+	headerW := titleChars*charW + padX*2
+	if headerW < dataW {
+		headerW = dataW
+	}
+
+	totalH := headerH + gapH + rowH*n + 2
+
+	img := image.NewRGBA(image.Rect(0, 0, headerW, totalH))
+
+	// Transparent base (header may be wider than data)
+	fillRect(img, 0, 0, headerW, totalH, color.RGBA{0, 0, 0, 0})
+
+	// Header bar — dark blue, full width
+	headerColor := color.RGBA{15, 18, 60, 245}
+	fillRect(img, 0, 0, headerW, headerH, headerColor)
+	// Gold accent line under header
+	fillRect(img, 0, headerH-2, headerW, 2, color.RGBA{200, 170, 0, 255})
+
+	white := color.RGBA{255, 255, 255, 255}
+	yellow := color.RGBA{255, 220, 40, 255}
+	green := color.RGBA{0, 210, 90, 255}
+	numColor := color.RGBA{220, 220, 220, 255}
+
+	// Header: full session name
+	drawString(img, face, padX, headerH-10, sessionName, white)
+
+	// Data rows — left-aligned, narrower than header
+	dataTop := headerH + gapH
+	for i := 0; i < n; i++ {
+		c := comps[i]
+		ry := dataTop + rowH*i
+
+		// Alternating row backgrounds
+		if i%2 == 0 {
+			fillRect(img, 0, ry, dataW, rowH, color.RGBA{18, 22, 50, 230})
+		} else {
+			fillRect(img, 0, ry, dataW, rowH, color.RGBA{12, 15, 38, 230})
+		}
+		// Thin separator line
+		fillRect(img, 0, ry+rowH-1, dataW, 1, color.RGBA{40, 45, 70, 180})
+
+		posColor := yellow
+		if c.Pos == "1" {
+			posColor = color.RGBA{255, 215, 0, 255}
+		}
+
+		name := condensedName(c.Name)
+		if len(name) > 13 {
+			name = name[:13]
+		}
+
+		gap := truncGap(c.Gap)
+		if gap == "" {
+			gap = "-"
+		}
+		if len(gap) > 7 {
+			gap = gap[:7]
+		}
+
+		textY := ry + rowH - 5
+		drawString(img, face, padX, textY, c.Pos, posColor)
+		drawString(img, face, padX+colPos, textY, c.Number, numColor)
+		drawString(img, face, padX+colPos+colNum, textY, name, white)
+		drawString(img, face, padX+colPos+colNum+colName, textY, gap, green)
+	}
+
+	return o.writePNG(img)
+}
+
+// renderMinimal draws an ultra-compact tower: P, #, Gap
+func (o *Overlay) renderMinimal(comps []Competitor, sessionName string, laps, lapsToGo int, raceTime string) error {
+	face := inconsolata.Bold8x16
+
+	const (
+		rowH   = 18
+		padX   = 6
+		colPos = 24
+		colNum = 40
+		colGap = 64
+		totalW = colPos + colNum + colGap + padX*2
+	)
+	n := len(comps)
+	totalH := rowH*n + 2
+
+	img := image.NewRGBA(image.Rect(0, 0, totalW, totalH))
+
+	bgColor := color.RGBA{0, 0, 0, 200}
+	fillRect(img, 0, 0, totalW, totalH, bgColor)
+
+	white := color.RGBA{255, 255, 255, 255}
+	yellow := color.RGBA{255, 255, 0, 255}
+	green := color.RGBA{0, 220, 100, 255}
+	cyan := color.RGBA{0, 200, 255, 255}
+
+	for i := 0; i < n; i++ {
+		c := comps[i]
+		ry := rowH * i
+
+		if i%2 == 1 {
+			fillRect(img, 0, ry, totalW, rowH, color.RGBA{25, 25, 25, 200})
+		}
+
+		posColor := white
+		if c.Pos == "1" {
+			posColor = yellow
+		}
+
+		gap := c.Gap
+		if gap == "" {
+			gap = "-"
+		}
+		if len(gap) > 7 {
+			gap = gap[:7]
+		}
+
+		drawString(img, face, padX, ry+rowH-4, c.Pos, posColor)
+		drawString(img, face, padX+colPos, ry+rowH-4, c.Number, cyan)
+		drawString(img, face, padX+colPos+colNum, ry+rowH-4, gap, green)
+	}
+
+	return o.writePNG(img)
+}
+
+func fillRect(img *image.RGBA, x0, y0, w, h int, c color.RGBA) {
+	for y := y0; y < y0+h; y++ {
+		for x := x0; x < x0+w; x++ {
+			img.SetRGBA(x, y, c)
+		}
+	}
+}
+
+func (o *Overlay) writePNG(img *image.RGBA) error {
 	tmp := o.pngPath + ".tmp"
 	f, err := os.Create(tmp)
 	if err != nil {
