@@ -60,7 +60,7 @@ func buildDefaultPipeline(rtspURL, rtmpURL, audioDevice string) string {
 			"rtspsrc location=%s protocols=tcp latency=200 name=src "+
 				"osxaudiosrc device=%s name=mic "+
 				"src. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! tee name=vt "+
-				"mic. ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! tee name=at "+
+				"mic. ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! audiorate ! tee name=at "+
 				"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! audioconvert ! avenc_aac ! aacparse ! flvmux streamable=true name=flvm "+
 				"vt. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! flvm. "+
 				"flvm. ! rtmp2sink location=%s "+
@@ -72,7 +72,7 @@ func buildDefaultPipeline(rtspURL, rtmpURL, audioDevice string) string {
 	return fmt.Sprintf(
 		"rtspsrc location=%s protocols=tcp latency=200 name=src "+
 			"src. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! tee name=vt "+
-			"src. ! rtpmp4gdepay ! aacparse ! avdec_aac ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! tee name=at "+
+			"src. ! rtpmp4gdepay ! aacparse ! avdec_aac ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! audiorate ! tee name=at "+
 			"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! audioconvert ! avenc_aac ! aacparse ! flvmux streamable=true name=flvm "+
 			"vt. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! flvm. "+
 			"flvm. ! rtmp2sink location=%s "+
@@ -91,7 +91,7 @@ func buildOverlayPipeline(overlayPath, rtspURL, rtmpURL, audioDevice string) str
 				"overlay_img. ! mixer. "+
 				"enc_tee. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! flvmux streamable=true name=rtmp_mux "+
 				"rtmp_mux. ! rtmp2sink location=%s "+
-				"osxaudiosrc device=%s ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! tee name=at "+
+				"osxaudiosrc device=%s ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! audiorate ! tee name=at "+
 				"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! audioconvert ! avenc_aac ! aacparse ! rtmp_mux. "+
 				"enc_tee. ! queue ! rtspclientsink location=rtsp://localhost:8554/live-preview name=preview "+
 				"at. ! queue ! audioconvert ! opusenc audio-type=restricted-lowdelay ! preview.",
@@ -104,7 +104,7 @@ func buildOverlayPipeline(overlayPath, rtspURL, rtmpURL, audioDevice string) str
 			"overlay_img. ! mixer. "+
 			"enc_tee. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! flvmux streamable=true name=rtmp_mux "+
 			"rtmp_mux. ! rtmp2sink location=%s "+
-			"cam. ! rtpmp4gdepay ! aacparse ! avdec_aac ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! tee name=at "+
+			"cam. ! rtpmp4gdepay ! aacparse ! avdec_aac ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! audiorate ! tee name=at "+
 			"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! audioconvert ! avenc_aac ! aacparse ! rtmp_mux. "+
 			"enc_tee. ! queue ! rtspclientsink location=rtsp://localhost:8554/live-preview name=preview "+
 			"at. ! queue ! audioconvert ! opusenc audio-type=restricted-lowdelay ! preview.",
