@@ -4,24 +4,28 @@ set -euo pipefail
 # Deploy RPiCam streaming to a Raspberry Pi
 # Usage: ./deploy.sh <pi-host> [mediamtx-ip]
 #   pi-host:     SSH target for the Pi (e.g. rpicam3)
-#   mediamtx-ip: IP of the MediaMTX server (default: auto-detect from SSH)
+#   mediamtx-ip: IP of the MediaMTX server (default: auto-detect Tailscale IP)
 #
 # On boot the Pi will push its camera as RTMP to the MediaMTX server.
 # Stream name is auto-detected from hostname: rpicam3 → cam3
 #
-# For local dev behind a firewall, start a tunnel from your Mac:
-#   ssh -R 1935:localhost:1935 -N rpicam3
-# Then set MEDIAMTX_HOST=127.0.0.1 in /etc/rpicam-stream.conf on the Pi.
+# Requires on the Mac:
+#   tailscale serve --bg --tcp 1935 tcp://localhost:1935
 
 PI_HOST="${1:?Usage: $0 <pi-host> [mediamtx-ip]}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Auto-detect server IP: use the IP the Pi sees us as via SSH
+# Auto-detect server IP: prefer Tailscale IP of this Mac
 if [ -n "${2:-}" ]; then
     SERVER_IP="$2"
 else
-    SERVER_IP=$(ssh "$PI_HOST" 'echo $SSH_CLIENT' | awk '{print $1}')
-    echo "Auto-detected server IP: $SERVER_IP"
+    SERVER_IP=$(tailscale ip -4 2>/dev/null || true)
+    if [ -z "$SERVER_IP" ]; then
+        SERVER_IP=$(ssh "$PI_HOST" 'echo $SSH_CLIENT' | awk '{print $1}')
+        echo "No Tailscale; using SSH client IP: $SERVER_IP"
+    else
+        echo "Using Tailscale IP: $SERVER_IP"
+    fi
 fi
 
 echo "=== RPiCam Deploy ==="

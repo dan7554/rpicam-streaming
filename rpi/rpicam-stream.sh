@@ -4,8 +4,9 @@
 # Streams the Pi camera to a MediaMTX server via RTMP
 # Designed to run as a systemd service on boot
 #
-# The RTMP server is reached via an SSH reverse tunnel (see mediamtx-tunnel.service)
-# so the target is always 127.0.0.1:1935.
+# The RTMP server is reached via Tailscale (set MEDIAMTX_HOST to the
+# Tailscale IP of the Mac running MediaMTX).
+# Requires: tailscale serve --bg --tcp 1935 tcp://localhost:1935 on the Mac.
 
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1"
@@ -84,23 +85,30 @@ while true; do
     fi
 
     if $has_audio; then
-        # Use rpicam-vid for video encoding to a FIFO, ffmpeg muxes video + ALSA audio
-        fifo="/tmp/rpicam-video-fifo"
-        rm -f "$fifo"
-        mkfifo "$fifo"
-
-        # rpicam-vid writes FLV video to the FIFO (background)
+        # rpicam-vid (libx264) → big-pipe → ffmpeg muxes with ALSA audio → RTMP
+        # Default pipe is 64KB which causes backpressure deadlock on I-frames.
+        # We use a python helper to enlarge the pipe to 1MB via fcntl F_SETPIPE_SZ.
         rpicam-vid -t 0 --camera 0 --nopreview \
             --width "$WIDTH" --height "$HEIGHT" --framerate "$FPS" \
             --codec libav --libav-format flv \
             --libav-video-codec libx264 \
-            --libav-video-codec-opts "preset=ultrafast;tune=zerolatency;g=${FPS};keyint_min=${FPS};bf=0" \
-            -o "$fifo" &
-        rpicam_pid=$!
-
-        # ffmpeg reads video from FIFO + captures ALSA audio → RTMP
+            --libav-video-codec-opts "preset=ultrafast;tune=zerolatency;g=${FPS};keyint_min=${FPS};bf=0;threads=4" \
+            --bitrate 3000000 \
+            -o - 2>/dev/null | \
+        python3 -c "
+import sys, fcntl
+F_SETPIPE_SZ = 1031
+try:
+    fcntl.fcntl(sys.stdin.fileno(), F_SETPIPE_SZ, 1048576)
+except: pass
+try:
+    fcntl.fcntl(sys.stdout.fileno(), F_SETPIPE_SZ, 1048576)
+except: pass
+import shutil
+shutil.copyfileobj(sys.stdin.buffer, sys.stdout.buffer, 262144)
+" | \
         ffmpeg -fflags +genpts \
-            -i "$fifo" \
+            -f flv -i pipe:0 \
             -f alsa -channels 1 -sample_rate 48000 -i "$AUDIO_DEVICE" \
             -map 0:v -map 1:a \
             -c:v copy \
@@ -108,16 +116,14 @@ while true; do
             -f flv \
             -flvflags no_duration_filesize \
             "$rtmp_url" || true
-
-        kill "$rpicam_pid" 2>/dev/null; wait "$rpicam_pid" 2>/dev/null
-        rm -f "$fifo"
     else
-        # Video-only fallback (original behavior)
+        # Video-only: rpicam-vid → RTMP directly
         rpicam-vid -t 0 --camera 0 --nopreview \
             --width "$WIDTH" --height "$HEIGHT" --framerate "$FPS" \
             --codec libav --libav-format flv \
             --libav-video-codec libx264 \
-            --libav-video-codec-opts "preset=ultrafast;tune=zerolatency;g=30;keyint_min=30;bf=0" \
+            --libav-video-codec-opts "preset=ultrafast;tune=zerolatency;g=${FPS};keyint_min=${FPS};bf=0;threads=4" \
+            --bitrate 3000000 \
             -o "$rtmp_url" || true
     fi
 
