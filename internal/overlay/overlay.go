@@ -218,6 +218,9 @@ func (o *Overlay) render() error {
 	// Filter out DNS/DNF entries
 	comps = filterStatus(comps)
 
+	// Best lap across all competitors (before truncation)
+	bestLapTime, bestLapNum := bestLap(comps)
+
 	n := len(comps)
 	if n > o.maxRows {
 		n = o.maxRows
@@ -228,25 +231,46 @@ func (o *Overlay) render() error {
 
 	switch format {
 	case FormatCondensed:
-		return o.renderCondensed(comps[:n], sessionName, laps, lapsToGo, raceTime)
+		return o.renderCondensed(comps[:n], sessionName, laps, lapsToGo, raceTime, bestLapTime, bestLapNum)
 	case FormatMinimal:
-		return o.renderMinimal(comps[:n], sessionName, laps, lapsToGo, raceTime)
+		return o.renderMinimal(comps[:n], sessionName, laps, lapsToGo, raceTime, bestLapTime, bestLapNum)
 	default:
-		return o.renderFull(comps[:n], sessionName, laps, lapsToGo, raceTime)
+		return o.renderFull(comps[:n], sessionName, laps, lapsToGo, raceTime, bestLapTime, bestLapNum)
 	}
 }
 
-// filterStatus removes competitors with DNS (Did Not Start) status.
+// filterStatus removes competitors with DNS/DNF/DSQ/DNQ status.
+// Checks both the Pos and Gap fields for status strings.
 func filterStatus(comps []Competitor) []Competitor {
 	out := make([]Competitor, 0, len(comps))
 	for _, c := range comps {
-		upper := strings.ToUpper(strings.TrimSpace(c.Gap))
-		if upper == "DNS" {
+		pos := strings.ToUpper(strings.TrimSpace(c.Pos))
+		gap := strings.ToUpper(strings.TrimSpace(c.Gap))
+		if pos == "DNS" || pos == "DNF" || pos == "DSQ" || pos == "DNQ" {
+			continue
+		}
+		if gap == "DNS" || gap == "DNF" || gap == "DSQ" || gap == "DNQ" {
 			continue
 		}
 		out = append(out, c)
 	}
 	return out
+}
+
+// bestLap finds the fastest BestLap across all competitors.
+// Returns the time string and the rider's name/number. Empty if none.
+func bestLap(comps []Competitor) (lap string, rider string) {
+	for _, c := range comps {
+		t := strings.TrimSpace(c.BestLap)
+		if t == "" || t == "-" {
+			continue
+		}
+		if lap == "" || t < lap {
+			lap = t
+			rider = c.Number
+		}
+	}
+	return
 }
 
 // truncGap truncates a gap string to hundredths (2 decimal places).
@@ -287,7 +311,7 @@ func titleCase(s string) string {
 }
 
 // renderFull is the original wide format: P, #, Name, Laps, Gap
-func (o *Overlay) renderFull(comps []Competitor, sessionName string, laps, lapsToGo int, raceTime string) error {
+func (o *Overlay) renderFull(comps []Competitor, sessionName string, laps, lapsToGo int, raceTime string, bestLapTime, bestLapNum string) error {
 	face := inconsolata.Bold8x16
 
 	const (
@@ -342,6 +366,11 @@ func (o *Overlay) renderFull(comps []Competitor, sessionName string, laps, lapsT
 	if raceTime != "" {
 		drawString(img, face, padX, headerH+subHeaderH-5, "Race: "+raceTime, cyan)
 	}
+	if bestLapTime != "" {
+		blStr := fmt.Sprintf("Best: %s (#%s)", bestLapTime, bestLapNum)
+		blX := totalW - padX - len(blStr)*charW
+		drawString(img, face, blX, headerH+subHeaderH-5, blStr, color.RGBA{255, 0, 255, 255})
+	}
 
 	y0 := headerH + subHeaderH
 	headerRowColor := color.RGBA{40, 40, 40, 200}
@@ -387,25 +416,39 @@ func (o *Overlay) renderFull(comps []Competitor, sessionName string, laps, lapsT
 
 // renderCondensed draws a narrow left-side tower: P, #, "J. Doe", Gap
 // Header is a separate bar; data rows are compact underneath.
-func (o *Overlay) renderCondensed(comps []Competitor, sessionName string, laps, lapsToGo int, raceTime string) error {
+func (o *Overlay) renderCondensed(comps []Competitor, sessionName string, laps, lapsToGo int, raceTime string, bestLapTime, bestLapNum string) error {
 	face := inconsolata.Bold8x16
 
 	const (
-		rowH     = 22
-		headerH  = 30
-		gapH     = 4 // space between header and data
-		padX     = 8
-		charW    = 8
-		colPos   = 28  // "1" / "20"
-		colNum   = 40  // "919"
-		colName  = 112 // "J. Giannotto" (14 chars)
-		colGap   = 64  // "+1.23"
-		dataW    = colPos + colNum + colName + colGap + padX*2
+		rowH      = 22
+		titleH    = 26
+		bestLapH  = 20
+		gapH      = 4 // space between header and data
+		padX      = 8
+		charW     = 8
+		colPos    = 28  // "1" / "20"
+		colNum    = 40  // "919"
+		colName   = 112 // "J. Giannotto" (14 chars)
+		colGap    = 64  // "+1.23"
+		dataW     = colPos + colNum + colName + colGap + padX*2
 	)
 	n := len(comps)
 
-	// Header width: fit the full session name
+	// Header height: title row + optional best lap row
+	headerH := titleH
+	if bestLapTime != "" {
+		headerH += bestLapH
+	}
+
+	// Header width: fit the wider of session name or best lap text
 	titleChars := len(sessionName)
+	blText := ""
+	if bestLapTime != "" {
+		blText = fmt.Sprintf("Fastest Lap: %s (#%s)", bestLapTime, bestLapNum)
+		if len(blText) > titleChars {
+			titleChars = len(blText)
+		}
+	}
 	if titleChars < 20 {
 		titleChars = 20
 	}
@@ -432,8 +475,12 @@ func (o *Overlay) renderCondensed(comps []Competitor, sessionName string, laps, 
 	green := color.RGBA{0, 210, 90, 255}
 	numColor := color.RGBA{220, 220, 220, 255}
 
-	// Header: full session name
-	drawString(img, face, padX, headerH-10, sessionName, white)
+	// Title row
+	drawString(img, face, padX, titleH-8, sessionName, white)
+	// Best lap row (below title)
+	if bestLapTime != "" {
+		drawString(img, face, padX, titleH+bestLapH-6, blText, color.RGBA{255, 0, 255, 255})
+	}
 
 	// Data rows — left-aligned, narrower than header
 	dataTop := headerH + gapH
@@ -479,7 +526,7 @@ func (o *Overlay) renderCondensed(comps []Competitor, sessionName string, laps, 
 }
 
 // renderMinimal draws an ultra-compact tower: P, #, Gap
-func (o *Overlay) renderMinimal(comps []Competitor, sessionName string, laps, lapsToGo int, raceTime string) error {
+func (o *Overlay) renderMinimal(comps []Competitor, sessionName string, laps, lapsToGo int, raceTime string, bestLapTime, bestLapNum string) error {
 	face := inconsolata.Bold8x16
 
 	const (
