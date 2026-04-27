@@ -110,40 +110,26 @@ func (b *Bridge) connectCamera(name string, first bool) error {
 	}
 
 	if first {
-		log.Printf("[bridge] connectCamera %s: first camera, creating server stream (VIDEO ONLY)", name)
-		// Build a video-only server stream description. Audio is provided by
-		// FFmpeg's anullsrc, so the bridge must never carry audio — otherwise
-		// FFmpeg's RTSP demuxer stalls waiting for audio packets when the
-		// active camera has no audio track.
-		videoOnlyMedias := make([]*description.Media, 0, 1)
-		for _, m := range desc.Medias {
-			if m.Type == description.MediaTypeVideo {
-				videoOnlyMedias = append(videoOnlyMedias, m)
-			}
-		}
-		videoDesc := &description.Session{Medias: videoOnlyMedias}
+		log.Printf("[bridge] connectCamera %s: first camera, creating server stream", name)
 		b.stream = &gortsplib.ServerStream{
 			Server: b.server,
-			Desc:   videoDesc,
+			Desc:   desc,
 		}
 		if err := b.stream.Initialize(); err != nil {
 			c.Close()
 			return err
 		}
-		b.serverMedias = videoOnlyMedias
-		log.Printf("[bridge] connectCamera %s: server stream has %d medias (video only)", name, len(videoOnlyMedias))
+		b.serverMedias = desc.Medias
+		log.Printf("[bridge] connectCamera %s: server stream has %d medias", name, len(desc.Medias))
 	}
 
-	// Map client video media → server video media. Audio is ignored.
+	// Map client medias → server medias by type (video → video, audio → audio).
 	mediaMap := make(map[*description.Media]*description.Media)
 	for _, cm := range desc.Medias {
-		if cm.Type != description.MediaTypeVideo {
-			continue // skip audio — handled by anullsrc in FFmpeg
-		}
 		for _, sm := range b.serverMedias {
 			if cm.Type == sm.Type {
 				mediaMap[cm] = sm
-				log.Printf("[bridge] connectCamera %s: mapped video media (client → server)", name)
+				log.Printf("[bridge] connectCamera %s: mapped %s media (client → server)", name, cm.Type)
 				break
 			}
 		}
@@ -151,10 +137,6 @@ func (b *Bridge) connectCamera(name string, first bool) error {
 
 	camName := name
 	c.OnPacketRTPAny(func(medi *description.Media, _ format.Format, pkt *rtp.Packet) {
-		// Only forward video — audio is handled by anullsrc in FFmpeg.
-		if medi.Type != description.MediaTypeVideo {
-			return
-		}
 		b.mu.RLock()
 		isActive := b.active == camName
 		needsKF := b.needsKeyframe
@@ -163,7 +145,8 @@ func (b *Bridge) connectCamera(name string, first bool) error {
 			return
 		}
 		// After a switch, drop video until we see a keyframe (IDR).
-		if needsKF {
+		// Audio is forwarded immediately.
+		if medi.Type == description.MediaTypeVideo && needsKF {
 			if !isH264Keyframe(pkt) {
 				return
 			}
@@ -186,7 +169,7 @@ func (b *Bridge) connectCamera(name string, first bool) error {
 		return err
 	}
 
-	log.Printf("[bridge] connectCamera %s: PLAYING (mapped %d medias, video-only)", name, len(mediaMap))
+	log.Printf("[bridge] connectCamera %s: PLAYING (mapped %d medias)", name, len(mediaMap))
 	b.clients = append(b.clients, c)
 	return nil
 }

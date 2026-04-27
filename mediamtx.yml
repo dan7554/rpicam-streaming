@@ -13,7 +13,7 @@ apiAddress: :9997
 # RTSP server - receives streams from FFmpeg and RPi cameras
 rtsp: yes
 rtspAddress: 0.0.0.0:8554
-rtspTransports: [tcp]
+rtspTransports: [udp, tcp]
 
 # HLS server - serves streams to web UI for preview
 hls: yes
@@ -21,8 +21,9 @@ hlsAddress: :8888
 hlsVariant: fmp4
 hlsAlwaysRemux: yes
 hlsSegmentCount: 3
-hlsSegmentDuration: 1s
-hlsPartDuration: 100ms
+hlsSegmentDuration: 2s
+hlsPartDuration: 200ms
+hlsSegmentMaxSize: 200M
 hlsMuxerCloseAfter: 10s
 
 # RTMP - used for YouTube output and RPi camera ingest
@@ -46,3 +47,5 @@ paths:
   cam2:
   cam3:
   live-output:
+  live-preview:
+  all_others:

@@ -15,6 +15,7 @@ type Config struct {
 	BridgeAddr     string   // RTSP bridge proxy listen address (e.g. :8555)
 	Cameras        []string // Camera path names (e.g. [cam1, cam2, cam3])
 	OverlayDir     string   // Directory for overlay PNG files
+	AudioDevice    string   // macOS avfoundation audio device index (e.g. "0"), empty = disabled
 }
 
 func Load() *Config {
@@ -37,6 +38,7 @@ func Load() *Config {
 		BridgeAddr:    getEnv("BRIDGE_ADDR", ":8555"),
 		Cameras:       cameras,
 		OverlayDir:    getEnv("OVERLAY_DIR", "/tmp/media-mtx-overlay"),
+		AudioDevice:   getEnv("AUDIO_DEVICE", ""),
 	}
 }
 

@@ -148,6 +148,22 @@ h2 {
 .btn-group {
     display: flex;
     gap: 8px;
+    align-items: center;
+}
+
+.audio-toggle {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 13px;
+    color: #ccc;
+    cursor: pointer;
+    user-select: none;
+}
+
+.audio-toggle input:checked + .audio-toggle,
+.audio-toggle:has(input:checked) {
+    color: #4caf50;
 }
 
 .btn-group button {
@@ -215,6 +231,7 @@ h2 {
     border: 2px solid #e53935;
     border-radius: 8px;
     overflow: hidden;
+    position: relative;
 }
 
 .output-card video {
@@ -224,6 +241,21 @@ h2 {
     background: #000;
     display: block;
     margin: 0 auto;
+}
+
+.unmute-btn {
+    display: block;
+    margin: 0 auto;
+    padding: 10px 24px;
+    background: #e53935;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 8px;
+    margin-bottom: 8px;
 }
 
 /* Overlay Controls */

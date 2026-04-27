@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -8,7 +9,9 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/dchristiani/media-mtx/internal/config"
@@ -59,6 +62,7 @@ func (h *Handler) routes() {
 	h.mux.HandleFunc("POST /api/overlay/start", h.startOverlay)
 	h.mux.HandleFunc("POST /api/overlay/stop", h.stopOverlay)
 	h.mux.HandleFunc("GET /api/overlay/status", h.overlayStatus)
+	h.mux.HandleFunc("GET /api/audio/devices", h.getAudioDevices)
 
 	// Serve web UI
 	h.mux.Handle("GET /", http.FileServer(http.Dir("web")))
@@ -157,6 +161,7 @@ type liveStartReq struct {
 	Stream     string `json:"stream"`
 	YouTubeKey string `json:"youtube_key"`
 	RTMPDest   string `json:"rtmp_dest"`
+	Audio      bool   `json:"audio"`
 }
 
 func (h *Handler) startLive(w http.ResponseWriter, r *http.Request) {
@@ -167,7 +172,11 @@ func (h *Handler) startLive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Stream == "" {
-		req.Stream = "cam1"
+		if len(h.cfg.Cameras) > 0 {
+			req.Stream = h.cfg.Cameras[0]
+		} else {
+			req.Stream = "cam1"
+		}
 	}
 
 	// Determine RTMP destination: youtube key, explicit URL, or local default
@@ -178,10 +187,16 @@ func (h *Handler) startLive(w http.ResponseWriter, r *http.Request) {
 		rtmpDest = req.RTMPDest
 	}
 
-	log.Printf("[api] startLive: stream=%s rtmpDest=%s youtubeKey=%q", req.Stream, rtmpDest, req.YouTubeKey)
+	// Determine audio device: use configured device if audio requested
+	audioDevice := ""
+	if req.Audio && h.cfg.AudioDevice != "" {
+		audioDevice = h.cfg.AudioDevice
+	}
+
+	log.Printf("[api] startLive: stream=%s rtmpDest=%s youtubeKey=%q audio=%v audioDevice=%q", req.Stream, rtmpDest, req.YouTubeKey, req.Audio, audioDevice)
 
 	// Always use FFmpeg mode so the composited live-output is available
-	if err := h.sw.StartLive(req.Stream, rtmpDest, false); err != nil {
+	if err := h.sw.StartLive(req.Stream, rtmpDest, false, audioDevice); err != nil {
 		log.Printf("[api] startLive: FAILED: %v", err)
 		writeError(w, http.StatusConflict, "%v", err)
 		return
@@ -326,6 +341,38 @@ func (h *Handler) overlayStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"active":      true,
 		"competitors": len(comps),
+	})
+}
+
+type audioDevice struct {
+	Index string `json:"index"`
+	Name  string `json:"name"`
+}
+
+func (h *Handler) getAudioDevices(w http.ResponseWriter, r *http.Request) {
+	cmd := exec.Command("ffmpeg", "-f", "avfoundation", "-list_devices", "true", "-i", "")
+	out, _ := cmd.CombinedOutput() // ffmpeg exits non-zero for -list_devices
+
+	var devices []audioDevice
+	re := regexp.MustCompile(`\[AVFoundation.*\] \[(\d+)\] (.+)`)
+	scanner := bufio.NewScanner(strings.NewReader(string(out)))
+	inAudio := false
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.Contains(line, "AVFoundation audio devices") {
+			inAudio = true
+			continue
+		}
+		if inAudio {
+			if m := re.FindStringSubmatch(line); m != nil {
+				devices = append(devices, audioDevice{Index: m[1], Name: m[2]})
+			}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"devices":    devices,
+		"configured": h.cfg.AudioDevice,
 	})
 }
 

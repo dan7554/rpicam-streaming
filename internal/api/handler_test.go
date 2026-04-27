@@ -12,7 +12,7 @@ import (
 	"github.com/dchristiani/media-mtx/internal/switcher"
 )
 
-func fakeCmdFactory(rtspURL, rtmpURL string) *exec.Cmd {
+func fakeCmdFactory(rtspURL, rtmpURL, audioDevice string) *exec.Cmd {
 	return exec.Command("sleep", "60")
 }
 
@@ -261,7 +261,7 @@ func TestSwitchStreamMissingField(t *testing.T) {
 	defer mtx.Close()
 	defer sw.StopAll()
 
-	_ = sw.StartLive("cam1", "key", false)
+	_ = sw.StartLive("cam1", "key", false, "")
 
 	body := `{}`
 	req := httptest.NewRequest("POST", "/api/switch", strings.NewReader(body))

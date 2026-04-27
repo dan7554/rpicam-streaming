@@ -54,6 +54,7 @@ ssh "$PI_HOST" "
     sudo chmod +x /opt/rpicam-stream/rpicam-stream.sh
     sudo mv /tmp/rpicam-stream.service /etc/systemd/system/rpicam-stream.service
     echo 'MEDIAMTX_HOST=$SERVER_IP' | sudo tee /etc/rpicam-stream.conf > /dev/null
+    echo 'AUDIO_DEVICE=hw:2,0' | sudo tee -a /etc/rpicam-stream.conf > /dev/null
     sudo systemctl daemon-reload
 "
 

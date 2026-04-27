@@ -178,8 +178,9 @@ let outputPlayer = null;
 
 async function goLive() {
     const key = document.getElementById('youtube-key').value.trim();
+    const audioEnabled = document.getElementById('audio-enabled').checked;
 
-    const body = { stream: 'cam1' };
+    const body = { stream: STREAMS[0] || 'cam1', audio: audioEnabled };
     if (key) {
         body.youtube_key = key;
     }
@@ -238,9 +239,8 @@ function updateUI(status) {
         activeStream.textContent = `Active: ${status.active_stream}`;
         btnLive.disabled = true;
         btnStop.disabled = false;
-        // Always show live-output — HLS.js retries automatically if
-        // FFmpeg is restarting (e.g. overlay toggle)
-        showOutputPreview('live-output');
+        // Always show live-preview — WebRTC with Opus audio
+        showOutputPreview('live-preview');
     } else {
         badge.classList.add('hidden');
         statusText.textContent = 'Idle';
@@ -275,7 +275,19 @@ function showOutputPreview(stream) {
     currentOutputStream = stream;
     section.classList.remove('hidden');
 
+    // Show unmute button
+    const btn = document.getElementById('btn-unmute');
+    if (btn) btn.style.display = 'block';
+
     connectOutput(stream);
+}
+
+function unmuteOutput() {
+    const video = document.getElementById('video-output');
+    video.muted = false;
+    video.play().catch(() => {});
+    const btn = document.getElementById('btn-unmute');
+    if (btn) btn.style.display = 'none';
 }
 
 function connectOutput(stream) {
@@ -296,11 +308,15 @@ async function startOutputWebRTC(stream) {
     pc.addTransceiver('audio', { direction: 'recvonly' });
 
     pc.ontrack = (event) => {
-        if (event.streams[0]) video.srcObject = event.streams[0];
+        console.log('[output] ontrack:', event.track.kind, event.track.readyState);
+        if (event.streams[0]) {
+            video.srcObject = event.streams[0];
+        }
     };
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
+    console.log('[output] offer audio m-lines:', (pc.localDescription.sdp.match(/m=audio/g) || []).length);
 
     await new Promise((resolve) => {
         if (pc.iceGatheringState === 'complete') return resolve();
@@ -322,6 +338,8 @@ async function startOutputWebRTC(stream) {
     if (!res.ok) throw new Error(`WHEP ${res.status}`);
 
     const answerSDP = await res.text();
+    console.log('[output] answer audio m-lines:', (answerSDP.match(/m=audio/g) || []).length);
+    console.log('[output] answer has opus:', answerSDP.includes('opus'));
     await pc.setRemoteDescription({ type: 'answer', sdp: answerSDP });
 
     pc.onconnectionstatechange = () => {
@@ -336,6 +354,7 @@ async function startOutputWebRTC(stream) {
     };
 
     outputPlayer = { pc, type: 'webrtc' };
+    video.muted = true;
     video.play().catch(() => {});
 }
 
@@ -354,7 +373,10 @@ function startOutputHLS(stream) {
         });
         hls.loadSource(url);
         hls.attachMedia(video);
-        hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+            video.muted = false;
+            video.play().catch(() => {});
+        });
         hls.on(Hls.Events.ERROR, (_, data) => {
             if (data.fatal) {
                 hls.destroy();

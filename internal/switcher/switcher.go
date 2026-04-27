@@ -10,7 +10,14 @@ import (
 )
 
 // CmdFactory builds the exec.Cmd for streaming. Override in tests.
-type CmdFactory func(rtspURL, rtmpURL string) *exec.Cmd
+type CmdFactory func(rtspURL, rtmpURL, audioDevice string) *exec.Cmd
+
+// previewRTSPURL derives the RTSP preview URL from the RTMP output URL.
+// e.g. rtmp://localhost:1935/live-output → rtsp://localhost:8554/live-preview
+// For external YouTube URLs, falls back to local preview.
+func previewRTSPURL(rtmpURL string) string {
+	return "rtsp://localhost:8554/live-preview"
+}
 
 // Bridger abstracts the RTSP switching proxy for testing.
 type Bridger interface {
@@ -41,11 +48,13 @@ type Switcher struct {
 	bridgeFactory BridgeFactory
 	bridge        Bridger
 	overlayPath   string // path to overlay PNG, empty = no overlay
+	audioDevice   string // avfoundation audio device index, empty = anullsrc
 }
 
-func defaultCmdFactory(rtspURL, rtmpURL string) *exec.Cmd {
-	log.Printf("[switcher] building DEFAULT FFmpeg cmd: %s → %s", rtspURL, rtmpURL)
-	return exec.Command("ffmpeg",
+func defaultCmdFactory(rtspURL, rtmpURL, audioDevice string) *exec.Cmd {
+	log.Printf("[switcher] building DEFAULT FFmpeg cmd: %s → %s (audio=%q)", rtspURL, rtmpURL, audioDevice)
+
+	args := []string{
 		"-use_wallclock_as_timestamps", "1",
 		"-probesize", "256000",
 		"-analyzeduration", "500000",
@@ -53,26 +62,51 @@ func defaultCmdFactory(rtspURL, rtmpURL string) *exec.Cmd {
 		"-fflags", "+nobuffer+discardcorrupt",
 		"-err_detect", "ignore_err",
 		"-i", rtspURL,
-		"-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono",
-		"-map", "0:v", "-map", "1:a",
+	}
+
+	var vMap, aMap string
+	if audioDevice != "" {
+		// Mac mic as audio source (overrides camera audio)
+		args = append(args, "-f", "avfoundation", "-i", ":"+audioDevice)
+		vMap = "0:v"
+		aMap = "1:a"
+	} else {
+		// Use audio from RTSP stream (camera mic via bridge)
+		vMap = "0:v"
+		aMap = "0:a?"
+	}
+
+	// Output 1: RTMP + AAC (YouTube / RTMP consumers)
+	args = append(args,
+		"-map", vMap, "-map", aMap,
 		"-c:v", "libx264",
 		"-preset", "ultrafast",
 		"-tune", "zerolatency",
 		"-g", "30",
 		"-keyint_min", "30",
-		"-c:a", "aac",
-		"-b:a", "128k",
-		"-f", "flv",
-		"-flvflags", "no_duration_filesize",
-		"-flush_packets", "1",
+		"-c:a", "aac", "-b:a", "128k",
+		"-f", "flv", "-flvflags", "no_duration_filesize", "-flush_packets", "1",
 		rtmpURL,
 	)
+
+	// Output 2: RTSP + Opus (WebRTC browser preview)
+	previewURL := previewRTSPURL(rtmpURL)
+	args = append(args,
+		"-map", vMap, "-map", aMap,
+		"-c:v", "copy",
+		"-c:a", "libopus", "-b:a", "128k",
+		"-f", "rtsp", "-rtsp_transport", "tcp",
+		previewURL,
+	)
+
+	return exec.Command("ffmpeg", args...)
 }
 
 func overlayCmdFactory(overlayPath string) CmdFactory {
-	return func(rtspURL, rtmpURL string) *exec.Cmd {
-		log.Printf("[switcher] building OVERLAY FFmpeg cmd: %s → %s (overlay=%s)", rtspURL, rtmpURL, overlayPath)
-		return exec.Command("ffmpeg",
+	return func(rtspURL, rtmpURL, audioDevice string) *exec.Cmd {
+		log.Printf("[switcher] building OVERLAY FFmpeg cmd: %s → %s (overlay=%s audio=%q)", rtspURL, rtmpURL, overlayPath, audioDevice)
+
+		args := []string{
 			"-use_wallclock_as_timestamps", "1",
 			"-probesize", "256000",
 			"-analyzeduration", "500000",
@@ -83,21 +117,47 @@ func overlayCmdFactory(overlayPath string) CmdFactory {
 			"-loop", "1",
 			"-f", "image2", "-r", "1",
 			"-i", overlayPath,
-			"-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono",
-			"-filter_complex", "[1:v]format=rgba[ovr];[0:v][ovr]overlay=x=20:y=20:shortest=1[out]",
-			"-map", "[out]", "-map", "2:a",
+		}
+
+		var aMap string
+		// Audio: avfoundation mic (stream 2) or camera audio from RTSP (stream 0)
+		if audioDevice != "" {
+			args = append(args, "-f", "avfoundation", "-i", ":"+audioDevice)
+			args = append(args,
+				"-filter_complex", "[1:v]format=rgba[ovr];[0:v][ovr]overlay=x=20:y=20:shortest=1[out]",
+			)
+			aMap = "2:a"
+		} else {
+			args = append(args,
+				"-filter_complex", "[1:v]format=rgba[ovr];[0:v][ovr]overlay=x=20:y=20:shortest=1[out]",
+			)
+			aMap = "0:a?"
+		}
+
+		// Output 1: RTMP + AAC (YouTube / RTMP consumers)
+		args = append(args,
+			"-map", "[out]", "-map", aMap,
 			"-c:v", "libx264",
 			"-preset", "ultrafast",
 			"-tune", "zerolatency",
 			"-g", "30",
 			"-keyint_min", "30",
-			"-c:a", "aac",
-			"-b:a", "128k",
-			"-f", "flv",
-			"-flvflags", "no_duration_filesize",
-			"-flush_packets", "1",
+			"-c:a", "aac", "-b:a", "128k",
+			"-f", "flv", "-flvflags", "no_duration_filesize", "-flush_packets", "1",
 			rtmpURL,
 		)
+
+		// Output 2: RTSP + Opus (WebRTC browser preview)
+		previewURL := previewRTSPURL(rtmpURL)
+		args = append(args,
+			"-map", "[out]", "-map", aMap,
+			"-c:v", "copy",
+			"-c:a", "libopus", "-b:a", "128k",
+			"-f", "rtsp", "-rtsp_transport", "tcp",
+			previewURL,
+		)
+
+		return exec.Command("ffmpeg", args...)
 	}
 }
 
@@ -172,11 +232,11 @@ func (s *Switcher) Status() Status {
 
 // StartLive begins streaming. In local mode, no FFmpeg is started — switching
 // is instant. In RTMP mode, starts the bridge proxy and FFmpeg.
-func (s *Switcher) StartLive(stream, rtmpDest string, localMode bool) error {
+func (s *Switcher) StartLive(stream, rtmpDest string, localMode bool, audioDevice string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	log.Printf("[switcher] StartLive called: stream=%s rtmpDest=%s localMode=%v", stream, rtmpDest, localMode)
+	log.Printf("[switcher] StartLive called: stream=%s rtmpDest=%s localMode=%v audioDevice=%q", stream, rtmpDest, localMode, audioDevice)
 
 	if s.live {
 		log.Printf("[switcher] StartLive REJECTED: already live")
@@ -186,6 +246,7 @@ func (s *Switcher) StartLive(stream, rtmpDest string, localMode bool) error {
 	s.rtmpDest = rtmpDest
 	s.activeStream = stream
 	s.localMode = localMode
+	s.audioDevice = audioDevice
 
 	if localMode {
 		log.Printf("[switcher] started live (local mode): %s", stream)
@@ -299,9 +360,9 @@ func (s *Switcher) startFFmpeg() error {
 	}
 	rtmpURL := s.rtmpDest
 
-	log.Printf("[switcher] startFFmpeg: %s → %s (active=%s overlayPath=%q)", rtspURL, rtmpURL, s.activeStream, s.overlayPath)
+	log.Printf("[switcher] startFFmpeg: %s → %s (active=%s overlayPath=%q audioDevice=%q)", rtspURL, rtmpURL, s.activeStream, s.overlayPath, s.audioDevice)
 
-	s.cmd = s.cmdFactory(rtspURL, rtmpURL)
+	s.cmd = s.cmdFactory(rtspURL, rtmpURL, s.audioDevice)
 	s.cmd.Stderr = os.Stderr
 
 	log.Printf("[switcher] startFFmpeg: launching ffmpeg with args: %v", s.cmd.Args)

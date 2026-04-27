@@ -6,7 +6,7 @@ import (
 )
 
 // fakeCmdFactory returns a command that just sleeps (simulates ffmpeg running).
-func fakeCmdFactory(rtspURL, rtmpURL string) *exec.Cmd {
+func fakeCmdFactory(rtspURL, rtmpURL, audioDevice string) *exec.Cmd {
 	return exec.Command("sleep", "60")
 }
 
@@ -41,7 +41,7 @@ func TestStartLive(t *testing.T) {
 	sw := newTestSwitcher()
 	defer sw.StopAll()
 
-	err := sw.StartLive("cam1", "test-key-123", false)
+	err := sw.StartLive("cam1", "test-key-123", false, "")
 	if err != nil {
 		t.Fatalf("StartLive failed: %v", err)
 	}
@@ -59,9 +59,9 @@ func TestStartLiveAlreadyLive(t *testing.T) {
 	sw := newTestSwitcher()
 	defer sw.StopAll()
 
-	_ = sw.StartLive("cam1", "test-key", false)
+	_ = sw.StartLive("cam1", "test-key", false, "")
 
-	err := sw.StartLive("cam2", "test-key", false)
+	err := sw.StartLive("cam2", "test-key", false, "")
 	if err == nil {
 		t.Error("expected error when starting live while already live")
 	}
@@ -71,7 +71,7 @@ func TestStopLive(t *testing.T) {
 	sw := newTestSwitcher()
 	defer sw.StopAll()
 
-	_ = sw.StartLive("cam1", "test-key", false)
+	_ = sw.StartLive("cam1", "test-key", false, "")
 
 	err := sw.StopLive()
 	if err != nil {
@@ -100,7 +100,7 @@ func TestSwitch(t *testing.T) {
 	sw := newTestSwitcher()
 	defer sw.StopAll()
 
-	_ = sw.StartLive("cam1", "test-key", false)
+	_ = sw.StartLive("cam1", "test-key", false, "")
 
 	err := sw.Switch("cam2")
 	if err != nil {
@@ -120,7 +120,7 @@ func TestSwitchSameStream(t *testing.T) {
 	sw := newTestSwitcher()
 	defer sw.StopAll()
 
-	_ = sw.StartLive("cam1", "test-key", false)
+	_ = sw.StartLive("cam1", "test-key", false, "")
 
 	err := sw.Switch("cam1")
 	if err != nil {
@@ -140,7 +140,7 @@ func TestSwitchNotLive(t *testing.T) {
 func TestStopAll(t *testing.T) {
 	sw := newTestSwitcher()
 
-	_ = sw.StartLive("cam1", "test-key", false)
+	_ = sw.StartLive("cam1", "test-key", false, "")
 	sw.StopAll()
 
 	// Should not panic on double StopAll
@@ -152,7 +152,7 @@ func TestFullLifecycle(t *testing.T) {
 	defer sw.StopAll()
 
 	// Start live on cam1
-	if err := sw.StartLive("cam1", "key-abc", false); err != nil {
+	if err := sw.StartLive("cam1", "key-abc", false, ""); err != nil {
 		t.Fatalf("start live: %v", err)
 	}
 
@@ -177,7 +177,7 @@ func TestFullLifecycle(t *testing.T) {
 	}
 
 	// Start again on cam2
-	if err := sw.StartLive("cam2", "key-xyz", false); err != nil {
+	if err := sw.StartLive("cam2", "key-xyz", false, ""); err != nil {
 		t.Fatalf("restart live: %v", err)
 	}
 
