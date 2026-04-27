@@ -18,11 +18,11 @@ rtspTransports: [udp, tcp]
 # HLS server - serves streams to web UI for preview
 hls: yes
 hlsAddress: :8888
-hlsVariant: lowLatency
-hlsAlwaysRemux: yes
+hlsVariant: fmp4
+hlsAlwaysRemux: no
 hlsSegmentCount: 3
-hlsSegmentDuration: 500ms
-hlsPartDuration: 100ms
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
 hlsSegmentMaxSize: 200M
 hlsMuxerCloseAfter: 10s
 

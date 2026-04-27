@@ -70,7 +70,10 @@
             <h2>Live Output Preview</h2>
             <div class="output-card">
                 <video id="video-output" autoplay playsinline controls></video>
-                <button id="btn-unmute" class="unmute-btn" onclick="unmuteOutput()">🔇 Click to Unmute</button>
+                <div class="output-controls">
+                    <button id="btn-unmute" class="unmute-btn" onclick="unmuteOutput()">🔇 Click to Unmute</button>
+                    <button id="btn-toggle-preview" class="preview-toggle-btn" onclick="toggleOutputPreview()">⏸ Pause Preview</button>
+                </div>
             </div>
         </section>
     </main>

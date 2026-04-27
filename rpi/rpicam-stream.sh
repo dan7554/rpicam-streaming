@@ -21,7 +21,7 @@ RETRY_DELAY="${RETRY_DELAY:-5}"
 WIDTH="${WIDTH:-1280}"
 HEIGHT="${HEIGHT:-720}"
 FPS="${FPS:-30}"
-GOP="${GOP:-15}"
+GOP="${GOP:-8}"
 AUDIO_DEVICE="${AUDIO_DEVICE:-hw:2,0}"
 
 # Stream name: rpicamN → camN, or use hostname as-is

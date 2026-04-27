@@ -46,6 +46,18 @@ async function init() {
     const savedUrl = localStorage.getItem('overlay-url');
     if (savedUrl) document.getElementById('overlay-url').value = savedUrl;
 
+    // Restore saved YouTube stream key
+    const youtubeKeyInput = document.getElementById('youtube-key');
+    const savedYouTubeKey = localStorage.getItem('youtube-key');
+    if (savedYouTubeKey && youtubeKeyInput) {
+        youtubeKeyInput.value = savedYouTubeKey;
+    }
+    if (youtubeKeyInput) {
+        youtubeKeyInput.addEventListener('input', () => {
+            localStorage.setItem('youtube-key', youtubeKeyInput.value.trim());
+        });
+    }
+
     // Update default max rows when format changes
     document.getElementById('overlay-format').addEventListener('change', function() {
         const rowsInput = document.getElementById('overlay-max-rows');
@@ -59,9 +71,27 @@ async function init() {
 
 function startPreview(name) {
     startWebRTC(name).catch(() => {
-        console.warn(`WebRTC failed for ${name}, falling back to HLS`);
+        console.warn(`WebRTC failed for ${name}, falling back to HLS (will retry WebRTC in 10s)`);
         startHLS(name);
+        // Retry WebRTC periodically — upgrade from HLS when stream becomes available
+        scheduleWebRTCRetry(name);
     });
+}
+
+function scheduleWebRTCRetry(name) {
+    setTimeout(() => {
+        const p = players[name];
+        if (p && p.type === 'webrtc') return; // already upgraded
+        startWebRTC(name).then(() => {
+            // WebRTC succeeded — tear down HLS
+            if (p && p.type === 'hls' && p.hls) {
+                p.hls.destroy();
+            }
+            console.log(`Upgraded ${name} from HLS to WebRTC`);
+        }).catch(() => {
+            scheduleWebRTCRetry(name); // keep trying
+        });
+    }, 10000);
 }
 
 async function startWebRTC(name) {
@@ -89,7 +119,7 @@ async function startWebRTC(name) {
         };
         pc.addEventListener('icegatheringstatechange', check);
         // Timeout fallback
-        setTimeout(resolve, 1000);
+        setTimeout(resolve, 500);
     });
 
     const res = await fetch(`${WEBRTC_BASE}/${name}/whep`, {
@@ -133,10 +163,10 @@ function startHLS(name) {
     if (Hls.isSupported()) {
         const hls = new Hls({
             enableWorker: true,
-            lowLatencyMode: true,
-            liveSyncDurationCount: 1,
-            liveMaxLatencyDurationCount: 3,
-            maxBufferLength: 3,
+            lowLatencyMode: false,
+            liveSyncDurationCount: 2,
+            liveMaxLatencyDurationCount: 4,
+            maxBufferLength: 4,
             backBufferLength: 0,
         });
         hls.loadSource(url);
@@ -175,6 +205,8 @@ async function switchTo(stream) {
 }
 
 let outputPlayer = null;
+let outputPreviewPaused = false;
+let outputPreviewStream = null;
 
 async function goLive() {
     const key = document.getElementById('youtube-key').value.trim();
@@ -183,6 +215,7 @@ async function goLive() {
     const body = { stream: STREAMS[0] || 'cam1', audio: audioEnabled };
     if (key) {
         body.youtube_key = key;
+        console.log(`YouTube RTMP destination: rtmp://a.rtmp.youtube.com/live2/${key}`);
     }
     // If no key, server uses local RTMP (rtmp://localhost:1935/live-output)
 
@@ -239,8 +272,12 @@ function updateUI(status) {
         activeStream.textContent = `Active: ${status.active_stream}`;
         btnLive.disabled = true;
         btnStop.disabled = false;
-        // Always show live-preview — WebRTC with Opus audio
-        showOutputPreview('live-preview');
+        if (status.preview_ready !== false) {
+            // Show live-preview only when MediaMTX has the path up; otherwise wait for the next status poll.
+            showOutputPreview('live-preview');
+        } else {
+            hideOutputPreview();
+        }
     } else {
         badge.classList.add('hidden');
         statusText.textContent = 'Idle';
@@ -264,6 +301,12 @@ let currentOutputStream = null;
 
 function showOutputPreview(stream) {
     const section = document.getElementById('output-section');
+    outputPreviewStream = stream;
+
+    if (outputPreviewPaused) {
+        section.classList.remove('hidden');
+        return;
+    }
 
     // Already showing/connecting/retrying this stream — no-op
     if (currentOutputStream === stream) {
@@ -279,6 +322,9 @@ function showOutputPreview(stream) {
     const btn = document.getElementById('btn-unmute');
     if (btn) btn.style.display = 'block';
 
+    const toggleBtn = document.getElementById('btn-toggle-preview');
+    if (toggleBtn) toggleBtn.textContent = '⏸ Pause Preview';
+
     connectOutput(stream);
 }
 
@@ -292,6 +338,7 @@ function unmuteOutput() {
 
 function connectOutput(stream) {
     // Stream changed while we were waiting to retry — abort
+    if (outputPreviewPaused) return;
     if (currentOutputStream !== stream) return;
 
     startOutputWebRTC(stream).catch(() => {
@@ -327,7 +374,7 @@ async function startOutputWebRTC(stream) {
             }
         };
         pc.addEventListener('icegatheringstatechange', check);
-        setTimeout(resolve, 1000);
+        setTimeout(resolve, 500);
     });
 
     const res = await fetch(`${WEBRTC_BASE}/${stream}/whep`, {
@@ -344,6 +391,7 @@ async function startOutputWebRTC(stream) {
 
     pc.onconnectionstatechange = () => {
         if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+            if (outputPreviewPaused) return;
             if (currentOutputStream === stream) {
                 // Cleanup player but keep currentOutputStream so poll doesn't re-trigger
                 if (outputPlayer && outputPlayer.pc) outputPlayer.pc.close();
@@ -365,10 +413,10 @@ function startOutputHLS(stream) {
     if (Hls.isSupported()) {
         const hls = new Hls({
             enableWorker: true,
-            lowLatencyMode: true,
-            liveSyncDurationCount: 1,
-            liveMaxLatencyDurationCount: 3,
-            maxBufferLength: 3,
+            lowLatencyMode: false,
+            liveSyncDurationCount: 2,
+            liveMaxLatencyDurationCount: 4,
+            maxBufferLength: 4,
             backBufferLength: 0,
         });
         hls.loadSource(url);
@@ -379,6 +427,7 @@ function startOutputHLS(stream) {
         });
         hls.on(Hls.Events.ERROR, (_, data) => {
             if (data.fatal) {
+                if (outputPreviewPaused) return;
                 hls.destroy();
                 outputPlayer = null;
                 // Retry without resetting currentOutputStream (prevents poll race)
@@ -403,6 +452,30 @@ function hideOutputPreview() {
     }
     video.srcObject = null;
     currentOutputStream = null;
+}
+
+function pauseOutputPreview() {
+    outputPreviewPaused = true;
+    const btn = document.getElementById('btn-toggle-preview');
+    if (btn) btn.textContent = '▶ Resume Preview';
+    hideOutputPreview();
+}
+
+function resumeOutputPreview() {
+    outputPreviewPaused = false;
+    const btn = document.getElementById('btn-toggle-preview');
+    if (btn) btn.textContent = '⏸ Pause Preview';
+    if (outputPreviewStream) {
+        showOutputPreview(outputPreviewStream);
+    }
+}
+
+function toggleOutputPreview() {
+    if (outputPreviewPaused) {
+        resumeOutputPreview();
+    } else {
+        pauseOutputPreview();
+    }
 }
 
 // --- Overlay Controls ---
