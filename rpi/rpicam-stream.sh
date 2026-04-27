@@ -23,6 +23,7 @@ HEIGHT="${HEIGHT:-720}"
 FPS="${FPS:-30}"
 GOP="${GOP:-8}"
 AUDIO_DEVICE="${AUDIO_DEVICE:-hw:2,0}"
+BITRATE="${BITRATE:-3000}"
 
 # Stream name: rpicamN → camN, or use hostname as-is
 detect_stream_name() {
@@ -90,7 +91,7 @@ while true; do
         # libcamerasrc + alsasrc → flvmux → rtmpsink
         gst-launch-1.0 -e \
             libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! queue ! \
-            videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast bitrate=3000 key-int-max="${GOP}" bframes=0 threads=4 ! \
+            videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast bitrate=${BITRATE} key-int-max="${GOP}" bframes=0 threads=4 ! \
             h264parse ! flvmux name=mux streamable=true ! \
             rtmpsink location="$rtmp_url" \
             alsasrc device="$AUDIO_DEVICE" buffer-time=200000 ! "audio/x-raw,rate=48000,channels=1" ! queue max-size-time=3000000000 ! \
@@ -100,7 +101,7 @@ while true; do
         # Video-only GStreamer pipeline
         gst-launch-1.0 -e \
             libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! queue ! \
-            videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast bitrate=3000 key-int-max="${GOP}" bframes=0 threads=4 ! \
+            videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast bitrate=${BITRATE} key-int-max="${GOP}" bframes=0 threads=4 ! \
             h264parse ! flvmux streamable=true ! \
             rtmpsink location="$rtmp_url" \
             2>&1 || true
