@@ -21,6 +21,7 @@ RETRY_DELAY="${RETRY_DELAY:-5}"
 WIDTH="${WIDTH:-1280}"
 HEIGHT="${HEIGHT:-720}"
 FPS="${FPS:-30}"
+GOP="${GOP:-15}"
 AUDIO_DEVICE="${AUDIO_DEVICE:-hw:2,0}"
 
 # Stream name: rpicamN → camN, or use hostname as-is
@@ -92,7 +93,7 @@ while true; do
             --width "$WIDTH" --height "$HEIGHT" --framerate "$FPS" \
             --codec libav --libav-format flv \
             --libav-video-codec libx264 \
-            --libav-video-codec-opts "preset=ultrafast;tune=zerolatency;g=${FPS};keyint_min=${FPS};bf=0;threads=4" \
+            --libav-video-codec-opts "preset=ultrafast;tune=zerolatency;g=${GOP};keyint_min=${GOP};bf=0;threads=4" \
             --bitrate 3000000 \
             -o - 2>/dev/null | \
         python3 -c "
@@ -122,7 +123,7 @@ shutil.copyfileobj(sys.stdin.buffer, sys.stdout.buffer, 262144)
             --width "$WIDTH" --height "$HEIGHT" --framerate "$FPS" \
             --codec libav --libav-format flv \
             --libav-video-codec libx264 \
-            --libav-video-codec-opts "preset=ultrafast;tune=zerolatency;g=${FPS};keyint_min=${FPS};bf=0;threads=4" \
+            --libav-video-codec-opts "preset=ultrafast;tune=zerolatency;g=${GOP};keyint_min=${GOP};bf=0;threads=4" \
             --bitrate 3000000 \
             -o "$rtmp_url" || true
     fi

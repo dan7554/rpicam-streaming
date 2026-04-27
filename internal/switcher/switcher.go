@@ -64,29 +64,29 @@ func defaultCmdFactory(rtspURL, rtmpURL, audioDevice string) *exec.Cmd {
 	if audioDevice != "" {
 		// Mac mic overrides camera audio
 		pipeline = fmt.Sprintf(
-			"rtspsrc location=%s protocols=tcp latency=200 name=src "+
+			"rtspsrc location=%s protocols=tcp latency=0 do-timestamp=true name=src "+
 				"osxaudiosrc device=%s name=mic "+
 				"src. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! tee name=vt "+
 				"mic. ! audioconvert ! audioresample ! tee name=at "+
-				"vt. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 ! flvmux streamable=true name=flvm "+
-				"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 ! avenc_aac ! aacparse ! flvm. "+
+				"vt. ! queue max-size-buffers=5 max-size-time=0 max-size-bytes=0 leaky=downstream ! flvmux streamable=true name=flvm "+
+				"at. ! queue max-size-buffers=5 max-size-time=0 max-size-bytes=0 leaky=downstream ! avenc_aac ! aacparse ! flvm. "+
 				"flvm. ! rtmp2sink location=%s "+
-				"rtspclientsink location=%s protocols=tcp name=rsink "+
-				"vt. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 ! rsink. "+
-				"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 ! opusenc bitrate=128000 ! rsink.",
+				"rtspclientsink location=%s protocols=tcp latency=0 name=rsink "+
+				"vt. ! queue max-size-buffers=5 max-size-time=0 max-size-bytes=0 leaky=downstream ! rsink. "+
+				"at. ! queue max-size-buffers=5 max-size-time=0 max-size-bytes=0 leaky=downstream ! opusenc bitrate=128000 frame-size=5 ! rsink.",
 			rtspURL, audioDevice, rtmpURL, previewURL)
 	} else {
 		// Camera audio from RTSP stream
 		pipeline = fmt.Sprintf(
-			"rtspsrc location=%s protocols=tcp latency=200 name=src "+
+			"rtspsrc location=%s protocols=tcp latency=0 do-timestamp=true name=src "+
 				"src. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! tee name=vt "+
 				"src. ! rtpmp4gdepay ! aacparse ! tee name=at "+
-				"vt. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 ! flvmux streamable=true name=flvm "+
-				"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 ! flvm. "+
+				"vt. ! queue max-size-buffers=5 max-size-time=0 max-size-bytes=0 leaky=downstream ! flvmux streamable=true name=flvm "+
+				"at. ! queue max-size-buffers=5 max-size-time=0 max-size-bytes=0 leaky=downstream ! flvm. "+
 				"flvm. ! rtmp2sink location=%s "+
-				"rtspclientsink location=%s protocols=tcp name=rsink "+
-				"vt. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 ! rsink. "+
-				"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 ! avdec_aac ! audioconvert ! audioresample ! opusenc bitrate=128000 ! rsink.",
+				"rtspclientsink location=%s protocols=tcp latency=0 name=rsink "+
+				"vt. ! queue max-size-buffers=5 max-size-time=0 max-size-bytes=0 leaky=downstream ! rsink. "+
+				"at. ! queue max-size-buffers=5 max-size-time=0 max-size-bytes=0 leaky=downstream ! avdec_aac ! audioconvert ! audioresample ! opusenc bitrate=128000 frame-size=5 ! rsink.",
 			rtspURL, rtmpURL, previewURL)
 	}
 
@@ -101,8 +101,8 @@ func overlayCmdFactory(overlayPath string) CmdFactory {
 
 		args := []string{
 			"-use_wallclock_as_timestamps", "1",
-			"-probesize", "256000",
-			"-analyzeduration", "500000",
+			"-probesize", "32000",
+			"-analyzeduration", "100000",
 			"-rtsp_transport", "tcp",
 			"-fflags", "+nobuffer+discardcorrupt",
 			"-err_detect", "ignore_err",
@@ -133,8 +133,8 @@ func overlayCmdFactory(overlayPath string) CmdFactory {
 			"-c:v", "libx264",
 			"-preset", "ultrafast",
 			"-tune", "zerolatency",
-			"-g", "30",
-			"-keyint_min", "30",
+			"-g", "15",
+			"-keyint_min", "15",
 			"-c:a", "aac", "-b:a", "128k",
 			"-f", "flv", "-flvflags", "no_duration_filesize", "-flush_packets", "1",
 			rtmpURL,
