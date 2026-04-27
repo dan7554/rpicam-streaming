@@ -273,7 +273,7 @@ function updateUI(status) {
         btnLive.disabled = true;
         btnStop.disabled = false;
         if (status.preview_ready !== false) {
-            // Show live-preview only when MediaMTX has the path up; otherwise wait for the next status poll.
+            // Watch live-preview (has H264 video + Opus audio via rtspclientsink).
             showOutputPreview('live-preview');
         } else {
             hideOutputPreview();
@@ -298,6 +298,8 @@ function updateUI(status) {
 document.addEventListener('DOMContentLoaded', init);
 
 let currentOutputStream = null;
+
+let outputUserUnmuted = false;
 
 function showOutputPreview(stream) {
     const section = document.getElementById('output-section');
@@ -331,6 +333,7 @@ function showOutputPreview(stream) {
 function unmuteOutput() {
     const video = document.getElementById('video-output');
     video.muted = false;
+    outputUserUnmuted = true;
     video.play().catch(() => {});
     const btn = document.getElementById('btn-unmute');
     if (btn) btn.style.display = 'none';
@@ -356,10 +359,22 @@ async function startOutputWebRTC(stream) {
     pc.addTransceiver('video', { direction: 'recvonly' });
     pc.addTransceiver('audio', { direction: 'recvonly' });
 
+    // Collect both tracks before attaching to avoid A/V desync from
+    // video buffering while audio is still negotiating.
+    const pendingTracks = [];
+    let tracksExpected = 2;
+
     pc.ontrack = (event) => {
         console.log('[output] ontrack:', event.track.kind, event.track.readyState);
-        if (event.streams[0]) {
-            video.srcObject = event.streams[0];
+        pendingTracks.push(event.track);
+        if (pendingTracks.length >= tracksExpected) {
+            const ms = new MediaStream(pendingTracks);
+            video.srcObject = ms;
+            console.log('[output] attached both tracks, starting playback');
+            video.muted = !outputUserUnmuted;
+            video.play().catch(() => {});
+            const unmuteBtn = document.getElementById('btn-unmute');
+            if (unmuteBtn) unmuteBtn.style.display = video.muted ? 'block' : 'none';
         }
     };
 
@@ -404,8 +419,6 @@ async function startOutputWebRTC(stream) {
     };
 
     outputPlayer = { pc, type: 'webrtc' };
-    video.muted = true;
-    video.play().catch(() => {});
 }
 
 function startOutputHLS(stream) {

@@ -86,46 +86,24 @@ while true; do
     fi
 
     if $has_audio; then
-        # rpicam-vid (libx264) → big-pipe → ffmpeg muxes with ALSA audio → RTMP
-        # Default pipe is 64KB which causes backpressure deadlock on I-frames.
-        # We use a python helper to enlarge the pipe to 1MB via fcntl F_SETPIPE_SZ.
-        rpicam-vid -t 0 --camera 0 --nopreview \
-            --width "$WIDTH" --height "$HEIGHT" --framerate "$FPS" \
-            --codec libav --libav-format flv \
-            --libav-video-codec libx264 \
-            --libav-video-codec-opts "preset=ultrafast;tune=zerolatency;g=${GOP};keyint_min=${GOP};bf=0;threads=4" \
-            --bitrate 3000000 \
-            -o - 2>/dev/null | \
-        python3 -c "
-import sys, fcntl
-F_SETPIPE_SZ = 1031
-try:
-    fcntl.fcntl(sys.stdin.fileno(), F_SETPIPE_SZ, 1048576)
-except: pass
-try:
-    fcntl.fcntl(sys.stdout.fileno(), F_SETPIPE_SZ, 1048576)
-except: pass
-import shutil
-shutil.copyfileobj(sys.stdin.buffer, sys.stdout.buffer, 262144)
-" | \
-        ffmpeg -fflags +genpts \
-            -f flv -i pipe:0 \
-            -f alsa -channels 1 -sample_rate 48000 -i "$AUDIO_DEVICE" \
-            -map 0:v -map 1:a \
-            -c:v copy \
-            -c:a aac -b:a 128k \
-            -f flv \
-            -flvflags no_duration_filesize \
-            "$rtmp_url" || true
+        # Single GStreamer pipeline: shared clock keeps A/V in sync.
+        # libcamerasrc + alsasrc → flvmux → rtmpsink
+        gst-launch-1.0 -e \
+            libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! queue ! \
+            videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast bitrate=3000 key-int-max="${GOP}" bframes=0 threads=4 ! \
+            h264parse ! flvmux name=mux streamable=true ! \
+            rtmpsink location="$rtmp_url" \
+            alsasrc device="$AUDIO_DEVICE" ! "audio/x-raw,rate=48000,channels=1" ! queue ! \
+            audioconvert ! avenc_aac ! aacparse ! mux. \
+            2>&1 || true
     else
-        # Video-only: rpicam-vid → RTMP directly
-        rpicam-vid -t 0 --camera 0 --nopreview \
-            --width "$WIDTH" --height "$HEIGHT" --framerate "$FPS" \
-            --codec libav --libav-format flv \
-            --libav-video-codec libx264 \
-            --libav-video-codec-opts "preset=ultrafast;tune=zerolatency;g=${GOP};keyint_min=${GOP};bf=0;threads=4" \
-            --bitrate 3000000 \
-            -o "$rtmp_url" || true
+        # Video-only GStreamer pipeline
+        gst-launch-1.0 -e \
+            libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! queue ! \
+            videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast bitrate=3000 key-int-max="${GOP}" bframes=0 threads=4 ! \
+            h264parse ! flvmux streamable=true ! \
+            rtmpsink location="$rtmp_url" \
+            2>&1 || true
     fi
 
     log "Stream exited (attempt $retry_count). Retrying in ${RETRY_DELAY}s..."

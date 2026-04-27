@@ -52,36 +52,68 @@ type Switcher struct {
 	audioDevice   string // avfoundation audio device index, empty = anullsrc
 }
 
-func defaultCmdFactory(rtspURL, rtmpURL, audioDevice string) *exec.Cmd {
-	log.Printf("[switcher] building GStreamer cmd: %s → %s + preview (audio=%q)", rtspURL, rtmpURL, audioDevice)
-
-	// GStreamer pipeline: RTSP source → tee video/audio → dual output
-	// Output 1: RTMP + H264 passthrough + AAC passthrough
-	// Video is never re-encoded; keep the default path to a single RTMP sink.
-	var pipeline string
+// buildDefaultPipeline returns the GStreamer pipeline string for the default (no overlay) mode.
+func buildDefaultPipeline(rtspURL, rtmpURL, audioDevice string) string {
 	if audioDevice != "" {
 		// Mac mic overrides camera audio
-		pipeline = fmt.Sprintf(
-			"rtspsrc location=%s protocols=tcp latency=0 name=src "+
+		return fmt.Sprintf(
+			"rtspsrc location=%s protocols=tcp latency=200 name=src "+
 				"osxaudiosrc device=%s name=mic "+
 				"src. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! tee name=vt "+
-				"vt. ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! flvmux streamable=true name=flvm "+
-				"mic. ! audioconvert ! audioresample ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! avenc_aac ! aacparse ! flvm. "+
+				"mic. ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! tee name=at "+
+				"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! audioconvert ! avenc_aac ! aacparse ! flvmux streamable=true name=flvm "+
+				"vt. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! flvm. "+
 				"flvm. ! rtmp2sink location=%s "+
-				"vt. ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! rtspclientsink location=rtsp://localhost:8554/live-preview",
+				"vt. ! queue ! rtspclientsink location=rtsp://localhost:8554/live-preview name=preview "+
+				"at. ! queue ! audioconvert ! opusenc audio-type=restricted-lowdelay ! preview.",
 			rtspURL, audioDevice, rtmpURL)
-	} else {
-		// Camera audio from RTSP stream
-		pipeline = fmt.Sprintf(
-			"rtspsrc location=%s protocols=tcp latency=0 name=src "+
-				"src. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! tee name=vt "+
-				"vt. ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! flvmux streamable=true name=flvm "+
-				"src. ! rtpmp4gdepay ! aacparse ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! flvm. "+
-				"flvm. ! rtmp2sink location=%s "+
-				"vt. ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! rtspclientsink location=rtsp://localhost:8554/live-preview",
-			rtspURL, rtmpURL)
 	}
+	// Camera audio from RTSP stream
+	return fmt.Sprintf(
+		"rtspsrc location=%s protocols=tcp latency=200 name=src "+
+			"src. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! tee name=vt "+
+			"src. ! rtpmp4gdepay ! aacparse ! avdec_aac ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! tee name=at "+
+			"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! audioconvert ! avenc_aac ! aacparse ! flvmux streamable=true name=flvm "+
+			"vt. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! flvm. "+
+			"flvm. ! rtmp2sink location=%s "+
+			"vt. ! queue ! rtspclientsink location=rtsp://localhost:8554/live-preview name=preview "+
+			"at. ! queue ! audioconvert ! opusenc audio-type=restricted-lowdelay ! preview.",
+		rtspURL, rtmpURL)
+}
 
+// buildOverlayPipeline returns the GStreamer pipeline string for overlay mode.
+func buildOverlayPipeline(overlayPath, rtspURL, rtmpURL, audioDevice string) string {
+	if audioDevice != "" {
+		return fmt.Sprintf(
+			"filesrc location=%s ! pngdec ! imagefreeze ! video/x-raw,framerate=30/1 ! queue name=overlay_img "+
+				"rtspsrc location=%s protocols=tcp latency=200 name=cam "+
+				"cam. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! avdec_h264 ! videoconvert ! video/x-raw,format=RGBA ! queue ! compositor name=mixer sink_1::xpos=20 sink_1::ypos=20 ! videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast key-int-max=30 bframes=0 bitrate=4000 ! h264parse ! tee name=enc_tee "+
+				"overlay_img. ! mixer. "+
+				"enc_tee. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! flvmux streamable=true name=rtmp_mux "+
+				"rtmp_mux. ! rtmp2sink location=%s "+
+				"osxaudiosrc device=%s ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! tee name=at "+
+				"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! audioconvert ! avenc_aac ! aacparse ! rtmp_mux. "+
+				"enc_tee. ! queue ! rtspclientsink location=rtsp://localhost:8554/live-preview name=preview "+
+				"at. ! queue ! audioconvert ! opusenc audio-type=restricted-lowdelay ! preview.",
+			overlayPath, rtspURL, rtmpURL, audioDevice)
+	}
+	return fmt.Sprintf(
+		"filesrc location=%s ! pngdec ! imagefreeze ! video/x-raw,framerate=30/1 ! queue name=overlay_img "+
+			"rtspsrc location=%s protocols=tcp latency=200 name=cam "+
+			"cam. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! avdec_h264 ! videoconvert ! video/x-raw,format=RGBA ! queue ! compositor name=mixer sink_1::xpos=20 sink_1::ypos=20 ! videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast key-int-max=30 bframes=0 bitrate=4000 ! h264parse ! tee name=enc_tee "+
+			"overlay_img. ! mixer. "+
+			"enc_tee. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! flvmux streamable=true name=rtmp_mux "+
+			"rtmp_mux. ! rtmp2sink location=%s "+
+			"cam. ! rtpmp4gdepay ! aacparse ! avdec_aac ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! tee name=at "+
+			"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! audioconvert ! avenc_aac ! aacparse ! rtmp_mux. "+
+			"enc_tee. ! queue ! rtspclientsink location=rtsp://localhost:8554/live-preview name=preview "+
+			"at. ! queue ! audioconvert ! opusenc audio-type=restricted-lowdelay ! preview.",
+		overlayPath, rtspURL, rtmpURL)
+}
+
+func defaultCmdFactory(rtspURL, rtmpURL, audioDevice string) *exec.Cmd {
+	log.Printf("[switcher] building GStreamer cmd: %s → %s + preview (audio=%q)", rtspURL, rtmpURL, audioDevice)
+	pipeline := buildDefaultPipeline(rtspURL, rtmpURL, audioDevice)
 	log.Printf("[switcher] GStreamer pipeline: %s", pipeline)
 	args := append([]string{"-e"}, strings.Fields(pipeline)...)
 	return exec.Command("gst-launch-1.0", args...)
@@ -90,38 +122,9 @@ func defaultCmdFactory(rtspURL, rtmpURL, audioDevice string) *exec.Cmd {
 func overlayCmdFactory(overlayPath string) CmdFactory {
 	return func(rtspURL, rtmpURL, audioDevice string) *exec.Cmd {
 		log.Printf("[switcher] building OVERLAY GStreamer cmd: %s → %s (overlay=%s audio=%q)", rtspURL, rtmpURL, overlayPath, audioDevice)
-
-		// Overlay mode stays in GStreamer by compositing the PNG over the video,
-		// then pushing to the RTMP output.
-		videoOverlay := fmt.Sprintf(
-			"filesrc location=%s ! pngdec ! imagefreeze ! video/x-raw,framerate=30/1 ! queue name=overlay_img "+
-			"rtspsrc location=%s protocols=tcp latency=0 name=cam "+
-			"cam. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! avdec_h264 ! videoconvert ! video/x-raw,format=RGBA ! queue ! compositor name=mixer sink_1::xpos=20 sink_1::ypos=20 ! videoconvert ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast key-int-max=8 bframes=0 ! h264parse ! tee name=enc_tee "+
-			"overlay_img. ! mixer. "+
-			"enc_tee. ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! flvmux streamable=true name=rtmp_mux "+
-			"rtmp_mux. ! rtmp2sink location=%s "+
-			"cam. ! rtpmp4gdepay ! aacparse ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! avdec_aac ! audioconvert ! audioresample ! avenc_aac ! aacparse ! rtmp_mux. "+
-			"enc_tee. ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! rtspclientsink location=rtsp://localhost:8554/live-preview",
-			overlayPath, rtspURL, rtmpURL,
-		)
-
-		if audioDevice != "" {
-			// Replace camera audio with the selected mic in overlay mode.
-			videoOverlay = fmt.Sprintf(
-				"filesrc location=%s ! pngdec ! imagefreeze ! video/x-raw,framerate=30/1 ! queue name=overlay_img "+
-				"rtspsrc location=%s protocols=tcp latency=0 name=cam "+
-				"cam. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! avdec_h264 ! videoconvert ! video/x-raw,format=RGBA ! queue ! compositor name=mixer sink_1::xpos=20 sink_1::ypos=20 ! videoconvert ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast key-int-max=8 bframes=0 ! h264parse ! tee name=enc_tee "+
-				"overlay_img. ! mixer. "+
-				"enc_tee. ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! flvmux streamable=true name=rtmp_mux "+
-				"rtmp_mux. ! rtmp2sink location=%s "+
-				"osxaudiosrc device=%s ! audioconvert ! audioresample ! avenc_aac ! aacparse ! rtmp_mux. "+
-				"enc_tee. ! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! rtspclientsink location=rtsp://localhost:8554/live-preview",
-				overlayPath, rtspURL, rtmpURL, audioDevice,
-			)
-		}
-
-		log.Printf("[switcher] GStreamer overlay pipeline: %s", videoOverlay)
-		args := append([]string{"-e"}, strings.Fields(videoOverlay)...)
+		pipeline := buildOverlayPipeline(overlayPath, rtspURL, rtmpURL, audioDevice)
+		log.Printf("[switcher] GStreamer overlay pipeline: %s", pipeline)
+		args := append([]string{"-e"}, strings.Fields(pipeline)...)
 		return exec.Command("gst-launch-1.0", args...)
 	}
 }
