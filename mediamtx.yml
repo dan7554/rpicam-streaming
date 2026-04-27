@@ -15,16 +15,8 @@ rtsp: yes
 rtspAddress: 0.0.0.0:8554
 rtspTransports: [udp, tcp]
 
-# HLS server - serves streams to web UI for preview
-hls: yes
-hlsAddress: :8888
-hlsVariant: fmp4
-hlsAlwaysRemux: no
-hlsSegmentCount: 3
-hlsSegmentDuration: 1s
-hlsPartDuration: 200ms
-hlsSegmentMaxSize: 200M
-hlsMuxerCloseAfter: 10s
+# HLS server - disabled (using WebRTC for preview)
+hls: no
 
 # RTMP - used for YouTube output and RPi camera ingest
 rtmp: yes

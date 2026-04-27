@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/dchristiani/media-mtx/internal/config"
 	"github.com/dchristiani/media-mtx/internal/overlay"
@@ -34,6 +35,9 @@ func NewHandler(cfg *config.Config, sw *switcher.Switcher) *Handler {
 
 	hlsURL, _ := url.Parse("http://localhost" + cfg.HLSAddress)
 	h.hlsProxy = httputil.NewSingleHostReverseProxy(hlsURL)
+	h.hlsProxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		w.WriteHeader(http.StatusBadGateway)
+	}
 
 	webrtcURL, _ := url.Parse("http://localhost" + cfg.WebRTCAddress)
 	h.webrtcProxy = httputil.NewSingleHostReverseProxy(webrtcURL)
@@ -71,20 +75,15 @@ func (h *Handler) routes() {
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// HLS reverse proxy — intercept before mux
 	if len(r.URL.Path) >= 5 && r.URL.Path[:5] == "/hls/" {
-		log.Printf("[api] HLS proxy: %s %s", r.Method, r.URL.Path)
 		r.URL.Path = r.URL.Path[4:] // strip /hls prefix, keep leading /
 		h.hlsProxy.ServeHTTP(w, r)
 		return
 	}
 	// WebRTC/WHEP reverse proxy — for low-latency previews
 	if len(r.URL.Path) >= 8 && r.URL.Path[:8] == "/webrtc/" {
-		log.Printf("[api] WebRTC proxy: %s %s", r.Method, r.URL.Path)
 		r.URL.Path = r.URL.Path[7:] // strip /webrtc prefix, keep leading /
 		h.webrtcProxy.ServeHTTP(w, r)
 		return
-	}
-	if strings.HasPrefix(r.URL.Path, "/api/") {
-		log.Printf("[api] %s %s", r.Method, r.URL.Path)
 	}
 	h.mux.ServeHTTP(w, r)
 }
@@ -147,13 +146,14 @@ func (h *Handler) switchStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("[api] switchStream: switching to %s", req.Stream)
+	switchStart := time.Now()
 	if err := h.sw.Switch(req.Stream); err != nil {
-		log.Printf("[api] switchStream: FAILED: %v", err)
+		log.Printf("[api] switchStream: FAILED after %dms: %v", time.Since(switchStart).Milliseconds(), err)
 		writeError(w, http.StatusConflict, "%v", err)
 		return
 	}
 
-	log.Printf("[api] switchStream: SUCCESS → %s", req.Stream)
+	log.Printf("[api] switchStream: SUCCESS → %s in %dms", req.Stream, time.Since(switchStart).Milliseconds())
 	writeJSON(w, http.StatusOK, map[string]string{"status": "switched", "stream": req.Stream})
 }
 
@@ -332,7 +332,6 @@ func (h *Handler) stopOverlay(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) overlayStatus(w http.ResponseWriter, r *http.Request) {
 	if h.overlay == nil {
-		log.Printf("[api] overlayStatus: inactive")
 		writeJSON(w, http.StatusOK, map[string]any{"active": false})
 		return
 	}

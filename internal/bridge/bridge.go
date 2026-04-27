@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/bluenviron/gortsplib/v5"
 	"github.com/bluenviron/gortsplib/v5/pkg/base"
@@ -19,12 +20,28 @@ type Bridge struct {
 	mu             sync.RWMutex
 	addr           string
 	rtspBase       string
-	active         string
-	needsKeyframe  bool                // after switch, drop video until IDR
-	server         *gortsplib.Server
+	active           string
+	needsKeyframe    bool                // after switch, drop all until IDR
+	switchTime       time.Time           // when last switch was requested
+	droppedVideoPkts int                 // video packets dropped waiting for keyframe
+	server           *gortsplib.Server
 	stream         *gortsplib.ServerStream
 	clients        []*gortsplib.Client
 	serverMedias   []*description.Media
+
+	// RTP timestamp/seq rewriting to ensure continuity across camera switches.
+	// Without this, switching cameras causes timestamp discontinuities that
+	// crash GStreamer's flvmux → rtmp2sink.
+	lastVideoTS  uint32 // last video RTP timestamp we wrote
+	lastVideoSeq uint16 // last video RTP sequence number we wrote
+	lastAudioTS  uint32 // last audio RTP timestamp we wrote
+	lastAudioSeq uint16 // last audio RTP sequence number we wrote
+	videoTSOffset    int64  // added to incoming video timestamps
+	videoSeqOffset   int32  // added to incoming video sequence numbers
+	audioTSOffset    int64  // added to incoming audio timestamps
+	audioSeqOffset   int32  // added to incoming audio sequence numbers
+	pendingVideoRebase bool // true = next video keyframe needs offset recalculation
+	pendingAudioRebase bool // true = first audio pkt after switch needs offset recalculation
 }
 
 // New creates a bridge that listens on addr (e.g. ":8555") and reads cameras
@@ -42,6 +59,8 @@ func (b *Bridge) Start(cameras []string, active string) error {
 	log.Printf("[bridge] Start: cameras=%v active=%s", cameras, active)
 	b.mu.Lock()
 	b.active = active
+	b.needsKeyframe = true // wait for clean keyframe before forwarding anything
+	b.switchTime = time.Now()
 	b.mu.Unlock()
 
 	b.server = &gortsplib.Server{
@@ -144,18 +163,64 @@ func (b *Bridge) connectCamera(name string, first bool) error {
 		if !isActive {
 			return
 		}
-		// After a switch, drop video until we see a keyframe (IDR).
-		// Audio is forwarded immediately.
-		if medi.Type == description.MediaTypeVideo && needsKF {
-			if !isH264Keyframe(pkt) {
+		// After a switch, drop ALL packets until we see a keyframe (IDR).
+		// This ensures clean A/V sync — no audio from new camera before video.
+		if needsKF {
+			if medi.Type == description.MediaTypeVideo {
+				if !isH264Keyframe(pkt) {
+					b.mu.Lock()
+					b.droppedVideoPkts++
+					b.mu.Unlock()
+					return
+				}
+				b.mu.Lock()
+				elapsed := time.Since(b.switchTime)
+				dropped := b.droppedVideoPkts
+				b.needsKeyframe = false
+				b.droppedVideoPkts = 0
+
+				// Rebase video: compute offsets so new camera's timestamps continue
+				// from where the old camera left off (video clock = 90kHz).
+				if b.pendingVideoRebase {
+					b.videoTSOffset = int64(b.lastVideoTS) - int64(pkt.Timestamp) + 3000 // +1 frame gap at 90kHz/30fps
+					b.videoSeqOffset = int32(b.lastVideoSeq) - int32(pkt.SequenceNumber) + 1
+					b.pendingVideoRebase = false
+					log.Printf("[bridge] rebase video: tsOffset=%d seqOffset=%d",
+						b.videoTSOffset, b.videoSeqOffset)
+				}
+				b.mu.Unlock()
+				log.Printf("[bridge] keyframe received from %s in %dms (dropped %d video pkts)",
+					camName, elapsed.Milliseconds(), dropped)
+			} else {
+				// Drop audio too until keyframe arrives
 				return
 			}
-			b.mu.Lock()
-			b.needsKeyframe = false
-			b.mu.Unlock()
-			log.Printf("[bridge] keyframe received from %s, resuming forwarding", camName)
 		}
 		if sm, ok := mediaMap[medi]; ok {
+			// Apply timestamp/sequence rewriting for continuity across switches.
+			b.mu.Lock()
+			if medi.Type == description.MediaTypeVideo {
+				pkt.Timestamp = uint32(int64(pkt.Timestamp) + b.videoTSOffset)
+				pkt.SequenceNumber = uint16(int32(pkt.SequenceNumber) + b.videoSeqOffset)
+				b.lastVideoTS = pkt.Timestamp
+				b.lastVideoSeq = pkt.SequenceNumber
+			} else {
+				// Rebase audio on first audio packet after switch.
+				// Audio has its own RTP clock (48kHz for AAC) — must be
+				// computed from actual audio timestamps, not video.
+				if b.pendingAudioRebase {
+					b.audioTSOffset = int64(b.lastAudioTS) - int64(pkt.Timestamp) + 1024 // +1 AAC frame at 48kHz
+					b.audioSeqOffset = int32(b.lastAudioSeq) - int32(pkt.SequenceNumber) + 1
+					b.pendingAudioRebase = false
+					log.Printf("[bridge] rebase audio: tsOffset=%d seqOffset=%d",
+						b.audioTSOffset, b.audioSeqOffset)
+				}
+				pkt.Timestamp = uint32(int64(pkt.Timestamp) + b.audioTSOffset)
+				pkt.SequenceNumber = uint16(int32(pkt.SequenceNumber) + b.audioSeqOffset)
+				b.lastAudioTS = pkt.Timestamp
+				b.lastAudioSeq = pkt.SequenceNumber
+			}
+			b.mu.Unlock()
 			if err := b.stream.WritePacketRTP(sm, pkt); err != nil {
 				log.Printf("bridge write error: %v", err)
 			}
@@ -202,16 +267,21 @@ func isH264Keyframe(pkt *rtp.Packet) bool {
 	return false
 }
 
-// Switch changes the active camera atomically (zero-gap).
+// Switch changes the active camera atomically.
+// Waits for next live keyframe from new camera (max ~267ms with GOP=8 at 30fps).
+// Both audio and video are held until keyframe arrives for clean A/V sync.
 func (b *Bridge) Switch(camera string) {
 	b.mu.Lock()
 	old := b.active
 	b.active = camera
-	b.needsKeyframe = true // wait for IDR from new camera
+	b.needsKeyframe = true
+	b.pendingVideoRebase = true
+	b.pendingAudioRebase = true
+	b.switchTime = time.Now()
+	b.droppedVideoPkts = 0
 	b.mu.Unlock()
 
-	log.Printf("[bridge] Switch: %s → %s (waitingForKeyframe=true)", old, camera)
-	log.Printf("[bridge] switched to %s", camera)
+	log.Printf("[bridge] Switch: %s → %s (waiting for live keyframe)", old, camera)
 }
 
 // ProxyURL returns the RTSP URL of the bridge output.

@@ -213,7 +213,6 @@ func (s *Switcher) Status() Status {
 		ActiveStream: s.activeStream,
 		LocalMode:    s.localMode,
 	}
-	log.Printf("[switcher] Status() → live=%v active=%s localMode=%v overlayPath=%q", st.Live, st.ActiveStream, st.LocalMode, s.overlayPath)
 	return st
 }
 
@@ -297,10 +296,12 @@ func (s *Switcher) StopLive() error {
 // In RTMP mode, the bridge proxy atomically changes which camera's
 // packets are forwarded — zero-gap switch.
 func (s *Switcher) Switch(stream string) error {
+	lockStart := time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	lockWait := time.Since(lockStart)
 
-	log.Printf("[switcher] Switch called: %s → %s (live=%v)", s.activeStream, stream, s.live)
+	log.Printf("[switcher] Switch called: %s → %s (live=%v, lock_wait=%dms)", s.activeStream, stream, s.live, lockWait.Milliseconds())
 
 	if !s.live {
 		log.Printf("[switcher] Switch REJECTED: not live")
@@ -314,7 +315,9 @@ func (s *Switcher) Switch(stream string) error {
 
 	if !s.localMode && s.bridge != nil {
 		log.Printf("[switcher] delegating switch to bridge: %s", stream)
+		bridgeStart := time.Now()
 		s.bridge.Switch(stream)
+		log.Printf("[switcher] bridge.Switch() took %dms", time.Since(bridgeStart).Milliseconds())
 	}
 
 	s.activeStream = stream

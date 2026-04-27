@@ -93,7 +93,7 @@ while true; do
             videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast bitrate=3000 key-int-max="${GOP}" bframes=0 threads=4 ! \
             h264parse ! flvmux name=mux streamable=true ! \
             rtmpsink location="$rtmp_url" \
-            alsasrc device="$AUDIO_DEVICE" ! "audio/x-raw,rate=48000,channels=1" ! queue ! \
+            alsasrc device="$AUDIO_DEVICE" buffer-time=200000 ! "audio/x-raw,rate=48000,channels=1" ! queue max-size-time=3000000000 ! \
             audioconvert ! avenc_aac ! aacparse ! mux. \
             2>&1 || true
     else

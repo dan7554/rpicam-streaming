@@ -188,6 +188,13 @@ function startHLS(name) {
 }
 
 async function switchTo(stream) {
+    const t0 = performance.now();
+    console.log(`[switch] requesting switch to ${stream}`);
+
+    // Capture pre-switch video frame count to detect when new frames arrive
+    const outputVideo = document.getElementById('video-output');
+    const preFrames = outputVideo ? outputVideo.getVideoPlaybackQuality?.()?.totalVideoFrames : null;
+
     try {
         const res = await fetch(`${API_BASE}/api/switch`, {
             method: 'POST',
@@ -195,11 +202,34 @@ async function switchTo(stream) {
             body: JSON.stringify({ stream }),
         });
         const data = await res.json();
+        const apiMs = (performance.now() - t0).toFixed(0);
         if (!res.ok) {
+            console.warn(`[switch] API failed after ${apiMs}ms:`, data.error);
             alert(data.error || 'Switch failed');
+        } else {
+            console.log(`[switch] API responded in ${apiMs}ms`);
+            // Monitor when new video frames actually arrive at the output preview
+            if (outputVideo && preFrames !== null) {
+                let checks = 0;
+                const frameCheck = setInterval(() => {
+                    const q = outputVideo.getVideoPlaybackQuality?.();
+                    if (!q) { clearInterval(frameCheck); return; }
+                    const newFrames = q.totalVideoFrames - preFrames;
+                    const dropped = q.droppedVideoFrames;
+                    checks++;
+                    if (newFrames > 0) {
+                        console.log(`[switch] first new frame after ${(performance.now() - t0).toFixed(0)}ms (${newFrames} frames, ${dropped} dropped)`);
+                        clearInterval(frameCheck);
+                    } else if (checks > 100) {
+                        console.warn(`[switch] no new frames after ${(performance.now() - t0).toFixed(0)}ms, giving up`);
+                        clearInterval(frameCheck);
+                    }
+                }, 50);
+            }
         }
         pollStatus();
     } catch (err) {
+        console.error(`[switch] fetch error after ${(performance.now() - t0).toFixed(0)}ms:`, err);
         alert('Error: ' + err.message);
     }
 }
@@ -359,23 +389,20 @@ async function startOutputWebRTC(stream) {
     pc.addTransceiver('video', { direction: 'recvonly' });
     pc.addTransceiver('audio', { direction: 'recvonly' });
 
-    // Collect both tracks before attaching to avoid A/V desync from
-    // video buffering while audio is still negotiating.
-    const pendingTracks = [];
-    let tracksExpected = 2;
-
     pc.ontrack = (event) => {
         console.log('[output] ontrack:', event.track.kind, event.track.readyState);
-        pendingTracks.push(event.track);
-        if (pendingTracks.length >= tracksExpected) {
-            const ms = new MediaStream(pendingTracks);
-            video.srcObject = ms;
-            console.log('[output] attached both tracks, starting playback');
-            video.muted = !outputUserUnmuted;
-            video.play().catch(() => {});
-            const unmuteBtn = document.getElementById('btn-unmute');
-            if (unmuteBtn) unmuteBtn.style.display = video.muted ? 'block' : 'none';
+        if (event.streams[0]) {
+            video.srcObject = event.streams[0];
+        } else {
+            if (!video.srcObject) {
+                video.srcObject = new MediaStream();
+            }
+            video.srcObject.addTrack(event.track);
         }
+        video.muted = !outputUserUnmuted;
+        video.play().catch(() => {});
+        const unmuteBtn = document.getElementById('btn-unmute');
+        if (unmuteBtn) unmuteBtn.style.display = video.muted ? 'block' : 'none';
     };
 
     const offer = await pc.createOffer();
