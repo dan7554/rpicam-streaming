@@ -22,7 +22,7 @@ hlsVariant: fmp4
 hlsAlwaysRemux: yes
 hlsSegmentCount: 3
 hlsSegmentDuration: 1s
-hlsPartDuration: 200ms
+hlsPartDuration: 100ms
 hlsMuxerCloseAfter: 10s
 
 # RTMP - used for YouTube output and RPi camera ingest

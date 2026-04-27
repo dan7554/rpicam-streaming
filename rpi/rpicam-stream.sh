@@ -76,7 +76,7 @@ while true; do
         --width "$WIDTH" --height "$HEIGHT" --framerate "$FPS" \
         --codec libav --libav-format flv \
         --libav-video-codec libx264 \
-        --libav-video-codec-opts "preset=ultrafast;tune=zerolatency;g=60" \
+        --libav-video-codec-opts "preset=ultrafast;tune=zerolatency;g=30;keyint_min=30;bf=0" \
         -o "$rtmp_url" || true
 
     log "Stream exited (attempt $retry_count). Retrying in ${RETRY_DELAY}s..."

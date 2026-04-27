@@ -1,5 +1,6 @@
 const STREAMS = ['cam1', 'cam2', 'cam3'];
 const HLS_BASE = '/hls';
+const WEBRTC_BASE = '/webrtc';
 const API_BASE = '';
 
 const players = {};
@@ -21,8 +22,8 @@ function init() {
         grid.appendChild(card);
     });
 
-    // Start HLS players
-    STREAMS.forEach(startHLS);
+    // Start WebRTC players (HLS fallback)
+    STREAMS.forEach(startPreview);
 
     // Poll status
     setInterval(pollStatus, 2000);
@@ -31,6 +32,75 @@ function init() {
     // Poll overlay status
     setInterval(pollOverlayStatus, 3000);
     pollOverlayStatus();
+}
+
+function startPreview(name) {
+    startWebRTC(name).catch(() => {
+        console.warn(`WebRTC failed for ${name}, falling back to HLS`);
+        startHLS(name);
+    });
+}
+
+async function startWebRTC(name) {
+    const video = document.getElementById(`video-${name}`);
+    const pc = new RTCPeerConnection({ iceServers: [] });
+
+    pc.addTransceiver('video', { direction: 'recvonly' });
+    pc.addTransceiver('audio', { direction: 'recvonly' });
+
+    pc.ontrack = (event) => {
+        if (event.streams[0]) video.srcObject = event.streams[0];
+    };
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+
+    // Wait for ICE gathering (local candidates only, fast)
+    await new Promise((resolve) => {
+        if (pc.iceGatheringState === 'complete') return resolve();
+        const check = () => {
+            if (pc.iceGatheringState === 'complete') {
+                pc.removeEventListener('icegatheringstatechange', check);
+                resolve();
+            }
+        };
+        pc.addEventListener('icegatheringstatechange', check);
+        // Timeout fallback
+        setTimeout(resolve, 1000);
+    });
+
+    const res = await fetch(`${WEBRTC_BASE}/${name}/whep`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/sdp' },
+        body: pc.localDescription.sdp,
+    });
+    if (!res.ok) throw new Error(`WHEP ${res.status}`);
+
+    const answerSDP = await res.text();
+    await pc.setRemoteDescription({ type: 'answer', sdp: answerSDP });
+
+    // Store session URL for cleanup
+    const sessionURL = res.headers.get('Location');
+
+    // Reconnect on failure
+    pc.onconnectionstatechange = () => {
+        if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+            cleanupWebRTC(name);
+            setTimeout(() => startPreview(name), 2000);
+        }
+    };
+
+    players[name] = { pc, sessionURL, type: 'webrtc' };
+    video.play().catch(() => {});
+}
+
+function cleanupWebRTC(name) {
+    const p = players[name];
+    if (!p) return;
+    if (p.type === 'webrtc' && p.pc) {
+        p.pc.close();
+    }
+    delete players[name];
 }
 
 function startHLS(name) {
@@ -42,22 +112,23 @@ function startHLS(name) {
             enableWorker: true,
             lowLatencyMode: true,
             liveSyncDurationCount: 1,
+            liveMaxLatencyDurationCount: 3,
+            maxBufferLength: 3,
+            backBufferLength: 0,
         });
         hls.loadSource(url);
         hls.attachMedia(video);
         hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
         hls.on(Hls.Events.ERROR, (_, data) => {
             if (data.fatal) {
-                // Retry after 3 seconds
                 setTimeout(() => {
                     hls.loadSource(url);
                     hls.attachMedia(video);
                 }, 3000);
             }
         });
-        players[name] = hls;
+        players[name] = { hls, type: 'hls' };
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        // Safari native HLS
         video.src = url;
         video.play().catch(() => {});
     }
@@ -167,55 +238,121 @@ function updateUI(status) {
 document.addEventListener('DOMContentLoaded', init);
 
 let currentOutputStream = null;
+let outputConnecting = false; // guard against duplicate connection attempts
 
 function showOutputPreview(stream) {
     const section = document.getElementById('output-section');
-    const video = document.getElementById('video-output');
-    const url = `${HLS_BASE}/${stream}/index.m3u8`;
 
-    // If already showing the same stream, nothing to do
-    if (outputPlayer && currentOutputStream === stream) {
+    // If already showing or connecting to the same stream, nothing to do
+    if (currentOutputStream === stream && (outputPlayer || outputConnecting)) {
         section.classList.remove('hidden');
         return;
     }
 
-    // Clean up previous player (stream changed or first time)
-    if (outputPlayer) {
-        outputPlayer.destroy();
-        outputPlayer = null;
-    }
+    hideOutputPreview();
     currentOutputStream = stream;
+    outputConnecting = true;
     section.classList.remove('hidden');
 
+    // Try WebRTC first, fall back to HLS
+    startOutputWebRTC(stream).catch(() => {
+        console.warn('Output WebRTC failed, falling back to HLS');
+        startOutputHLS(stream);
+    }).finally(() => {
+        outputConnecting = false;
+    });
+}
+
+async function startOutputWebRTC(stream) {
+    const video = document.getElementById('video-output');
+    const pc = new RTCPeerConnection({ iceServers: [] });
+
+    pc.addTransceiver('video', { direction: 'recvonly' });
+    pc.addTransceiver('audio', { direction: 'recvonly' });
+
+    pc.ontrack = (event) => {
+        if (event.streams[0]) video.srcObject = event.streams[0];
+    };
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+
+    await new Promise((resolve) => {
+        if (pc.iceGatheringState === 'complete') return resolve();
+        const check = () => {
+            if (pc.iceGatheringState === 'complete') {
+                pc.removeEventListener('icegatheringstatechange', check);
+                resolve();
+            }
+        };
+        pc.addEventListener('icegatheringstatechange', check);
+        setTimeout(resolve, 1000);
+    });
+
+    const res = await fetch(`${WEBRTC_BASE}/${stream}/whep`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/sdp' },
+        body: pc.localDescription.sdp,
+    });
+    if (!res.ok) throw new Error(`WHEP ${res.status}`);
+
+    const answerSDP = await res.text();
+    await pc.setRemoteDescription({ type: 'answer', sdp: answerSDP });
+
+    pc.onconnectionstatechange = () => {
+        if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+            if (currentOutputStream === stream) {
+                hideOutputPreview();
+                setTimeout(() => showOutputPreview(stream), 2000);
+            }
+        }
+    };
+
+    outputPlayer = { pc, type: 'webrtc' };
+    video.play().catch(() => {});
+}
+
+function startOutputHLS(stream) {
+    const video = document.getElementById('video-output');
+    const url = `${HLS_BASE}/${stream}/index.m3u8`;
+
     if (Hls.isSupported()) {
-        outputPlayer = new Hls({
+        const hls = new Hls({
             enableWorker: true,
-            liveSyncDurationCount: 3,
-            liveMaxLatencyDurationCount: 10,
-            maxBufferLength: 30,
+            lowLatencyMode: true,
+            liveSyncDurationCount: 1,
+            liveMaxLatencyDurationCount: 3,
+            maxBufferLength: 3,
+            backBufferLength: 0,
         });
-        outputPlayer.loadSource(url);
-        outputPlayer.attachMedia(video);
-        outputPlayer.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
-        outputPlayer.on(Hls.Events.ERROR, (_, data) => {
+        hls.loadSource(url);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
+        hls.on(Hls.Events.ERROR, (_, data) => {
             if (data.fatal) {
-                outputPlayer.destroy();
-                outputPlayer = null;
-                currentOutputStream = null;
+                hideOutputPreview();
                 setTimeout(() => showOutputPreview(stream), 3000);
             }
         });
+        outputPlayer = { hls, type: 'hls' };
     }
 }
 
 function hideOutputPreview() {
     const section = document.getElementById('output-section');
+    const video = document.getElementById('video-output');
     section.classList.add('hidden');
     if (outputPlayer) {
-        outputPlayer.destroy();
+        if (outputPlayer.type === 'webrtc' && outputPlayer.pc) {
+            outputPlayer.pc.close();
+        } else if (outputPlayer.type === 'hls' && outputPlayer.hls) {
+            outputPlayer.hls.destroy();
+        }
         outputPlayer = null;
     }
+    video.srcObject = null;
     currentOutputStream = null;
+    outputConnecting = false;
 }
 
 // --- Overlay Controls ---

@@ -23,7 +23,8 @@ echo "(cam2 = rpicam2, cam3 = rpicam3 via Tailscale/RTMP)"
 ffmpeg -re -f lavfi \
     -i "smptebars=size=1280x720:rate=30" \
     -f lavfi -i "sine=frequency=400:sample_rate=48000" \
-    -c:v libx264 -preset ultrafast -tune zerolatency -b:v 2M \
+    -c:v libx264 -preset ultrafast -tune zerolatency \
+    -g 30 -keyint_min 30 -b:v 2M \
     -c:a aac -b:a 128k \
     -f rtsp "rtsp://${RTSP_HOST}:${RTSP_PORT}/cam1" &
 PIDS+=($!)

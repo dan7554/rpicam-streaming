@@ -18,19 +18,33 @@ import (
 )
 
 type Handler struct {
-	cfg      *config.Config
-	sw       *switcher.Switcher
-	mux      *http.ServeMux
-	hlsProxy *httputil.ReverseProxy
-	overlay  *overlay.Overlay
+	cfg        *config.Config
+	sw         *switcher.Switcher
+	mux        *http.ServeMux
+	hlsProxy   *httputil.ReverseProxy
+	webrtcProxy *httputil.ReverseProxy
+	overlay    *overlay.Overlay
 }
 
 func NewHandler(cfg *config.Config, sw *switcher.Switcher) *Handler {
-	log.Printf("[api] NewHandler: port=%s hlsAddr=%s overlayDir=%s", cfg.Port, cfg.HLSAddress, cfg.OverlayDir)
+	log.Printf("[api] NewHandler: port=%s hlsAddr=%s webrtcAddr=%s overlayDir=%s", cfg.Port, cfg.HLSAddress, cfg.WebRTCAddress, cfg.OverlayDir)
 	h := &Handler{cfg: cfg, sw: sw, mux: http.NewServeMux()}
 
 	hlsURL, _ := url.Parse("http://localhost" + cfg.HLSAddress)
 	h.hlsProxy = httputil.NewSingleHostReverseProxy(hlsURL)
+
+	webrtcURL, _ := url.Parse("http://localhost" + cfg.WebRTCAddress)
+	h.webrtcProxy = httputil.NewSingleHostReverseProxy(webrtcURL)
+	// Rewrite Location headers so WHEP session URLs go through the proxy
+	h.webrtcProxy.ModifyResponse = func(resp *http.Response) error {
+		if loc := resp.Header.Get("Location"); loc != "" {
+			// Prefix /webrtc so the browser routes session URLs back through the proxy
+			if len(loc) > 0 && loc[0] == '/' {
+				resp.Header.Set("Location", "/webrtc"+loc)
+			}
+		}
+		return nil
+	}
 
 	h.routes()
 	return h
@@ -57,6 +71,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[api] HLS proxy: %s %s", r.Method, r.URL.Path)
 		r.URL.Path = r.URL.Path[4:] // strip /hls prefix, keep leading /
 		h.hlsProxy.ServeHTTP(w, r)
+		return
+	}
+	// WebRTC/WHEP reverse proxy — for low-latency previews
+	if len(r.URL.Path) >= 8 && r.URL.Path[:8] == "/webrtc/" {
+		log.Printf("[api] WebRTC proxy: %s %s", r.Method, r.URL.Path)
+		r.URL.Path = r.URL.Path[7:] // strip /webrtc prefix, keep leading /
+		h.webrtcProxy.ServeHTTP(w, r)
 		return
 	}
 	if strings.HasPrefix(r.URL.Path, "/api/") {

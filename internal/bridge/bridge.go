@@ -45,8 +45,9 @@ func (b *Bridge) Start(cameras []string, active string) error {
 	b.mu.Unlock()
 
 	b.server = &gortsplib.Server{
-		Handler:     b,
-		RTSPAddress: b.addr,
+		Handler:        b,
+		RTSPAddress:    b.addr,
+		WriteQueueSize: 1024,
 	}
 	if err := b.server.Start(); err != nil {
 		log.Printf("[bridge] RTSP server start FAILED: %v", err)
