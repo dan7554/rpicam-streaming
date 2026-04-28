@@ -1,0 +1,48 @@
+###############################################
+# MediaMTX config - AWS production
+###############################################
+
+logLevel: info
+logDestinations: [stdout]
+
+# API
+api: yes
+apiAddress: :9997
+
+# RTSP (internal: bridge ↔ MediaMTX ↔ GStreamer)
+rtsp: yes
+rtspAddress: 0.0.0.0:8554
+rtspTransports: [tcp]
+
+# HLS disabled (YouTube handles distribution)
+hls: no
+
+# RTMP - ingest from Pi cameras
+rtmp: yes
+rtmpAddress: 0.0.0.0:1935
+
+# WebRTC - low-latency preview for admin UI
+webrtc: yes
+webrtcAddress: :8889
+
+# ICE configuration for WebRTC behind NLB
+# IMPORTANT: Replace <EIP> with the Elastic IP after terraform apply
+webrtcICEHostNAT1To1IPs: [44.233.157.202]
+webrtcICEUDPMuxAddress: :8189
+webrtcICETCPMuxAddress: :8189
+
+# Disable unused
+srt: no
+
+# Path defaults
+pathDefaults:
+  record: no
+
+# Stream paths
+paths:
+  cam1:
+  cam2:
+  cam3:
+  live-output:
+  live-preview:
+  all_others:

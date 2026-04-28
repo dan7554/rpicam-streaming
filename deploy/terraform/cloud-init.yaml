@@ -1,0 +1,91 @@
+#cloud-config
+
+# Ubuntu 24.04 cloud-init for racetrack streaming server
+# Installs GStreamer (full stack incl x264, libav), creates app directory
+
+package_update: true
+
+packages:
+  - gstreamer1.0-tools
+  - gstreamer1.0-plugins-base
+  - gstreamer1.0-plugins-good
+  - gstreamer1.0-plugins-bad
+  - gstreamer1.0-plugins-ugly
+  - gstreamer1.0-libav
+  - gstreamer1.0-rtsp
+
+write_files:
+  # MediaMTX systemd unit
+  - path: /etc/systemd/system/mediamtx.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=MediaMTX RTSP/RTMP/WebRTC server
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      User=ubuntu
+      WorkingDirectory=/opt/racetrack
+      ExecStart=/opt/racetrack/bin/mediamtx /opt/racetrack/mediamtx.yml
+      Restart=always
+      RestartSec=3
+      LimitNOFILE=65536
+      StandardOutput=journal
+      StandardError=journal
+      SyslogIdentifier=mediamtx
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # Go server systemd unit
+  - path: /etc/systemd/system/stream-server.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Racetrack streaming Go server
+      After=mediamtx.service
+      Requires=mediamtx.service
+
+      [Service]
+      Type=simple
+      User=ubuntu
+      WorkingDirectory=/opt/racetrack
+      ExecStart=/opt/racetrack/bin/server
+      Restart=always
+      RestartSec=3
+      LimitNOFILE=65536
+      Environment=CAMERAS=cam2,cam3
+      Environment=MEDIAMTX_API=http://localhost:9997
+      Environment=MEDIAMTX_WEBRTC=:8889
+      Environment=OVERLAY_DIR=/tmp/media-mtx-overlay
+      StandardOutput=journal
+      StandardError=journal
+      SyslogIdentifier=stream-server
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  # Create app directory
+  - mkdir -p /opt/racetrack/bin /opt/racetrack/web /tmp/media-mtx-overlay
+  - chown -R ubuntu:ubuntu /opt/racetrack /tmp/media-mtx-overlay
+
+  # Download MediaMTX
+  - |
+    MEDIAMTX_VERSION="${mediamtx_version}"
+    ARCH=$(uname -m)
+    if [ "$ARCH" = "x86_64" ]; then
+      MEDIAMTX_ARCH="linux_amd64"
+    else
+      MEDIAMTX_ARCH="linux_arm64"
+    fi
+    curl -sL "https://github.com/bluenviron/mediamtx/releases/download/v$${MEDIAMTX_VERSION}/mediamtx_v$${MEDIAMTX_VERSION}_$${MEDIAMTX_ARCH}.tar.gz" | tar -xz -C /opt/racetrack/bin mediamtx
+    chmod +x /opt/racetrack/bin/mediamtx
+    chown ubuntu:ubuntu /opt/racetrack/bin/mediamtx
+
+  # Enable services (won't start until first deploy puts binaries in place)
+  - systemctl daemon-reload
+  - systemctl enable mediamtx.service
+  - systemctl enable stream-server.service

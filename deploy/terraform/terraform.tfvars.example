@@ -1,0 +1,10 @@
+# Copy this to terraform.tfvars and fill in your values
+# cp terraform.tfvars.example terraform.tfvars
+
+aws_region    = "us-east-1"
+key_name      = "your-ec2-key-pair-name"
+instance_type = "c6i.xlarge"  # c6i.large for 720p, c6i.xlarge for 1080p overlay
+domain        = "racetrackstreaming.com"
+
+# Restrict SSH access to your IP (recommended)
+# ssh_allowed_cidrs = ["YOUR.IP.HERE/32"]

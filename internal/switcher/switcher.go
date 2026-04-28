@@ -36,20 +36,22 @@ type BridgeFactory func() Bridger
 // switching is instant — no FFmpeg needed. In RTMP mode, a bridge proxy
 // handles zero-gap switching while FFmpeg reads from the bridge.
 type Switcher struct {
-	mu            sync.Mutex
-	rtspBase      string
-	mediaMTXAPI   string
-	activeStream  string
-	rtmpDest      string
-	cmd           *exec.Cmd
-	live          bool
-	localMode     bool
-	cmdFactory    CmdFactory
-	cameras       []string
-	bridgeFactory BridgeFactory
-	bridge        Bridger
-	overlayPath   string // path to overlay PNG, empty = no overlay
-	audioDevice   string // avfoundation audio device index, empty = anullsrc
+	mu              sync.Mutex
+	rtspBase        string
+	mediaMTXAPI     string
+	activeStream    string
+	rtmpDest        string
+	cmd             *exec.Cmd
+	live            bool
+	localMode       bool
+	cmdFactory      CmdFactory
+	cameras         []string
+	bridgeFactory   BridgeFactory
+	bridge          Bridger
+	overlayPath     string // path to overlay PNG, empty = no overlay
+	audioDevice     string // avfoundation audio device index, empty = anullsrc
+	restartCount    int    // consecutive restart count for backoff
+	restartBackoff  time.Duration
 }
 
 // buildDefaultPipeline returns the GStreamer pipeline string for the default (no overlay) mode.
@@ -63,9 +65,9 @@ func buildDefaultPipeline(rtspURL, rtmpURL, audioDevice string) string {
 				"mic. ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! audiorate ! tee name=at "+
 				"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! audioconvert ! avenc_aac ! aacparse ! flvmux streamable=true name=flvm "+
 				"vt. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! flvm. "+
-				"flvm. ! rtmp2sink location=%s "+
-				"vt. ! queue ! rtspclientsink location=rtsp://localhost:8554/live-preview name=preview "+
-				"at. ! queue ! audioconvert ! opusenc audio-type=restricted-lowdelay ! preview.",
+				"flvm. ! rtmpsink location=%s "+
+			"vt. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! rtspclientsink location=rtsp://localhost:8554/live-preview protocols=tcp name=preview "+
+			"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! audioconvert ! opusenc audio-type=restricted-lowdelay ! preview.",
 			rtspURL, audioDevice, rtmpURL)
 	}
 	// Camera audio from RTSP stream
@@ -75,9 +77,9 @@ func buildDefaultPipeline(rtspURL, rtmpURL, audioDevice string) string {
 			"src. ! rtpmp4gdepay ! aacparse ! avdec_aac ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! audiorate ! tee name=at "+
 			"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! audioconvert ! avenc_aac ! aacparse ! flvmux streamable=true name=flvm "+
 			"vt. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! flvm. "+
-			"flvm. ! rtmp2sink location=%s "+
-			"vt. ! queue ! rtspclientsink location=rtsp://localhost:8554/live-preview name=preview "+
-			"at. ! queue ! audioconvert ! opusenc audio-type=restricted-lowdelay ! preview.",
+			"flvm. ! rtmpsink location=%s "+
+		"vt. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! rtspclientsink location=rtsp://localhost:8554/live-preview protocols=tcp name=preview "+
+		"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! audioconvert ! opusenc audio-type=restricted-lowdelay ! preview.",
 		rtspURL, rtmpURL)
 }
 
@@ -90,11 +92,11 @@ func buildOverlayPipeline(overlayPath, rtspURL, rtmpURL, audioDevice string) str
 				"cam. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! avdec_h264 ! videoconvert ! video/x-raw,format=RGBA ! queue ! compositor name=mixer sink_1::xpos=20 sink_1::ypos=20 ! videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast key-int-max=30 bframes=0 bitrate=4000 ! h264parse ! tee name=enc_tee "+
 				"overlay_img. ! mixer. "+
 				"enc_tee. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! flvmux streamable=true name=rtmp_mux "+
-				"rtmp_mux. ! rtmp2sink location=%s "+
+				"rtmp_mux. ! rtmpsink location=%s "+
 				"osxaudiosrc device=%s ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! audiorate ! tee name=at "+
 				"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! audioconvert ! avenc_aac ! aacparse ! rtmp_mux. "+
-				"enc_tee. ! queue ! rtspclientsink location=rtsp://localhost:8554/live-preview name=preview "+
-				"at. ! queue ! audioconvert ! opusenc audio-type=restricted-lowdelay ! preview.",
+			"enc_tee. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! rtspclientsink location=rtsp://localhost:8554/live-preview protocols=tcp name=preview "+
+			"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! audioconvert ! opusenc audio-type=restricted-lowdelay ! preview.",
 			overlayPath, rtspURL, rtmpURL, audioDevice)
 	}
 	return fmt.Sprintf(
@@ -103,11 +105,11 @@ func buildOverlayPipeline(overlayPath, rtspURL, rtmpURL, audioDevice string) str
 			"cam. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! avdec_h264 ! videoconvert ! video/x-raw,format=RGBA ! queue ! compositor name=mixer sink_1::xpos=20 sink_1::ypos=20 ! videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast key-int-max=30 bframes=0 bitrate=4000 ! h264parse ! tee name=enc_tee "+
 			"overlay_img. ! mixer. "+
 			"enc_tee. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! flvmux streamable=true name=rtmp_mux "+
-			"rtmp_mux. ! rtmp2sink location=%s "+
+			"rtmp_mux. ! rtmpsink location=%s "+
 			"cam. ! rtpmp4gdepay ! aacparse ! avdec_aac ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! audiorate ! tee name=at "+
 			"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! audioconvert ! avenc_aac ! aacparse ! rtmp_mux. "+
-			"enc_tee. ! queue ! rtspclientsink location=rtsp://localhost:8554/live-preview name=preview "+
-			"at. ! queue ! audioconvert ! opusenc audio-type=restricted-lowdelay ! preview.",
+		"enc_tee. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! rtspclientsink location=rtsp://localhost:8554/live-preview protocols=tcp name=preview "+
+		"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! audioconvert ! opusenc audio-type=restricted-lowdelay ! preview.",
 		overlayPath, rtspURL, rtmpURL)
 }
 
@@ -233,6 +235,8 @@ func (s *Switcher) StartLive(stream, rtmpDest string, localMode bool, audioDevic
 	s.activeStream = stream
 	s.localMode = localMode
 	s.audioDevice = audioDevice
+	s.restartCount = 0
+	s.restartBackoff = 0
 
 	if localMode {
 		log.Printf("[switcher] started live (local mode): %s", stream)
@@ -367,29 +371,43 @@ func (s *Switcher) startFFmpeg() error {
 	// Monitor in background — auto-restart if FFmpeg exits while still live
 	cmd := s.cmd
 	pid := cmd.Process.Pid
+	startedAt := time.Now()
 	go func() {
 		log.Printf("[switcher] monitor: watching FFmpeg PID=%d", pid)
 		err := cmd.Wait()
+		uptime := time.Since(startedAt)
 		if err != nil {
-			log.Printf("[switcher] monitor: FFmpeg PID=%d exited with error: %v", pid, err)
+			log.Printf("[switcher] monitor: FFmpeg PID=%d exited with error after %s: %v", pid, uptime.Round(time.Second), err)
 		} else {
-			log.Printf("[switcher] monitor: FFmpeg PID=%d exited cleanly", pid)
+			log.Printf("[switcher] monitor: FFmpeg PID=%d exited cleanly after %s", pid, uptime.Round(time.Second))
 		}
 
 		s.mu.Lock()
 		// Only restart if we're still live and this is still the current cmd
 		// (not killed by stopFFmpeg)
 		if s.live && s.cmd == cmd {
-			log.Printf("[switcher] monitor: FFmpeg PID=%d crashed while live, restarting in 2s...", pid)
+			// Reset backoff if pipeline ran for >60s (was stable)
+			if uptime > 60*time.Second {
+				s.restartCount = 0
+				s.restartBackoff = 0
+			}
+			s.restartCount++
+			// Exponential backoff: 2s, 4s, 8s, 16s, 30s max
+			backoff := time.Duration(1<<uint(s.restartCount)) * time.Second
+			if backoff > 30*time.Second {
+				backoff = 30 * time.Second
+			}
+			s.restartBackoff = backoff
+
+			log.Printf("[switcher] monitor: FFmpeg PID=%d crashed while live (restart #%d, backoff %s)", pid, s.restartCount, backoff)
 			s.cmd = nil
 			s.mu.Unlock()
 
-			// Wait for MediaMTX to re-establish the program path source
-			time.Sleep(2 * time.Second)
+			time.Sleep(backoff)
 
 			s.mu.Lock()
 			if s.live {
-				log.Printf("[switcher] monitor: attempting FFmpeg restart after crash...")
+				log.Printf("[switcher] monitor: attempting FFmpeg restart #%d...", s.restartCount)
 				if err := s.startFFmpeg(); err != nil {
 					log.Printf("[switcher] monitor: FFmpeg restart FAILED: %v", err)
 				}

@@ -63,6 +63,7 @@ type Overlay struct {
 	raceTime    string
 	format      string
 	maxRows     int
+	scale       int
 	interval    time.Duration
 	stopCh      chan struct{}
 	wg          sync.WaitGroup
@@ -75,6 +76,7 @@ type Config struct {
 	PNGPath   string // where to write the overlay PNG
 	Format    string // "full", "condensed", "minimal" (default "full")
 	MaxRows   int    // max competitors to show (default 10)
+	Scale     int    // render scale factor (default 1, use 2 for 1080p)
 	Interval  time.Duration
 }
 
@@ -93,6 +95,9 @@ func New(cfg Config) *Overlay {
 	if cfg.Interval == 0 {
 		cfg.Interval = 4 * time.Second
 	}
+	if cfg.Scale < 1 {
+		cfg.Scale = 1
+	}
 	return &Overlay{
 		eventID:   cfg.EventID,
 		sessionID: cfg.SessionID,
@@ -100,6 +105,7 @@ func New(cfg Config) *Overlay {
 		pngPath:   cfg.PNGPath,
 		format:    cfg.Format,
 		maxRows:   cfg.MaxRows,
+		scale:     cfg.Scale,
 		interval:  cfg.Interval,
 		stopCh:    make(chan struct{}),
 	}
@@ -588,18 +594,37 @@ func fillRect(img *image.RGBA, x0, y0, w, h int, c color.RGBA) {
 }
 
 func (o *Overlay) writePNG(img *image.RGBA) error {
+	out := img
+	if o.scale > 1 {
+		out = scaleUp(img, o.scale)
+	}
 	tmp := o.pngPath + ".tmp"
 	f, err := os.Create(tmp)
 	if err != nil {
 		return err
 	}
-	if err := png.Encode(f, img); err != nil {
+	if err := png.Encode(f, out); err != nil {
 		f.Close()
 		os.Remove(tmp)
 		return err
 	}
 	f.Close()
 	return os.Rename(tmp, o.pngPath)
+}
+
+// scaleUp performs nearest-neighbor upscaling by the given factor.
+func scaleUp(src *image.RGBA, factor int) *image.RGBA {
+	b := src.Bounds()
+	w, h := b.Dx()*factor, b.Dy()*factor
+	dst := image.NewRGBA(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		sy := y / factor
+		for x := 0; x < w; x++ {
+			sx := x / factor
+			dst.SetRGBA(x, y, src.RGBAAt(sx+b.Min.X, sy+b.Min.Y))
+		}
+	}
+	return dst
 }
 
 func drawString(img *image.RGBA, face font.Face, x, y int, s string, col color.RGBA) {

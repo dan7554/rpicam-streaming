@@ -46,6 +46,10 @@ async function init() {
     const savedUrl = localStorage.getItem('overlay-url');
     if (savedUrl) document.getElementById('overlay-url').value = savedUrl;
 
+    // Restore saved overlay scale
+    const savedScale = localStorage.getItem('overlay-scale');
+    if (savedScale) document.getElementById('overlay-scale').value = savedScale;
+
     // Restore saved YouTube stream key
     const youtubeKeyInput = document.getElementById('youtube-key');
     const savedYouTubeKey = localStorage.getItem('youtube-key');
@@ -532,6 +536,8 @@ async function startOverlay() {
 
     const format = document.getElementById('overlay-format').value;
     const maxRows = parseInt(document.getElementById('overlay-max-rows').value, 10) || 0;
+    const scale = parseInt(document.getElementById('overlay-scale').value, 10) || 1;
+    localStorage.setItem('overlay-scale', scale);
 
     const body = {};
     if (input.startsWith('http')) {
@@ -541,6 +547,7 @@ async function startOverlay() {
     }
     body.format = format;
     body.max_rows = maxRows;
+    body.scale = scale;
 
     try {
         const res = await fetch(`${API_BASE}/api/overlay/start`, {

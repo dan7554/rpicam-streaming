@@ -1,0 +1,27 @@
+[Unit]
+Description=Racetrack streaming Go server
+After=mediamtx.service
+Requires=mediamtx.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/racetrack
+ExecStart=/opt/racetrack/bin/server
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+
+# Environment
+Environment=CAMERAS=cam2,cam3
+Environment=MEDIAMTX_API=http://localhost:9997
+Environment=MEDIAMTX_WEBRTC=:8889
+Environment=OVERLAY_DIR=/tmp/media-mtx-overlay
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=stream-server
+
+[Install]
+WantedBy=multi-user.target

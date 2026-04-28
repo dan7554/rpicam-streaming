@@ -1,4 +1,4 @@
-.PHONY: all run server streams stop mediamtx build test clean
+.PHONY: all run server streams stop mediamtx build test clean deploy deploy-config deploy-web logs ssh infra infra-plan infra-destroy
 
 # Download MediaMTX binary if not present
 MEDIAMTX_VERSION := 1.17.1
@@ -77,3 +77,72 @@ help:
 	@echo "Usage: make [target]"
 	@echo ""
 	@grep -E '^## ' Makefile | sed 's/## /  /' | sort
+
+# ============================================================
+# AWS Deployment
+# ============================================================
+
+EC2_HOST := $(shell cd deploy/terraform && terraform output -raw ec2_public_ip 2>/dev/null)
+EC2_USER := ubuntu
+EC2_KEY := ~/.ssh/racetrack-streaming.pem
+SSH_OPTS := -i $(EC2_KEY) -o StrictHostKeyChecking=no
+DEPLOY_DIR := /opt/racetrack
+
+## deploy: Cross-compile and deploy server + web + config to EC2
+deploy: deploy-build
+	@echo "==> Deploying to $(EC2_USER)@$(EC2_HOST)..."
+	@scp $(SSH_OPTS) bin/server-linux $(EC2_USER)@$(EC2_HOST):$(DEPLOY_DIR)/bin/server
+	@scp $(SSH_OPTS) deploy/mediamtx-aws.yml $(EC2_USER)@$(EC2_HOST):$(DEPLOY_DIR)/mediamtx.yml
+	@rsync -az --delete -e "ssh $(SSH_OPTS)" web/ $(EC2_USER)@$(EC2_HOST):$(DEPLOY_DIR)/web/
+	@ssh $(SSH_OPTS) $(EC2_USER)@$(EC2_HOST) "sudo systemctl restart mediamtx stream-server"
+	@echo "==> Deploy complete. UI: https://stream.racetrackstreaming.com"
+
+## deploy-build: Cross-compile Go server for Linux amd64
+deploy-build:
+	@echo "==> Cross-compiling for Linux amd64..."
+	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o bin/server-linux ./cmd/server/
+
+## deploy-config: Push only mediamtx.yml config changes
+deploy-config:
+	@echo "==> Deploying config to $(EC2_HOST)..."
+	@scp $(SSH_OPTS) deploy/mediamtx-aws.yml $(EC2_USER)@$(EC2_HOST):$(DEPLOY_DIR)/mediamtx.yml
+	@ssh $(SSH_OPTS) $(EC2_USER)@$(EC2_HOST) "sudo systemctl restart mediamtx"
+	@echo "==> Config deployed."
+
+## deploy-web: Push only web UI changes (no restart needed)
+deploy-web:
+	@echo "==> Deploying web UI to $(EC2_HOST)..."
+	@rsync -az --delete -e "ssh $(SSH_OPTS)" web/ $(EC2_USER)@$(EC2_HOST):$(DEPLOY_DIR)/web/
+	@echo "==> Web UI deployed (live on next page load)."
+
+## deploy-server: Push only server binary and restart
+deploy-server: deploy-build
+	@echo "==> Deploying server binary to $(EC2_HOST)..."
+	@scp $(SSH_OPTS) bin/server-linux $(EC2_USER)@$(EC2_HOST):$(DEPLOY_DIR)/bin/server
+	@ssh $(SSH_OPTS) $(EC2_USER)@$(EC2_HOST) "sudo systemctl restart stream-server"
+	@echo "==> Server deployed."
+
+## logs: Tail EC2 service logs
+logs:
+	@ssh $(SSH_OPTS) $(EC2_USER)@$(EC2_HOST) "sudo journalctl -f -u mediamtx -u stream-server --no-hostname"
+
+## ssh: SSH into EC2 instance
+ssh:
+	@ssh $(SSH_OPTS) $(EC2_USER)@$(EC2_HOST)
+
+## infra: Apply Terraform infrastructure
+infra:
+	@cd deploy/terraform && terraform apply
+
+## infra-plan: Preview Terraform changes
+infra-plan:
+	@cd deploy/terraform && terraform plan
+
+## infra-init: Initialize Terraform
+infra-init:
+	@cd deploy/terraform && terraform init
+
+## infra-destroy: Tear down ALL AWS resources (stops charges)
+infra-destroy:
+	@echo "⚠️  This will destroy ALL AWS resources (EC2, ALB, NLB, EIP, VPC)."
+	@cd deploy/terraform && terraform destroy

@@ -224,6 +224,7 @@ type overlayStartReq struct {
 	SessionID string `json:"session_id"` // optional — uses /active if empty
 	Format    string `json:"format"`     // "full", "condensed", "minimal" (default "full")
 	MaxRows   int    `json:"max_rows"`
+	Scale     int    `json:"scale"`      // render scale factor (default 1, use 2 for 1080p)
 }
 
 // parseSpeedHiveURL extracts event_id and session_id from a SpeedHive URL.
@@ -299,6 +300,7 @@ func (h *Handler) startOverlay(w http.ResponseWriter, r *http.Request) {
 		PNGPath:   pngPath,
 		Format:    req.Format,
 		MaxRows:   req.MaxRows,
+		Scale:     req.Scale,
 	})
 	h.overlay.Start()
 
