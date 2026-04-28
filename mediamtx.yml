@@ -40,4 +40,8 @@ paths:
   cam3:
   live-output:
   live-preview:
+  commentary-1:
+    overridePublisher: yes
+  commentary-2:
+    overridePublisher: yes
   all_others:

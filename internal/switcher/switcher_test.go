@@ -27,7 +27,7 @@ func newTestSwitcher() *Switcher {
 }
 
 func TestNew(t *testing.T) {
-	sw := New("rtsp://localhost:8554", "http://localhost:9997", nil, nil)
+	sw := New("rtsp://localhost:8554", "http://localhost:9997", nil, nil, t.TempDir())
 	status := sw.Status()
 	if status.Live {
 		t.Error("new switcher should not be live")
@@ -88,7 +88,7 @@ func TestStopLive(t *testing.T) {
 }
 
 func TestStopLiveNotLive(t *testing.T) {
-	sw := New("rtsp://localhost:8554", "http://localhost:9997", nil, nil)
+	sw := New("rtsp://localhost:8554", "http://localhost:9997", nil, nil, t.TempDir())
 
 	err := sw.StopLive()
 	if err == nil {
@@ -129,7 +129,7 @@ func TestSwitchSameStream(t *testing.T) {
 }
 
 func TestSwitchNotLive(t *testing.T) {
-	sw := New("rtsp://localhost:8554", "http://localhost:9997", nil, nil)
+	sw := New("rtsp://localhost:8554", "http://localhost:9997", nil, nil, t.TempDir())
 
 	err := sw.Switch("cam2")
 	if err == nil {

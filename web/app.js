@@ -613,8 +613,8 @@ function updateOverlayUI(data) {
 
 const commentaryState = {
     slots: [
-        { pc: null, stream: null, sessionURL: null, active: false },
-        { pc: null, stream: null, sessionURL: null, active: false },
+        { pc: null, stream: null, sessionURL: null, active: false, audioCtx: null, gainNode: null },
+        { pc: null, stream: null, sessionURL: null, active: false, audioCtx: null, gainNode: null },
     ],
 };
 
@@ -644,10 +644,20 @@ async function joinCommentary(slot) {
             video: false,
         });
 
+        // Route mic through GainNode for browser-side volume control
+        // (avoids pipeline restart when adjusting commentary volume)
+        const audioCtx = new AudioContext();
+        const source = audioCtx.createMediaStreamSource(stream);
+        const gainNode = audioCtx.createGain();
+        gainNode.gain.value = parseInt(document.getElementById(`comm-vol-${slot}`).value) / 100;
+        const destination = audioCtx.createMediaStreamDestination();
+        source.connect(gainNode);
+        gainNode.connect(destination);
+
         const pc = new RTCPeerConnection({ iceServers: [] });
 
-        // Add audio track for publishing
-        stream.getAudioTracks().forEach(track => {
+        // Add the gain-controlled audio track for WebRTC publishing
+        destination.stream.getAudioTracks().forEach(track => {
             pc.addTrack(track, stream);
         });
 
@@ -684,29 +694,21 @@ async function joinCommentary(slot) {
 
         const sessionURL = res.headers.get('Location');
 
-        commentaryState.slots[slot] = { pc, stream, sessionURL, active: true };
+        commentaryState.slots[slot] = { pc, stream, sessionURL, active: true, audioCtx, gainNode };
 
         statusEl.textContent = 'Connected';
         statusEl.className = 'comm-status connected';
         btn.textContent = 'Leave';
         btn.style.background = '#f44336';
 
-        // Notify server this slot is active
+        // Notify server this slot is active (no pipeline restart — just metadata)
         await fetch(`${API_BASE}/api/commentary/slot`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 slot: slot,
                 active: true,
-                volume: parseInt(document.getElementById(`comm-vol-${slot}`).value) / 100,
             }),
-        });
-
-        // Enable commentary mixing on first join
-        await fetch(`${API_BASE}/api/commentary/update`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled: true }),
         });
 
         // Reconnect on failure
@@ -731,6 +733,11 @@ async function leaveCommentary(slot) {
     const statusEl = document.getElementById(`comm-status-${slot}`);
     const btn = document.getElementById(`btn-comm-${slot}`);
 
+    // Close audio context
+    if (state.audioCtx) {
+        state.audioCtx.close();
+    }
+
     // Stop mic
     if (state.stream) {
         state.stream.getTracks().forEach(t => t.stop());
@@ -748,54 +755,40 @@ async function leaveCommentary(slot) {
         } catch { /* ignore */ }
     }
 
-    commentaryState.slots[slot] = { pc: null, stream: null, sessionURL: null, active: false };
+    commentaryState.slots[slot] = { pc: null, stream: null, sessionURL: null, active: false, audioCtx: null, gainNode: null };
 
     statusEl.textContent = 'Disconnected';
     statusEl.className = 'comm-status';
     btn.textContent = 'Join';
     btn.style.background = '';
 
-    // Notify server
+    // Notify server (triggers silence publisher restart for this slot)
     await fetch(`${API_BASE}/api/commentary/slot`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ slot: slot, active: false }),
     });
-
-    // Disable commentary if no slots active
-    const anyActive = commentaryState.slots.some(s => s.active);
-    if (!anyActive) {
-        await fetch(`${API_BASE}/api/commentary/update`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled: false }),
-        });
-    }
 }
 
 let commentaryVolumeTimeout = null;
 function updateCommentaryVolume() {
-    // Debounce to avoid spamming the API
+    // Per-commentator volume: update GainNode directly (no server call, no pipeline restart)
+    for (let i = 0; i < 2; i++) {
+        const vol = parseInt(document.getElementById(`comm-vol-${i}`).value) / 100;
+        const state = commentaryState.slots[i];
+        if (state.gainNode) {
+            state.gainNode.gain.value = vol;
+        }
+    }
+
+    // Camera volume: debounce and send to server (may trigger pipeline restart)
     clearTimeout(commentaryVolumeTimeout);
     commentaryVolumeTimeout = setTimeout(async () => {
         const cameraVol = parseInt(document.getElementById('camera-vol').value) / 100;
-        const vol0 = parseInt(document.getElementById('comm-vol-0').value) / 100;
-        const vol1 = parseInt(document.getElementById('comm-vol-1').value) / 100;
-
         await fetch(`${API_BASE}/api/commentary/update`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ camera_volume: cameraVol }),
         });
-
-        // Update individual slot volumes
-        for (let i = 0; i < 2; i++) {
-            const vol = i === 0 ? vol0 : vol1;
-            await fetch(`${API_BASE}/api/commentary/slot`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ slot: i, volume: vol }),
-            });
-        }
     }, 300);
 }

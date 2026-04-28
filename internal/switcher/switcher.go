@@ -2,9 +2,12 @@ package switcher
 
 import (
 	"fmt"
+	"image"
+	"image/png"
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -52,7 +55,8 @@ type Switcher struct {
 	audioDevice     string // avfoundation audio device index, empty = anullsrc
 	restartCount    int    // consecutive restart count for backoff
 	restartBackoff  time.Duration
-	commentary      CommentaryConfig // live commentary mixing
+	commentary      CommentaryConfig   // live commentary mixing
+	silenceProcs    []*exec.Cmd        // silence publisher processes (one per slot)
 }
 
 // CommentaryConfig holds the state for browser-based commentary mixing.
@@ -68,144 +72,214 @@ type CommentarySlot struct {
 	Volume float64 // 0.0–1.0
 }
 
-// buildDefaultPipeline returns the GStreamer pipeline string for the default (no overlay) mode.
-func buildDefaultPipeline(rtspURL, rtmpURL, audioDevice string) string {
-	if audioDevice != "" {
-		// Mac mic overrides camera audio
-		return fmt.Sprintf(
-			"rtspsrc location=%s protocols=tcp latency=200 name=src "+
-				"osxaudiosrc device=%s name=mic "+
-				"src. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! tee name=vt "+
-				"mic. ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! audiorate ! tee name=at "+
-				"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! audioconvert ! avenc_aac ! aacparse ! flvmux streamable=true name=flvm "+
-				"vt. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! flvm. "+
-				"flvm. ! rtmpsink location=%s "+
-			"vt. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! rtspclientsink location=rtsp://localhost:8554/live-preview protocols=tcp name=preview "+
-			"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! audioconvert ! opusenc audio-type=restricted-lowdelay ! preview.",
-			rtspURL, audioDevice, rtmpURL)
-	}
-	// Camera audio from RTSP stream
+// overlayVideoSrc returns the multifilesrc-based overlay segment that re-reads
+// the overlay PNG from disk. Combined with compositor, this allows hot-swapping
+// overlays by simply writing a new PNG (or a transparent one to disable).
+func overlayVideoSrc(overlayPath string) string {
 	return fmt.Sprintf(
-		"rtspsrc location=%s protocols=tcp latency=200 name=src "+
-			"src. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! tee name=vt "+
-			"src. ! rtpmp4gdepay ! aacparse ! avdec_aac ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! audiorate ! tee name=at "+
-			"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! audioconvert ! avenc_aac ! aacparse ! flvmux streamable=true name=flvm "+
-			"vt. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! flvm. "+
-			"flvm. ! rtmpsink location=%s "+
-		"vt. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! rtspclientsink location=rtsp://localhost:8554/live-preview protocols=tcp name=preview "+
-		"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! audioconvert ! opusenc audio-type=restricted-lowdelay ! preview.",
-		rtspURL, rtmpURL)
+		"multifilesrc location=%s loop=true start-index=0 stop-index=0 caps=image/png,framerate=(fraction)1/2 ! "+
+			"pngdec ! videoconvert ! video/x-raw,format=RGBA ! queue name=overlay_img",
+		overlayPath)
 }
 
-// buildOverlayPipeline returns the GStreamer pipeline string for overlay mode.
-func buildOverlayPipeline(overlayPath, rtspURL, rtmpURL, audioDevice string) string {
+// buildPipeline returns the GStreamer pipeline string. The pipeline always
+// includes a compositor + multifilesrc overlay for zero-restart overlay toggling,
+// and an audiomixer blending camera audio + 2 commentary RTSP sources for
+// zero-restart commentary join/leave.
+func buildPipeline(overlayPath, rtspURL, rtmpURL, audioDevice, rtspBase string, cameraVol float64) string {
+	overlay := overlayVideoSrc(overlayPath)
+	audioMix := alwaysOnAudioMix(rtspBase, cameraVol)
 	if audioDevice != "" {
+		// Mac mic overrides camera audio — not mixed with commentary
 		return fmt.Sprintf(
-			"filesrc location=%s ! pngdec ! imagefreeze ! video/x-raw,framerate=30/1 ! queue name=overlay_img "+
+			"%s "+
 				"rtspsrc location=%s protocols=tcp latency=200 name=cam "+
 				"cam. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! avdec_h264 ! videoconvert ! video/x-raw,format=RGBA ! queue ! compositor name=mixer sink_1::xpos=20 sink_1::ypos=20 ! videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast key-int-max=30 bframes=0 bitrate=4000 ! h264parse ! tee name=enc_tee "+
 				"overlay_img. ! mixer. "+
-				"enc_tee. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! flvmux streamable=true name=rtmp_mux "+
+				"osxaudiosrc device=%s name=mic "+
+				"mic. ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! audiorate ! tee name=at "+
+				"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! audioconvert ! avenc_aac ! aacparse ! flvmux streamable=true name=rtmp_mux "+
+				"enc_tee. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! rtmp_mux. "+
 				"rtmp_mux. ! rtmpsink location=%s "+
-				"osxaudiosrc device=%s ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! audiorate ! tee name=at "+
-				"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! audioconvert ! avenc_aac ! aacparse ! rtmp_mux. "+
 			"enc_tee. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! rtspclientsink location=rtsp://localhost:8554/live-preview protocols=tcp name=preview "+
 			"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! audioconvert ! opusenc audio-type=restricted-lowdelay ! preview.",
-			overlayPath, rtspURL, rtmpURL, audioDevice)
+			overlay, rtspURL, audioDevice, rtmpURL)
 	}
+	// Camera audio from RTSP stream, blended with commentary via audiomixer
 	return fmt.Sprintf(
-		"filesrc location=%s ! pngdec ! imagefreeze ! video/x-raw,framerate=30/1 ! queue name=overlay_img "+
+		"%s "+
 			"rtspsrc location=%s protocols=tcp latency=200 name=cam "+
 			"cam. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! avdec_h264 ! videoconvert ! video/x-raw,format=RGBA ! queue ! compositor name=mixer sink_1::xpos=20 sink_1::ypos=20 ! videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast key-int-max=30 bframes=0 bitrate=4000 ! h264parse ! tee name=enc_tee "+
 			"overlay_img. ! mixer. "+
-			"enc_tee. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! flvmux streamable=true name=rtmp_mux "+
+			"%s "+
+			"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! audioconvert ! avenc_aac ! aacparse ! flvmux streamable=true name=rtmp_mux "+
+			"enc_tee. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! rtmp_mux. "+
 			"rtmp_mux. ! rtmpsink location=%s "+
-			"cam. ! rtpmp4gdepay ! aacparse ! avdec_aac ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! audiorate ! tee name=at "+
-			"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! audioconvert ! avenc_aac ! aacparse ! rtmp_mux. "+
 		"enc_tee. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! rtspclientsink location=rtsp://localhost:8554/live-preview protocols=tcp name=preview "+
 		"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! audioconvert ! opusenc audio-type=restricted-lowdelay ! preview.",
-		overlayPath, rtspURL, rtmpURL)
+		overlay, rtspURL, audioMix, rtmpURL)
 }
 
-func defaultCmdFactory(rtspURL, rtmpURL, audioDevice string) *exec.Cmd {
-	log.Printf("[switcher] building GStreamer cmd: %s → %s + preview (audio=%q)", rtspURL, rtmpURL, audioDevice)
-	pipeline := buildDefaultPipeline(rtspURL, rtmpURL, audioDevice)
-	log.Printf("[switcher] GStreamer pipeline: %s", pipeline)
-	args := append([]string{"-e"}, strings.Fields(pipeline)...)
-	return exec.Command("gst-launch-1.0", args...)
+// alwaysOnAudioMix returns the GStreamer segment for audiomixer that always
+// includes camera audio + 2 commentary RTSP sources. When no commentator is
+// connected, the silence publisher on that path provides silent Opus frames.
+func alwaysOnAudioMix(rtspBase string, cameraVol float64) string {
+	return fmt.Sprintf(
+		"cam. ! rtpmp4gdepay ! aacparse ! avdec_aac ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! volume name=camvol volume=%.2f ! audiomixer name=amix latency=200000000 "+
+			"rtspsrc location=%s/commentary-1 protocols=tcp latency=200 name=comm1 "+
+			"comm1. ! rtpopusdepay ! opusdec ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! amix. "+
+			"rtspsrc location=%s/commentary-2 protocols=tcp latency=200 name=comm2 "+
+			"comm2. ! rtpopusdepay ! opusdec ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! amix. "+
+			"amix. ! audiorate ! tee name=at",
+		cameraVol, rtspBase, rtspBase)
 }
 
-func overlayCmdFactory(overlayPath string) CmdFactory {
+// writeTransparentPNG writes a 1x1 fully transparent PNG to the given path
+// (atomic write via tmp + rename). Used to "disable" overlay without pipeline restart.
+func writeTransparentPNG(path string) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	img := image.NewRGBA(image.Rect(0, 0, 1, 1)) // all zeros = fully transparent
+	tmp := path + ".tmp"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	if err := png.Encode(f, img); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	f.Close()
+	return os.Rename(tmp, path)
+}
+
+func makeCmdFactory(overlayPath, rtspBase string, cameraVol float64) CmdFactory {
 	return func(rtspURL, rtmpURL, audioDevice string) *exec.Cmd {
-		log.Printf("[switcher] building OVERLAY GStreamer cmd: %s → %s (overlay=%s audio=%q)", rtspURL, rtmpURL, overlayPath, audioDevice)
-		pipeline := buildOverlayPipeline(overlayPath, rtspURL, rtmpURL, audioDevice)
-		log.Printf("[switcher] GStreamer overlay pipeline: %s", pipeline)
+		log.Printf("[switcher] building GStreamer cmd: %s → %s + preview (overlay=%s audio=%q camVol=%.2f)", rtspURL, rtmpURL, overlayPath, audioDevice, cameraVol)
+		pipeline := buildPipeline(overlayPath, rtspURL, rtmpURL, audioDevice, rtspBase, cameraVol)
+		log.Printf("[switcher] GStreamer pipeline: %s", pipeline)
 		args := append([]string{"-e"}, strings.Fields(pipeline)...)
 		return exec.Command("gst-launch-1.0", args...)
 	}
 }
 
-func New(rtspBase, mediaMTXAPI string, bf BridgeFactory, cameras []string) *Switcher {
-	log.Printf("[switcher] New: rtspBase=%s mediaMTXAPI=%s cameras=%v", rtspBase, mediaMTXAPI, cameras)
-	return &Switcher{
+func New(rtspBase, mediaMTXAPI string, bf BridgeFactory, cameras []string, overlayDir string) *Switcher {
+	overlayPngPath := filepath.Join(overlayDir, "timing.png")
+	log.Printf("[switcher] New: rtspBase=%s mediaMTXAPI=%s cameras=%v overlayPath=%s", rtspBase, mediaMTXAPI, cameras, overlayPngPath)
+
+	// Ensure transparent PNG exists so the always-on compositor has a valid file
+	if err := writeTransparentPNG(overlayPngPath); err != nil {
+		log.Printf("[switcher] WARNING: failed to write initial transparent PNG: %v", err)
+	}
+
+	cameraVol := 0.3
+	s := &Switcher{
 		rtspBase:      rtspBase,
 		mediaMTXAPI:   mediaMTXAPI,
-		cmdFactory:    defaultCmdFactory,
+		overlayPath:   overlayPngPath,
+		cmdFactory:    makeCmdFactory(overlayPngPath, rtspBase, cameraVol),
 		bridgeFactory: bf,
 		cameras:       cameras,
+		silenceProcs:  make([]*exec.Cmd, 2),
 		commentary: CommentaryConfig{
-			CameraVolume: 0.3,
+			CameraVolume: cameraVol,
 			Slots: []CommentarySlot{
 				{Volume: 1.0},
 				{Volume: 1.0},
 			},
 		},
 	}
+
+	// Start silence publishers for commentary paths so the pipeline can always
+	// connect to commentary-1 and commentary-2 RTSP sources.
+	for i := 0; i < 2; i++ {
+		s.startSilencePublisher(i)
+	}
+
+	return s
 }
 
-// SetOverlay enables/disables the PNG overlay. Restarts FFmpeg with the
-// appropriate filter chain.
+// startSilencePublisher publishes silent Opus audio to a commentary MediaMTX path.
+// When a WHIP commentator joins, MediaMTX (overridePublisher=yes) replaces this
+// with real audio. When they leave, we restart the silence publisher.
+func (s *Switcher) startSilencePublisher(slot int) {
+	name := fmt.Sprintf("commentary-%d", slot+1)
+	dest := fmt.Sprintf("rtsp://localhost:8554/%s", name)
+	pipeline := fmt.Sprintf("audiotestsrc wave=silence is-live=true ! opusenc ! rtspclientsink location=%s protocols=tcp", dest)
+	args := append([]string{"-e"}, strings.Fields(pipeline)...)
+	cmd := exec.Command("gst-launch-1.0", args...)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		log.Printf("[switcher] silence publisher %s FAILED to start: %v", name, err)
+		return
+	}
+	s.silenceProcs[slot] = cmd
+	log.Printf("[switcher] silence publisher %s started PID=%d", name, cmd.Process.Pid)
+
+	// Monitor — auto-restart if it dies
+	go func(slot int, cmd *exec.Cmd, name string) {
+		err := cmd.Wait()
+		log.Printf("[switcher] silence publisher %s exited: %v", name, err)
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		// Restart only if this is still our tracked process (not replaced)
+		if s.silenceProcs[slot] == cmd {
+			log.Printf("[switcher] restarting silence publisher %s...", name)
+			s.silenceProcs[slot] = nil
+			s.startSilencePublisher(slot)
+		}
+	}(slot, cmd, name)
+}
+
+// stopSilencePublisher stops the silence publisher for a slot.
+func (s *Switcher) stopSilencePublisher(slot int) {
+	if cmd := s.silenceProcs[slot]; cmd != nil && cmd.Process != nil {
+		log.Printf("[switcher] stopping silence publisher slot %d PID=%d", slot, cmd.Process.Pid)
+		s.silenceProcs[slot] = nil
+		cmd.Process.Signal(os.Interrupt)
+		go func() {
+			time.Sleep(2 * time.Second)
+			cmd.Process.Kill()
+		}()
+	}
+}
+
+// restartSilencePublisher stops then starts the silence publisher for a slot.
+// Called when a commentator leaves so MediaMTX gets silent audio again.
+func (s *Switcher) restartSilencePublisher(slot int) {
+	s.stopSilencePublisher(slot)
+	// Small delay so MediaMTX clears the old publisher
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.silenceProcs[slot] == nil {
+			s.startSilencePublisher(slot)
+		}
+	}()
+}
+
+// SetOverlay enables/disables the PNG overlay. The pipeline always includes
+// a compositor with multifilesrc, so toggling just writes a transparent PNG
+// (disable) or lets the overlay service write real PNGs (enable).
+// NO pipeline restart is needed.
 func (s *Switcher) SetOverlay(pngPath string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	log.Printf("[switcher] SetOverlay called: pngPath=%q live=%v localMode=%v activeStream=%s", pngPath, s.live, s.localMode, s.activeStream)
 	if pngPath != "" {
-		s.overlayPath = pngPath
-		s.cmdFactory = overlayCmdFactory(pngPath)
-		log.Printf("[switcher] overlay ENABLED → cmdFactory=overlay path=%s (live=%v active=%s localMode=%v)", pngPath, s.live, s.activeStream, s.localMode)
+		// Overlay enabled — the overlay service writes real PNGs to overlayPath.
+		// multifilesrc in the running pipeline will pick them up automatically.
+		log.Printf("[switcher] overlay ENABLED (no pipeline restart needed)")
 	} else {
-		s.overlayPath = ""
-		s.cmdFactory = defaultCmdFactory
-		log.Printf("[switcher] overlay DISABLED → cmdFactory=default (live=%v active=%s localMode=%v)", s.live, s.activeStream, s.localMode)
-	}
-	// Restart FFmpeg with the new filter chain if currently live
-	if s.live && !s.localMode {
-		log.Printf("[switcher] restarting streaming process for overlay change (was live)...")
-		oldCmd := s.cmd
-		wasLive := s.live
-		wasActiveStream := s.activeStream
-		wasLocalMode := s.localMode
-		log.Printf("[switcher] overlay restart details: oldPID=%v overlayPath=%s cmdFactory=%T", func() any { if oldCmd != nil && oldCmd.Process != nil { return oldCmd.Process.Pid }; return nil }(), s.overlayPath, s.cmdFactory)
-		if err := s.startFFmpeg(); err != nil {
-			log.Printf("[switcher] overlay restart FAILED, restoring previous process: %v", err)
-			s.cmd = oldCmd
-			s.live = wasLive
-			s.activeStream = wasActiveStream
-			s.localMode = wasLocalMode
-			return
+		// Overlay disabled — write transparent PNG so compositor shows nothing.
+		log.Printf("[switcher] overlay DISABLED, writing transparent PNG to %s", s.overlayPath)
+		if err := writeTransparentPNG(s.overlayPath); err != nil {
+			log.Printf("[switcher] WARNING: failed to write transparent PNG: %v", err)
 		}
-		s.live = wasLive
-		s.activeStream = wasActiveStream
-		s.localMode = wasLocalMode
-		if oldCmd != nil && oldCmd.Process != nil {
-			log.Printf("[switcher] overlay restart succeeded, stopping old PID=%d", oldCmd.Process.Pid)
-			if err := oldCmd.Process.Signal(os.Interrupt); err != nil {
-				log.Printf("[switcher] old process SIGINT failed: %v, killing PID=%d", err, oldCmd.Process.Pid)
-				_ = oldCmd.Process.Kill()
-			}
-		}
-	} else {
-		log.Printf("[switcher] not restarting FFmpeg (live=%v localMode=%v)", s.live, s.localMode)
 	}
 }
 
@@ -360,6 +434,10 @@ func (s *Switcher) StopAll() {
 		s.bridge.Stop()
 		s.bridge = nil
 	}
+	// Stop silence publishers
+	for i := range s.silenceProcs {
+		s.stopSilencePublisher(i)
+	}
 	log.Printf("[switcher] StopAll complete")
 }
 
@@ -384,8 +462,8 @@ func (s *Switcher) CommentaryStatus() CommentaryConfig {
 	return cc
 }
 
-// SetCommentary updates the commentary configuration and restarts the pipeline
-// if currently live. Slots are initialized if not already set.
+// SetCommentary updates the commentary configuration.
+// No pipeline restart needed — commentary audio paths are always connected.
 func (s *Switcher) SetCommentary(cc CommentaryConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -401,15 +479,12 @@ func (s *Switcher) SetCommentary(cc CommentaryConfig) {
 	}
 
 	s.commentary = cc
-
-	// Restart pipeline if live
-	if s.live && !s.localMode {
-		log.Printf("[switcher] restarting pipeline for commentary change...")
-		s.restartPipeline()
-	}
+	// No pipeline restart needed — audiomixer with commentary sources is always on
 }
 
-// SetCommentarySlot updates a single commentary slot and restarts if needed.
+// SetCommentarySlot updates a single commentary slot.
+// When a slot becomes inactive (commentator left), restart the silence
+// publisher for that slot so the pipeline keeps getting audio frames.
 func (s *Switcher) SetCommentarySlot(index int, active bool, volume float64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -418,40 +493,32 @@ func (s *Switcher) SetCommentarySlot(index int, active bool, volume float64) err
 		return fmt.Errorf("invalid slot index %d", index)
 	}
 
-	wasActive := s.hasActiveCommentary()
+	wasActive := s.commentary.Slots[index].Active
 	s.commentary.Slots[index].Active = active
 	s.commentary.Slots[index].Volume = volume
-	nowActive := s.hasActiveCommentary()
 
-	log.Printf("[switcher] SetCommentarySlot[%d]: active=%v volume=%.2f (wasActive=%v nowActive=%v)", index, active, volume, wasActive, nowActive)
+	log.Printf("[switcher] SetCommentarySlot[%d]: active=%v volume=%.2f (was=%v)", index, active, volume, wasActive)
 
-	// Only restart if commentary state actually changed and we're live
-	if s.live && !s.localMode && (wasActive != nowActive || (s.commentary.Enabled && nowActive)) {
-		log.Printf("[switcher] restarting pipeline for commentary slot change...")
-		s.restartPipeline()
+	// When a commentator leaves, restart the silence publisher for that slot
+	// so MediaMTX has a publisher and the pipeline rtspsrc stays connected.
+	if wasActive && !active {
+		log.Printf("[switcher] commentator left slot %d, restarting silence publisher", index)
+		s.restartSilencePublisher(index)
 	}
+	// When a commentator joins, the WHIP publish to MediaMTX overrides the
+	// silence publisher (overridePublisher=yes). No action needed here —
+	// the silence publisher will be killed by MediaMTX automatically.
+
 	return nil
 }
 
-// SetCommentaryVolume updates volume levels without restarting the pipeline
-// if only volumes changed (pipeline restart needed for slot active/inactive changes).
-func (s *Switcher) SetCommentaryVolume(cameraVol float64, slotVolumes []float64) {
+// SetCommentaryVolume updates the camera volume level.
+// No pipeline restart needed — volume is just metadata for next pipeline start.
+func (s *Switcher) SetCommentaryVolume(cameraVol float64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
 	s.commentary.CameraVolume = cameraVol
-	for i, v := range slotVolumes {
-		if i < len(s.commentary.Slots) {
-			s.commentary.Slots[i].Volume = v
-		}
-	}
-
-	// Volume changes require pipeline restart since we can't change
-	// GStreamer element properties on a running gst-launch pipeline
-	if s.live && !s.localMode && s.commentary.Enabled && s.hasActiveCommentary() {
-		log.Printf("[switcher] restarting pipeline for volume change...")
-		s.restartPipeline()
-	}
+	log.Printf("[switcher] SetCommentaryVolume: cameraVol=%.2f (applied at next pipeline start)", cameraVol)
 }
 
 // restartPipeline stops the current pipeline and starts a new one.
@@ -483,14 +550,9 @@ func (s *Switcher) startFFmpeg() error {
 	}
 	rtmpURL := s.rtmpDest
 
-	log.Printf("[switcher] startFFmpeg: %s → %s (active=%s overlayPath=%q audioDevice=%q commentary=%v)", rtspURL, rtmpURL, s.activeStream, s.overlayPath, s.audioDevice, s.commentary.Enabled)
+	log.Printf("[switcher] startFFmpeg: %s → %s (active=%s overlayPath=%q audioDevice=%q)", rtspURL, rtmpURL, s.activeStream, s.overlayPath, s.audioDevice)
 
-	// Choose the appropriate cmd factory based on commentary state
-	factory := s.cmdFactory
-	if s.commentary.Enabled && s.hasActiveCommentary() {
-		factory = commentaryCmdFactory(s.rtspBase, s.commentary, s.overlayPath)
-	}
-	s.cmd = factory(rtspURL, rtmpURL, s.audioDevice)
+	s.cmd = s.cmdFactory(rtspURL, rtmpURL, s.audioDevice)
 	s.cmd.Stderr = os.Stderr
 
 	log.Printf("[switcher] startFFmpeg: launching process %q with args: %v", s.cmd.Path, s.cmd.Args)

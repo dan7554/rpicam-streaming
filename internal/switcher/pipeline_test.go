@@ -52,7 +52,7 @@ func (e *pipelineError) Error() string {
 // --- String-level pipeline validation tests (no GStreamer required) ---
 
 func TestDefaultPipelineCameraAudio_Elements(t *testing.T) {
-	p := buildDefaultPipeline("rtsp://cam:8554/stream", "rtmp://localhost:1935/live-output", "")
+	p := buildPipeline("/tmp/overlay.png", "rtsp://cam:8554/stream", "rtmp://localhost:1935/live-output", "", "rtsp://localhost:8554", 1.0)
 	checks := []struct {
 		label    string
 		contains string
@@ -61,7 +61,10 @@ func TestDefaultPipelineCameraAudio_Elements(t *testing.T) {
 		{"latency", "latency=200"},
 		{"h264 depay", "rtph264depay"},
 		{"h264 parse", "h264parse"},
-		{"video tee", "tee name=vt"},
+		{"compositor", "compositor name=mixer"},
+		{"overlay positioning", "sink_1::xpos=20 sink_1::ypos=20"},
+		{"x264enc", "x264enc tune=zerolatency"},
+		{"encoded video tee", "tee name=enc_tee"},
 		{"audio tee", "tee name=at"},
 		{"aac decode", "avdec_aac"},
 		{"aac encode", "avenc_aac"},
@@ -74,6 +77,15 @@ func TestDefaultPipelineCameraAudio_Elements(t *testing.T) {
 		{"audio caps", "audio/x-raw,rate=48000,channels=1"},
 		{"audioconvert before aac", "audioconvert ! avenc_aac"},
 		{"audioconvert before opus", "audioconvert ! opusenc"},
+		{"multifilesrc", "multifilesrc location=/tmp/overlay.png"},
+		{"multifilesrc loop", "loop=true"},
+		{"overlay image link", "overlay_img. ! mixer."},
+		{"audiomixer", "audiomixer name=amix"},
+		{"camera volume", "volume name=camvol volume=1.00"},
+		{"commentary-1 rtspsrc", "rtspsrc location=rtsp://localhost:8554/commentary-1"},
+		{"commentary-2 rtspsrc", "rtspsrc location=rtsp://localhost:8554/commentary-2"},
+		{"opus depay", "rtpopusdepay"},
+		{"opus decode", "opusdec"},
 	}
 	for _, c := range checks {
 		t.Run(c.label, func(t *testing.T) {
@@ -85,19 +97,20 @@ func TestDefaultPipelineCameraAudio_Elements(t *testing.T) {
 }
 
 func TestDefaultPipelineMicAudio_Elements(t *testing.T) {
-	p := buildDefaultPipeline("rtsp://cam:8554/stream", "rtmp://localhost:1935/live-output", "0")
+	p := buildPipeline("/tmp/overlay.png", "rtsp://cam:8554/stream", "rtmp://localhost:1935/live-output", "0", "rtsp://localhost:8554", 1.0)
 	checks := []struct {
 		label    string
 		contains string
 	}{
 		{"mic source", "osxaudiosrc device=0"},
-		{"no rtpmp4gdepay", ""},
 		{"audio tee", "tee name=at"},
 		{"aac encode", "avenc_aac"},
 		{"opus encode", "opusenc"},
 		{"rtmp sink", "rtmpsink"},
 		{"preview sink", "rtspclientsink"},
 		{"opus to preview", "opusenc audio-type=restricted-lowdelay ! preview."},
+		{"compositor", "compositor name=mixer"},
+		{"multifilesrc", "multifilesrc"},
 	}
 	for _, c := range checks {
 		if c.contains == "" {
@@ -116,14 +129,15 @@ func TestDefaultPipelineMicAudio_Elements(t *testing.T) {
 }
 
 func TestOverlayPipelineCameraAudio_Elements(t *testing.T) {
-	p := buildOverlayPipeline("/tmp/overlay.png", "rtsp://cam:8554/stream", "rtmp://localhost:1935/live-output", "")
+	// With always-on compositor, the "overlay" test is identical to default
+	// but verifies the overlay path is correctly embedded.
+	p := buildPipeline("/tmp/overlay.png", "rtsp://cam:8554/stream", "rtmp://localhost:1935/live-output", "", "rtsp://localhost:8554", 1.0)
 	checks := []struct {
 		label    string
 		contains string
 	}{
-		{"overlay source", "filesrc location=/tmp/overlay.png"},
+		{"overlay source", "multifilesrc location=/tmp/overlay.png"},
 		{"png decode", "pngdec"},
-		{"imagefreeze", "imagefreeze"},
 		{"compositor", "compositor name=mixer"},
 		{"overlay positioning", "sink_1::xpos=20 sink_1::ypos=20"},
 		{"x264enc", "x264enc tune=zerolatency"},
@@ -151,7 +165,7 @@ func TestOverlayPipelineCameraAudio_Elements(t *testing.T) {
 }
 
 func TestOverlayPipelineMicAudio_Elements(t *testing.T) {
-	p := buildOverlayPipeline("/tmp/overlay.png", "rtsp://cam:8554/stream", "rtmp://localhost:1935/live-output", "2")
+	p := buildPipeline("/tmp/overlay.png", "rtsp://cam:8554/stream", "rtmp://localhost:1935/live-output", "2", "rtsp://localhost:8554", 1.0)
 	checks := []struct {
 		label    string
 		contains string
@@ -160,6 +174,7 @@ func TestOverlayPipelineMicAudio_Elements(t *testing.T) {
 		{"audio tee", "tee name=at"},
 		{"opus encode", "opusenc"},
 		{"opus to preview", "opusenc audio-type=restricted-lowdelay ! preview."},
+		{"compositor", "compositor name=mixer"},
 	}
 	for _, c := range checks {
 		t.Run(c.label, func(t *testing.T) {
@@ -177,10 +192,8 @@ func TestOverlayPipelineMicAudio_Elements(t *testing.T) {
 
 func TestAllPipelines_AudioTeeBranches(t *testing.T) {
 	pipelines := map[string]string{
-		"default/camera":  buildDefaultPipeline("rtsp://x", "rtmp://x", ""),
-		"default/mic":     buildDefaultPipeline("rtsp://x", "rtmp://x", "0"),
-		"overlay/camera":  buildOverlayPipeline("/tmp/o.png", "rtsp://x", "rtmp://x", ""),
-		"overlay/mic":     buildOverlayPipeline("/tmp/o.png", "rtsp://x", "rtmp://x", "0"),
+		"default/camera":  buildPipeline("/tmp/o.png", "rtsp://x", "rtmp://x", "", "rtsp://localhost:8554", 1.0),
+		"default/mic":     buildPipeline("/tmp/o.png", "rtsp://x", "rtmp://x", "0", "rtsp://localhost:8554", 1.0),
 	}
 	for name, p := range pipelines {
 		t.Run(name, func(t *testing.T) {
@@ -193,9 +206,9 @@ func TestAllPipelines_AudioTeeBranches(t *testing.T) {
 			if atBranches < 2 {
 				t.Errorf("audio tee has %d branches, expected at least 2 (AAC + Opus)", atBranches)
 			}
-			// Must have video tee
-			if !strings.Contains(p, "tee name=vt") && !strings.Contains(p, "tee name=enc_tee") {
-				t.Fatal("missing video tee")
+			// Must have encoded video tee
+			if !strings.Contains(p, "tee name=enc_tee") {
+				t.Fatal("missing video tee (tee name=enc_tee)")
 			}
 			// Preview sink must be named
 			if !strings.Contains(p, "name=preview") {
@@ -211,10 +224,8 @@ func TestAllPipelines_AudioTeeBranches(t *testing.T) {
 
 func TestAllPipelines_QueueBeforeSinks(t *testing.T) {
 	pipelines := map[string]string{
-		"default/camera":  buildDefaultPipeline("rtsp://x", "rtmp://x", ""),
-		"default/mic":     buildDefaultPipeline("rtsp://x", "rtmp://x", "0"),
-		"overlay/camera":  buildOverlayPipeline("/tmp/o.png", "rtsp://x", "rtmp://x", ""),
-		"overlay/mic":     buildOverlayPipeline("/tmp/o.png", "rtsp://x", "rtmp://x", "0"),
+		"default/camera":  buildPipeline("/tmp/o.png", "rtsp://x", "rtmp://x", "", "rtsp://localhost:8554", 1.0),
+		"default/mic":     buildPipeline("/tmp/o.png", "rtsp://x", "rtmp://x", "0", "rtsp://localhost:8554", 1.0),
 	}
 	for name, p := range pipelines {
 		t.Run(name, func(t *testing.T) {
@@ -250,10 +261,8 @@ func TestAllPipelines_GStreamerParse(t *testing.T) {
 	// We use --gst-parse-launch which validates element names and properties
 	// but doesn't set the pipeline to PLAYING.
 	pipelines := map[string]string{
-		"default/camera":  buildDefaultPipeline("rtsp://fake:8554/s", "rtmp://fake:1935/o", ""),
-		"default/mic":     buildDefaultPipeline("rtsp://fake:8554/s", "rtmp://fake:1935/o", "0"),
-		"overlay/camera":  buildOverlayPipeline("/dev/null", "rtsp://fake:8554/s", "rtmp://fake:1935/o", ""),
-		"overlay/mic":     buildOverlayPipeline("/dev/null", "rtsp://fake:8554/s", "rtmp://fake:1935/o", "0"),
+		"default/camera":  buildPipeline("/tmp/o.png", "rtsp://fake:8554/s", "rtmp://fake:1935/o", "", "rtsp://localhost:8554", 1.0),
+		"default/mic":     buildPipeline("/tmp/o.png", "rtsp://fake:8554/s", "rtmp://fake:1935/o", "0", "rtsp://localhost:8554", 1.0),
 	}
 
 	for name, p := range pipelines {

@@ -98,15 +98,21 @@ func TestGetStreamsMediaMTXDown(t *testing.T) {
 		BridgeAddr:   ":8555",
 		Cameras:      []string{"cam1", "cam2", "cam3"},
 	}
-	sw := switcher.New(cfg.MediaMTXRTSP, cfg.MediaMTXAPI, nil, nil)
+	sw := switcher.New(cfg.MediaMTXRTSP, cfg.MediaMTXAPI, nil, cfg.Cameras, "")
 	handler := NewHandler(cfg, sw)
 
 	req := httptest.NewRequest("GET", "/api/streams", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadGateway {
-		t.Fatalf("expected 502, got %d", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	// Cameras should still be listed even with MediaMTX down (all not ready)
+	var resp map[string]any
+	json.NewDecoder(w.Body).Decode(&resp)
+	if int(resp["itemCount"].(float64)) != len(cfg.Cameras) {
+		t.Fatalf("expected %d items, got %v", len(cfg.Cameras), resp["itemCount"])
 	}
 }
 
