@@ -711,11 +711,26 @@ async function joinCommentary(slot) {
             }),
         });
 
-        // Reconnect on failure
+        // Reconnect on failure — only on 'failed' (terminal).
+        // 'disconnected' is often temporary (network hiccup) and can recover.
+        let disconnectTimer = null;
         pc.onconnectionstatechange = () => {
-            if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-                console.warn(`Commentary slot ${slot} disconnected, cleaning up`);
+            const state = pc.connectionState;
+            console.log(`Commentary slot ${slot} connection: ${state}`);
+            if (state === 'failed') {
+                clearTimeout(disconnectTimer);
+                console.warn(`Commentary slot ${slot} failed, cleaning up`);
                 leaveCommentary(slot);
+            } else if (state === 'disconnected') {
+                // Give it 5s to recover before tearing down
+                disconnectTimer = setTimeout(() => {
+                    if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+                        console.warn(`Commentary slot ${slot} didn't recover, cleaning up`);
+                        leaveCommentary(slot);
+                    }
+                }, 5000);
+            } else if (state === 'connected') {
+                clearTimeout(disconnectTimer);
             }
         };
 
