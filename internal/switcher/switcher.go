@@ -341,6 +341,10 @@ func (s *Switcher) StartLive(stream, rtmpDest string, localMode bool, audioDevic
 
 	// RTMP mode: start bridge proxy, then FFmpeg
 	log.Printf("[switcher] starting RTMP mode: bridge + FFmpeg")
+
+	// Rebuild cmdFactory with current camera volume (may have changed since init)
+	s.cmdFactory = makeCmdFactory(s.overlayPath, s.rtspBase, s.commentary.CameraVolume)
+
 	if s.bridgeFactory != nil {
 		log.Printf("[switcher] creating bridge proxy...")
 		s.bridge = s.bridgeFactory()
