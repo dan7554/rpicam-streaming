@@ -26,8 +26,8 @@ webrtc: yes
 webrtcAddress: :8889
 
 # ICE configuration for WebRTC behind NLB
-# IMPORTANT: Replace <EIP> with the Elastic IP after terraform apply
-webrtcICEHostNAT1To1IPs: [44.226.0.76]
+# __EIP__ is replaced automatically by `make deploy` with the Terraform EIP
+webrtcICEHostNAT1To1IPs: [__EIP__]
 webrtcICEUDPMuxAddress: :8189
 webrtcICETCPMuxAddress: :8189
 
