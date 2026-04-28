@@ -56,7 +56,9 @@ type Switcher struct {
 	restartCount    int    // consecutive restart count for backoff
 	restartBackoff  time.Duration
 	commentary      CommentaryConfig   // live commentary mixing
-	silenceProcs    []*exec.Cmd        // silence publisher processes (one per slot)
+	silenceProcs    []*exec.Cmd        // silence → UDP (one per slot)
+	relayProcs      []*exec.Cmd        // UDP → commentary-N RTSP (always-on, one per slot)
+	whipBridgeProcs []*exec.Cmd        // commentary-N-whip RTSP → UDP (active when commentator connected)
 }
 
 // CommentaryConfig holds the state for browser-based commentary mixing.
@@ -184,6 +186,8 @@ func New(rtspBase, mediaMTXAPI string, bf BridgeFactory, cameras []string, overl
 		bridgeFactory: bf,
 		cameras:       cameras,
 		silenceProcs:  make([]*exec.Cmd, 2),
+		relayProcs:    make([]*exec.Cmd, 2),
+		whipBridgeProcs: make([]*exec.Cmd, 2),
 		commentary: CommentaryConfig{
 			CameraVolume: cameraVol,
 			Slots: []CommentarySlot{
@@ -193,41 +197,59 @@ func New(rtspBase, mediaMTXAPI string, bf BridgeFactory, cameras []string, overl
 		},
 	}
 
-	// Start silence publishers for commentary paths so the pipeline can always
-	// connect to commentary-1 and commentary-2 RTSP sources.
+	// Start always-on UDP relays (udp:500X → commentary-N RTSP), then start
+	// silence senders that feed silent Opus RTP to the same UDP ports.
+	// The pipeline reads commentary-N, whose RTSP publisher (the relay) never changes.
 	for i := 0; i < 2; i++ {
-		s.startSilencePublisher(i)
+		s.startRelay(i)
 	}
+	// Small delay so relays register in MediaMTX before silence starts sending
+	go func() {
+		time.Sleep(1 * time.Second)
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for i := 0; i < 2; i++ {
+			s.startSilencePublisher(i)
+		}
+	}()
 
 	return s
 }
 
-// startSilencePublisher publishes silent Opus audio to a commentary MediaMTX path.
-// When a WHIP commentator joins, MediaMTX (overridePublisher=yes) replaces this
-// with real audio. When they leave, we restart the silence publisher.
+// commentaryUDPPort returns the UDP port for a commentary slot's audio relay.
+func commentaryUDPPort(slot int) int {
+	return 5001 + slot
+}
+
+// startSilencePublisher sends silent Opus RTP to the slot's UDP port.
+// The always-on relay reads from this UDP port and publishes to commentary-N.
 func (s *Switcher) startSilencePublisher(slot int) {
-	name := fmt.Sprintf("commentary-%d", slot+1)
-	dest := fmt.Sprintf("rtsp://localhost:8554/%s", name)
-	pipeline := fmt.Sprintf("audiotestsrc wave=silence is-live=true ! opusenc ! rtspclientsink location=%s protocols=tcp", dest)
+	port := commentaryUDPPort(slot)
+	name := fmt.Sprintf("silence-udp-%d", slot)
+	pipeline := fmt.Sprintf("audiotestsrc wave=silence is-live=true ! opusenc ! rtpopuspay pt=96 ! udpsink host=127.0.0.1 port=%d", port)
 	args := append([]string{"-e"}, strings.Fields(pipeline)...)
 	cmd := exec.Command("gst-launch-1.0", args...)
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
-		log.Printf("[switcher] silence publisher %s FAILED to start: %v", name, err)
+		log.Printf("[switcher] silence %s FAILED to start: %v", name, err)
 		return
 	}
 	s.silenceProcs[slot] = cmd
-	log.Printf("[switcher] silence publisher %s started PID=%d", name, cmd.Process.Pid)
+	log.Printf("[switcher] silence %s started PID=%d (udp port %d)", name, cmd.Process.Pid, port)
 
-	// Monitor — auto-restart if it dies
+	// Monitor — auto-restart if it dies (unless a commentator's WHIP bridge is active)
 	go func(slot int, cmd *exec.Cmd, name string) {
 		err := cmd.Wait()
-		log.Printf("[switcher] silence publisher %s exited: %v", name, err)
+		log.Printf("[switcher] silence %s exited: %v", name, err)
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		// Restart only if this is still our tracked process (not replaced)
+		if s.commentary.Slots[slot].Active {
+			log.Printf("[switcher] silence %s: commentator active, not restarting", name)
+			s.silenceProcs[slot] = nil
+			return
+		}
 		if s.silenceProcs[slot] == cmd {
-			log.Printf("[switcher] restarting silence publisher %s...", name)
+			log.Printf("[switcher] restarting silence %s...", name)
 			s.silenceProcs[slot] = nil
 			s.startSilencePublisher(slot)
 		}
@@ -235,31 +257,173 @@ func (s *Switcher) startSilencePublisher(slot int) {
 }
 
 // stopSilencePublisher stops the silence publisher for a slot.
+// Sets silenceProcs[slot] to nil to prevent auto-restart, then kills async.
 func (s *Switcher) stopSilencePublisher(slot int) {
 	if cmd := s.silenceProcs[slot]; cmd != nil && cmd.Process != nil {
 		log.Printf("[switcher] stopping silence publisher slot %d PID=%d", slot, cmd.Process.Pid)
-		s.silenceProcs[slot] = nil
-		cmd.Process.Signal(os.Interrupt)
+		s.silenceProcs[slot] = nil // prevent auto-restart by monitor goroutine
 		go func() {
-			time.Sleep(2 * time.Second)
-			cmd.Process.Kill()
+			cmd.Process.Signal(os.Interrupt)
+			done := make(chan struct{})
+			go func() {
+				cmd.Wait()
+				close(done)
+			}()
+			select {
+			case <-done:
+				log.Printf("[switcher] silence publisher slot %d stopped", slot)
+			case <-time.After(3 * time.Second):
+				log.Printf("[switcher] silence publisher slot %d kill (timeout)", slot)
+				cmd.Process.Kill()
+			}
 		}()
 	}
 }
 
 // restartSilencePublisher stops then starts the silence publisher for a slot.
-// Called when a commentator leaves so MediaMTX gets silent audio again.
 func (s *Switcher) restartSilencePublisher(slot int) {
 	s.stopSilencePublisher(slot)
-	// Small delay so MediaMTX clears the old publisher
+	// Small delay so the old process fully exits
 	go func() {
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(300 * time.Millisecond)
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		if s.silenceProcs[slot] == nil {
+		if s.silenceProcs[slot] == nil && !s.commentary.Slots[slot].Active {
 			s.startSilencePublisher(slot)
 		}
 	}()
+}
+
+// startRelay starts an always-on GStreamer process that reads Opus RTP from a
+// UDP port and publishes to commentary-N via RTSP. This relay never stops —
+// whoever sends UDP packets (silence or WHIP bridge) is transparent to it.
+func (s *Switcher) startRelay(slot int) {
+	port := commentaryUDPPort(slot)
+	name := fmt.Sprintf("commentary-%d", slot+1)
+	dest := fmt.Sprintf("rtsp://localhost:8554/%s", name)
+	pipeline := fmt.Sprintf(
+		"udpsrc port=%d caps=application/x-rtp,media=audio,encoding-name=OPUS,clock-rate=48000,payload=96 "+
+			"! rtpjitterbuffer latency=200 ! rtpopusdepay ! opusparse ! rtspclientsink location=%s protocols=tcp",
+		port, dest)
+	args := append([]string{"-e"}, strings.Fields(pipeline)...)
+	cmd := exec.Command("gst-launch-1.0", args...)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		log.Printf("[switcher] relay %s FAILED to start: %v", name, err)
+		return
+	}
+	s.relayProcs[slot] = cmd
+	log.Printf("[switcher] relay %s started PID=%d (udp:%d → %s)", name, cmd.Process.Pid, port, dest)
+
+	// Monitor — always restart the relay, it should run forever
+	go func(slot int, cmd *exec.Cmd, name string) {
+		err := cmd.Wait()
+		log.Printf("[switcher] relay %s exited: %v", name, err)
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.relayProcs[slot] == cmd {
+			log.Printf("[switcher] relay %s: restarting in 2s...", name)
+			s.relayProcs[slot] = nil
+			go func() {
+				time.Sleep(2 * time.Second)
+				s.mu.Lock()
+				defer s.mu.Unlock()
+				if s.relayProcs[slot] == nil {
+					s.startRelay(slot)
+				}
+			}()
+		}
+	}(slot, cmd, name)
+}
+
+// stopRelay stops the relay process for a slot.
+func (s *Switcher) stopRelay(slot int) {
+	if cmd := s.relayProcs[slot]; cmd != nil && cmd.Process != nil {
+		log.Printf("[switcher] stopping relay slot %d PID=%d", slot, cmd.Process.Pid)
+		s.relayProcs[slot] = nil // prevent auto-restart
+		go func() {
+			cmd.Process.Signal(os.Interrupt)
+			done := make(chan struct{})
+			go func() {
+				cmd.Wait()
+				close(done)
+			}()
+			select {
+			case <-done:
+				log.Printf("[switcher] relay slot %d stopped", slot)
+			case <-time.After(3 * time.Second):
+				log.Printf("[switcher] relay slot %d kill (timeout)", slot)
+				cmd.Process.Kill()
+			}
+		}()
+	}
+}
+
+// startWhipBridge reads the WHIP commentator's audio from commentary-N-whip via
+// RTSP and forwards it as RTP to the slot's UDP port. The always-on relay picks
+// it up and publishes to commentary-N without any publisher change.
+func (s *Switcher) startWhipBridge(slot int) {
+	port := commentaryUDPPort(slot)
+	name := fmt.Sprintf("whip-bridge-%d", slot)
+	src := fmt.Sprintf("rtsp://localhost:8554/commentary-%d-whip", slot+1)
+	pipeline := fmt.Sprintf(
+		"rtspsrc location=%s protocols=tcp latency=100 name=rsrc "+
+			"rsrc. ! udpsink host=127.0.0.1 port=%d",
+		src, port)
+	args := append([]string{"-e"}, strings.Fields(pipeline)...)
+	cmd := exec.Command("gst-launch-1.0", args...)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		log.Printf("[switcher] %s FAILED to start: %v", name, err)
+		return
+	}
+	s.whipBridgeProcs[slot] = cmd
+	log.Printf("[switcher] %s started PID=%d (%s → udp:%d)", name, cmd.Process.Pid, src, port)
+
+	// Monitor — restart if it crashes while commentator is still active
+	go func(slot int, cmd *exec.Cmd, name string) {
+		err := cmd.Wait()
+		log.Printf("[switcher] %s exited: %v", name, err)
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.commentary.Slots[slot].Active && s.whipBridgeProcs[slot] == cmd {
+			log.Printf("[switcher] %s: commentator still active, restarting in 2s...", name)
+			s.whipBridgeProcs[slot] = nil
+			go func() {
+				time.Sleep(2 * time.Second)
+				s.mu.Lock()
+				defer s.mu.Unlock()
+				if s.commentary.Slots[slot].Active && s.whipBridgeProcs[slot] == nil {
+					s.startWhipBridge(slot)
+				}
+			}()
+		} else {
+			s.whipBridgeProcs[slot] = nil
+		}
+	}(slot, cmd, name)
+}
+
+// stopWhipBridge stops the WHIP bridge process for a slot.
+func (s *Switcher) stopWhipBridge(slot int) {
+	if cmd := s.whipBridgeProcs[slot]; cmd != nil && cmd.Process != nil {
+		log.Printf("[switcher] stopping whip-bridge slot %d PID=%d", slot, cmd.Process.Pid)
+		s.whipBridgeProcs[slot] = nil
+		go func() {
+			cmd.Process.Signal(os.Interrupt)
+			done := make(chan struct{})
+			go func() {
+				cmd.Wait()
+				close(done)
+			}()
+			select {
+			case <-done:
+				log.Printf("[switcher] whip-bridge slot %d stopped", slot)
+			case <-time.After(3 * time.Second):
+				log.Printf("[switcher] whip-bridge slot %d kill (timeout)", slot)
+				cmd.Process.Kill()
+			}
+		}()
+	}
 }
 
 // SetOverlay enables/disables the PNG overlay. The pipeline always includes
@@ -438,9 +602,11 @@ func (s *Switcher) StopAll() {
 		s.bridge.Stop()
 		s.bridge = nil
 	}
-	// Stop silence publishers
+	// Stop silence publishers, relays, and WHIP bridges
 	for i := range s.silenceProcs {
 		s.stopSilencePublisher(i)
+		s.stopRelay(i)
+		s.stopWhipBridge(i)
 	}
 	log.Printf("[switcher] StopAll complete")
 }
@@ -503,15 +669,29 @@ func (s *Switcher) SetCommentarySlot(index int, active bool, volume float64) err
 
 	log.Printf("[switcher] SetCommentarySlot[%d]: active=%v volume=%.2f (was=%v)", index, active, volume, wasActive)
 
-	// When a commentator leaves, restart the silence publisher for that slot
-	// so MediaMTX has a publisher and the pipeline rtspsrc stays connected.
+	// When a commentator leaves, stop WHIP bridge and restart silence sender.
+	// The relay stays running — it just receives silence UDP packets again.
 	if wasActive && !active {
-		log.Printf("[switcher] commentator left slot %d, restarting silence publisher", index)
+		log.Printf("[switcher] commentator left slot %d, stopping whip bridge, restarting silence", index)
+		s.stopWhipBridge(index)
 		s.restartSilencePublisher(index)
 	}
-	// When a commentator joins, the WHIP publish to MediaMTX overrides the
-	// silence publisher (overridePublisher=yes). No action needed here —
-	// the silence publisher will be killed by MediaMTX automatically.
+	// When a commentator joins, stop the silence sender and start the WHIP
+	// bridge that reads commentary-N-whip and sends to the same UDP port.
+	// The relay stays running throughout — no publisher change on commentary-N.
+	if !wasActive && active {
+		log.Printf("[switcher] commentator joined slot %d, stopping silence, starting whip bridge", index)
+		s.stopSilencePublisher(index)
+		// Small delay to let WHIP session fully register in MediaMTX
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			if s.commentary.Slots[index].Active && s.whipBridgeProcs[index] == nil {
+				s.startWhipBridge(index)
+			}
+		}()
+	}
 
 	return nil
 }

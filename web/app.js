@@ -7,6 +7,14 @@ const players = {};
 
 // Initialize camera grid
 async function init() {
+    // Fetch and display build version
+    try {
+        const vRes = await fetch(`${API_BASE}/api/version`);
+        const vData = await vRes.json();
+        const el = document.getElementById('build-version');
+        if (el) el.textContent = vData.build || '';
+    } catch {}
+
     // Fetch camera list from server
     try {
         const res = await fetch(`${API_BASE}/api/streams`);
@@ -42,25 +50,56 @@ async function init() {
     setInterval(pollOverlayStatus, 3000);
     pollOverlayStatus();
 
-    // Restore saved overlay URL
-    const savedUrl = localStorage.getItem('overlay-url');
-    if (savedUrl) document.getElementById('overlay-url').value = savedUrl;
+    // Load server-side config, fall back to localStorage
+    let serverCfg = {};
+    try {
+        const cfgRes = await fetch(`${API_BASE}/api/config`);
+        if (cfgRes.ok) serverCfg = await cfgRes.json();
+    } catch { /* server not reachable, use localStorage */ }
 
-    // Restore saved overlay scale
-    const savedScale = localStorage.getItem('overlay-scale');
-    if (savedScale) document.getElementById('overlay-scale').value = savedScale;
+    // Overlay URL: server > localStorage
+    const overlayUrl = serverCfg.overlay_url || localStorage.getItem('overlay-url') || '';
+    if (overlayUrl) document.getElementById('overlay-url').value = overlayUrl;
 
-    // Restore saved YouTube stream key
+    // Overlay format: server > default
+    if (serverCfg.overlay_format) document.getElementById('overlay-format').value = serverCfg.overlay_format;
+
+    // Overlay max rows: server > default
+    if (serverCfg.overlay_max_rows) document.getElementById('overlay-max-rows').value = serverCfg.overlay_max_rows;
+
+    // Overlay scale: server > localStorage > default
+    const overlayScale = serverCfg.overlay_scale || localStorage.getItem('overlay-scale') || '';
+    if (overlayScale) document.getElementById('overlay-scale').value = overlayScale;
+
+    // Camera volume: server > default (30)
+    if (serverCfg.camera_volume !== undefined && serverCfg.camera_volume !== null) {
+        document.getElementById('camera-vol').value = serverCfg.camera_volume;
+        const valSpan = document.getElementById('camera-vol-val');
+        if (valSpan) valSpan.textContent = serverCfg.camera_volume + '%';
+    }
+
+    // Populate mic device selector
+    populateMicDevices();
+
+    // YouTube stream key: server > localStorage
     const youtubeKeyInput = document.getElementById('youtube-key');
-    const savedYouTubeKey = localStorage.getItem('youtube-key');
-    if (savedYouTubeKey && youtubeKeyInput) {
-        youtubeKeyInput.value = savedYouTubeKey;
+    const youtubeKey = serverCfg.youtube_key || localStorage.getItem('youtube-key') || '';
+    if (youtubeKey && youtubeKeyInput) {
+        youtubeKeyInput.value = youtubeKey;
     }
     if (youtubeKeyInput) {
         youtubeKeyInput.addEventListener('input', () => {
             localStorage.setItem('youtube-key', youtubeKeyInput.value.trim());
         });
     }
+
+    // Audio enabled: server > default (checked)
+    if (serverCfg.audio_enabled !== undefined && serverCfg.audio_enabled !== null) {
+        document.getElementById('audio-enabled').checked = serverCfg.audio_enabled;
+    }
+
+    // Sync camera volume to server so it's ready for the next Go Live
+    updateCommentaryVolume();
 
     // Update default max rows when format changes
     document.getElementById('overlay-format').addEventListener('change', function() {
@@ -246,6 +285,14 @@ async function goLive() {
     const key = document.getElementById('youtube-key').value.trim();
     const audioEnabled = document.getElementById('audio-enabled').checked;
 
+    // Sync camera volume to server before starting pipeline
+    const cameraVol = parseInt(document.getElementById('camera-vol').value) / 100;
+    await fetch(`${API_BASE}/api/commentary/update`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ camera_volume: cameraVol }),
+    });
+
     const body = { stream: STREAMS[0] || 'cam1', audio: audioEnabled };
     if (key) {
         body.youtube_key = key;
@@ -289,6 +336,44 @@ async function pollStatus() {
         updateUI(status);
     } catch {
         // Server not reachable
+    }
+    // Also poll commentary slot state for cross-device visibility
+    try {
+        const res = await fetch(`${API_BASE}/api/commentary/status`);
+        const data = await res.json();
+        updateCommentaryUI(data);
+    } catch { /* ignore */ }
+}
+
+// Update commentary slot UI based on server state (cross-device visibility)
+function updateCommentaryUI(data) {
+    if (!data.slots) return;
+    for (const slot of data.slots) {
+        const i = slot.index;
+        const statusEl = document.getElementById(`comm-status-${i}`);
+        const btn = document.getElementById(`btn-comm-${i}`);
+        if (!statusEl || !btn) continue;
+
+        // Skip if this is our own active slot (we manage our own state)
+        if (commentaryState.slots[i].active) continue;
+
+        if (slot.active) {
+            // Someone else is on this slot
+            statusEl.textContent = 'In Use';
+            statusEl.className = 'comm-status in-use';
+            btn.textContent = 'In Use';
+            btn.disabled = true;
+            btn.style.background = '#666';
+        } else {
+            // Slot is free — only reset if we previously showed "In Use"
+            if (btn.textContent === 'In Use') {
+                statusEl.textContent = 'Disconnected';
+                statusEl.className = 'comm-status';
+                btn.textContent = 'Join';
+                btn.disabled = false;
+                btn.style.background = '';
+            }
+        }
     }
 }
 
@@ -354,23 +439,10 @@ function showOutputPreview(stream) {
     currentOutputStream = stream;
     section.classList.remove('hidden');
 
-    // Show unmute button
-    const btn = document.getElementById('btn-unmute');
-    if (btn) btn.style.display = 'block';
-
     const toggleBtn = document.getElementById('btn-toggle-preview');
     if (toggleBtn) toggleBtn.textContent = '⏸ Pause Preview';
 
     connectOutput(stream);
-}
-
-function unmuteOutput() {
-    const video = document.getElementById('video-output');
-    video.muted = false;
-    outputUserUnmuted = true;
-    video.play().catch(() => {});
-    const btn = document.getElementById('btn-unmute');
-    if (btn) btn.style.display = 'none';
 }
 
 function connectOutput(stream) {
@@ -378,8 +450,8 @@ function connectOutput(stream) {
     if (outputPreviewPaused) return;
     if (currentOutputStream !== stream) return;
 
-    startOutputWebRTC(stream).catch(() => {
-        console.warn('Output WebRTC failed, retrying in 3s');
+    startOutputWebRTC(stream).catch((err) => {
+        console.warn(`Output WebRTC failed for ${stream}: ${err.message}, retrying in 3s`);
         if (currentOutputStream === stream) {
             setTimeout(() => connectOutput(stream), 3000);
         }
@@ -403,10 +475,8 @@ async function startOutputWebRTC(stream) {
             }
             video.srcObject.addTrack(event.track);
         }
-        video.muted = !outputUserUnmuted;
+        video.muted = false;
         video.play().catch(() => {});
-        const unmuteBtn = document.getElementById('btn-unmute');
-        if (unmuteBtn) unmuteBtn.style.display = video.muted ? 'block' : 'none';
     };
 
     const offer = await pc.createOffer();
@@ -618,6 +688,60 @@ const commentaryState = {
     ],
 };
 
+// Warn user before navigating away if commentary audio is connected
+window.addEventListener('beforeunload', (e) => {
+    const hasActive = commentaryState.slots.some(s => s.active);
+    if (hasActive) {
+        e.preventDefault();
+    }
+});
+
+// Enumerate audio input devices and populate the mic selector
+async function populateMicDevices() {
+    const select = document.getElementById('mic-device');
+    if (!select) return;
+
+    // Need a temporary getUserMedia call to get permission, then enumerate
+    try {
+        const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        tempStream.getTracks().forEach(t => t.stop());
+    } catch {
+        // Permission denied — leave dropdown with just "Default"
+        return;
+    }
+
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const audioInputs = devices.filter(d => d.kind === 'audioinput');
+
+    // Preserve current selection
+    const saved = localStorage.getItem('mic-device-id') || '';
+    select.innerHTML = '<option value="">Default</option>';
+
+    audioInputs.forEach(d => {
+        const opt = document.createElement('option');
+        opt.value = d.deviceId;
+        opt.textContent = d.label || `Mic (${d.deviceId.slice(0, 8)}...)`;
+        if (d.deviceId === saved) opt.selected = true;
+        select.appendChild(opt);
+    });
+
+    // Listen for device changes (plug/unplug)
+    navigator.mediaDevices.ondevicechange = () => populateMicDevices();
+}
+
+function saveMicDevice() {
+    const select = document.getElementById('mic-device');
+    localStorage.setItem('mic-device-id', select.value);
+
+    // If any commentary slot is active on this device, rejoin with the new device
+    for (let i = 0; i < commentaryState.slots.length; i++) {
+        if (commentaryState.slots[i].active) {
+            console.log(`Mic device changed, rejoining commentary slot ${i}`);
+            leaveCommentary(i).then(() => joinCommentary(i));
+        }
+    }
+}
+
 async function toggleCommentary(slot) {
     if (commentaryState.slots[slot].active) {
         await leaveCommentary(slot);
@@ -634,13 +758,18 @@ async function joinCommentary(slot) {
         statusEl.textContent = 'Connecting...';
         statusEl.className = 'comm-status';
 
-        // Capture mic audio
+        // Capture mic audio with selected device
+        const selectedDeviceId = document.getElementById('mic-device')?.value || '';
+        const audioConstraints = {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+        };
+        if (selectedDeviceId) {
+            audioConstraints.deviceId = { exact: selectedDeviceId };
+        }
         const stream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true,
-            },
+            audio: audioConstraints,
             video: false,
         });
 
@@ -677,8 +806,10 @@ async function joinCommentary(slot) {
             setTimeout(resolve, 2000);
         });
 
-        // WHIP publish to MediaMTX
-        const whipPath = `commentary-${slot + 1}`;
+        // WHIP publish to MediaMTX — publishes to the -whip input path.
+        // The server runs a relay from commentary-N-whip → commentary-N,
+        // keeping the pipeline's rtspsrc connected without publisher changes.
+        const whipPath = `commentary-${slot + 1}-whip`;
         const res = await fetch(`${WEBRTC_BASE}/${whipPath}/whip`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/sdp' },
@@ -701,14 +832,12 @@ async function joinCommentary(slot) {
         btn.textContent = 'Leave';
         btn.style.background = '#f44336';
 
-        // Notify server this slot is active (no pipeline restart — just metadata)
+        // Notify server AFTER WHIP publish — this marks the slot active
+        // so the silence publisher won't auto-restart after being overridden.
         await fetch(`${API_BASE}/api/commentary/slot`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                slot: slot,
-                active: true,
-            }),
+            body: JSON.stringify({ slot: slot, active: true }),
         });
 
         // Reconnect on failure — only on 'failed' (terminal).
@@ -789,12 +918,20 @@ let commentaryVolumeTimeout = null;
 function updateCommentaryVolume() {
     // Per-commentator volume: update GainNode directly (no server call, no pipeline restart)
     for (let i = 0; i < 2; i++) {
-        const vol = parseInt(document.getElementById(`comm-vol-${i}`).value) / 100;
+        const slider = document.getElementById(`comm-vol-${i}`);
+        const vol = parseInt(slider.value) / 100;
+        const valSpan = document.getElementById(`comm-vol-${i}-val`);
+        if (valSpan) valSpan.textContent = slider.value + '%';
         const state = commentaryState.slots[i];
         if (state.gainNode) {
             state.gainNode.gain.value = vol;
         }
     }
+
+    // Camera volume: update label and debounce send to server
+    const camSlider = document.getElementById('camera-vol');
+    const camValSpan = document.getElementById('camera-vol-val');
+    if (camValSpan) camValSpan.textContent = camSlider.value + '%';
 
     // Camera volume: debounce and send to server (may trigger pipeline restart)
     clearTimeout(commentaryVolumeTimeout);

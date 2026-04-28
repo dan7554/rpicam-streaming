@@ -41,7 +41,9 @@ paths:
   live-output:
   live-preview:
   commentary-1:
-    overridePublisher: yes
   commentary-2:
+  commentary-1-whip:
+    overridePublisher: yes
+  commentary-2-whip:
     overridePublisher: yes
   all_others:

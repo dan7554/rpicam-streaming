@@ -18,20 +18,34 @@ import (
 	"github.com/dchristiani/media-mtx/internal/config"
 	"github.com/dchristiani/media-mtx/internal/overlay"
 	"github.com/dchristiani/media-mtx/internal/switcher"
+	"github.com/dchristiani/media-mtx/internal/uiconfig"
 )
 
 type Handler struct {
-	cfg        *config.Config
-	sw         *switcher.Switcher
-	mux        *http.ServeMux
-	hlsProxy   *httputil.ReverseProxy
-	webrtcProxy *httputil.ReverseProxy
-	overlay    *overlay.Overlay
+	cfg          *config.Config
+	sw           *switcher.Switcher
+	mux          *http.ServeMux
+	hlsProxy     *httputil.ReverseProxy
+	webrtcProxy  *httputil.ReverseProxy
+	overlay      *overlay.Overlay
+	uiCfg        *uiconfig.Store
+	buildVersion string
+}
+
+func (h *Handler) SetBuildVersion(v string) {
+	h.buildVersion = v
 }
 
 func NewHandler(cfg *config.Config, sw *switcher.Switcher) *Handler {
 	log.Printf("[api] NewHandler: port=%s hlsAddr=%s webrtcAddr=%s overlayDir=%s", cfg.Port, cfg.HLSAddress, cfg.WebRTCAddress, cfg.OverlayDir)
 	h := &Handler{cfg: cfg, sw: sw, mux: http.NewServeMux()}
+
+	// Load persisted UI config
+	configPath := filepath.Join(cfg.OverlayDir, "..", "ui-config.json")
+	if cfg.OverlayDir == "" {
+		configPath = "/tmp/ui-config.json"
+	}
+	h.uiCfg = uiconfig.NewStore(configPath)
 
 	hlsURL, _ := url.Parse("http://localhost" + cfg.HLSAddress)
 	h.hlsProxy = httputil.NewSingleHostReverseProxy(hlsURL)
@@ -70,6 +84,9 @@ func (h *Handler) routes() {
 	h.mux.HandleFunc("GET /api/commentary/status", h.commentaryStatus)
 	h.mux.HandleFunc("POST /api/commentary/update", h.commentaryUpdate)
 	h.mux.HandleFunc("POST /api/commentary/slot", h.commentarySlot)
+	h.mux.HandleFunc("GET /api/config", h.getConfig)
+	h.mux.HandleFunc("POST /api/config", h.postConfig)
+	h.mux.HandleFunc("GET /api/version", h.getVersion)
 
 	// Serve web UI
 	h.mux.Handle("GET /", http.FileServer(http.Dir("web")))
@@ -206,6 +223,14 @@ func (h *Handler) startLive(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("[api] startLive: SUCCESS stream=%s dest=%s", req.Stream, rtmpDest)
+
+	// Persist UI config
+	audioEnabled := req.Audio
+	h.uiCfg.Merge(uiconfig.UIConfig{
+		YouTubeKey:   req.YouTubeKey,
+		AudioEnabled: &audioEnabled,
+	})
+
 	writeJSON(w, http.StatusOK, map[string]string{"status": "live", "stream": req.Stream, "rtmp_dest": rtmpDest})
 }
 
@@ -312,6 +337,14 @@ func (h *Handler) startOverlay(w http.ResponseWriter, r *http.Request) {
 	h.sw.SetOverlay(pngPath)
 
 	log.Printf("[api] startOverlay: SUCCESS event=%s session=%s png=%s", req.EventID, req.SessionID, pngPath)
+
+	// Persist overlay config — save the original input URL if provided, otherwise event_id
+	overlayInput := req.URL
+	if overlayInput == "" {
+		overlayInput = req.EventID
+	}
+	h.uiCfg.SetOverlay(overlayInput, req.Format, req.MaxRows, req.Scale)
+
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status":   "started",
 		"event_id": req.EventID,
@@ -433,6 +466,12 @@ func (h *Handler) commentaryUpdate(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[api] commentaryUpdate: enabled=%v cameraVol=%.2f", cc.Enabled, cc.CameraVolume)
 	h.sw.SetCommentary(cc)
 
+	// Persist camera volume
+	if req.CameraVolume != nil {
+		vol := int(*req.CameraVolume * 100)
+		h.uiCfg.SetCameraVolume(vol)
+	}
+
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
@@ -469,4 +508,24 @@ func (h *Handler) commentarySlot(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+// --- UI Config API ---
+
+func (h *Handler) getConfig(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, h.uiCfg.Get())
+}
+
+func (h *Handler) postConfig(w http.ResponseWriter, r *http.Request) {
+	var patch uiconfig.UIConfig
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: %v", err)
+		return
+	}
+	h.uiCfg.Merge(patch)
+	writeJSON(w, http.StatusOK, h.uiCfg.Get())
+}
+
+func (h *Handler) getVersion(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"build": h.buildVersion})
 }
