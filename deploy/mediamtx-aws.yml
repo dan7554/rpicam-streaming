@@ -27,7 +27,7 @@ webrtcAddress: :8889
 
 # ICE configuration for WebRTC behind NLB
 # IMPORTANT: Replace <EIP> with the Elastic IP after terraform apply
-webrtcICEHostNAT1To1IPs: [44.233.157.202]
+webrtcICEHostNAT1To1IPs: [44.226.0.76]
 webrtcICEUDPMuxAddress: :8189
 webrtcICETCPMuxAddress: :8189
 
