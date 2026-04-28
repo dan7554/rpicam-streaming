@@ -68,6 +68,30 @@
             </div>
         </section>
 
+        <!-- Commentary -->
+        <section id="commentary-section">
+            <h2>Commentary</h2>
+            <div class="controls">
+                <div class="commentary-slots">
+                    <div class="commentary-slot" id="commentary-slot-0">
+                        <span class="slot-label">Commentator 1</span>
+                        <button id="btn-comm-0" onclick="toggleCommentary(0)">Join</button>
+                        <label>Mic: <input type="range" id="comm-vol-0" min="0" max="100" value="100" oninput="updateCommentaryVolume()"></label>
+                        <span id="comm-status-0" class="comm-status">Disconnected</span>
+                    </div>
+                    <div class="commentary-slot" id="commentary-slot-1">
+                        <span class="slot-label">Commentator 2</span>
+                        <button id="btn-comm-1" onclick="toggleCommentary(1)">Join</button>
+                        <label>Mic: <input type="range" id="comm-vol-1" min="0" max="100" value="100" oninput="updateCommentaryVolume()"></label>
+                        <span id="comm-status-1" class="comm-status">Disconnected</span>
+                    </div>
+                </div>
+                <div class="commentary-master">
+                    <label>Camera Audio: <input type="range" id="camera-vol" min="0" max="100" value="30" oninput="updateCommentaryVolume()"></label>
+                </div>
+            </div>
+        </section>
+
         <!-- Live Output Preview -->
         <section id="output-section" class="hidden">
             <h2>Live Output Preview</h2>
@@ -81,6 +105,6 @@
         </section>
     </main>
 
-    <script src="app.js?v=7"></script>
+    <script src="app.js?v=8"></script>
 </body>
 </html>

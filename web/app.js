@@ -608,3 +608,194 @@ function updateOverlayUI(data) {
         btnStop.disabled = true;
     }
 }
+
+// --- Commentary ---
+
+const commentaryState = {
+    slots: [
+        { pc: null, stream: null, sessionURL: null, active: false },
+        { pc: null, stream: null, sessionURL: null, active: false },
+    ],
+};
+
+async function toggleCommentary(slot) {
+    if (commentaryState.slots[slot].active) {
+        await leaveCommentary(slot);
+    } else {
+        await joinCommentary(slot);
+    }
+}
+
+async function joinCommentary(slot) {
+    const statusEl = document.getElementById(`comm-status-${slot}`);
+    const btn = document.getElementById(`btn-comm-${slot}`);
+
+    try {
+        statusEl.textContent = 'Connecting...';
+        statusEl.className = 'comm-status';
+
+        // Capture mic audio
+        const stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+            },
+            video: false,
+        });
+
+        const pc = new RTCPeerConnection({ iceServers: [] });
+
+        // Add audio track for publishing
+        stream.getAudioTracks().forEach(track => {
+            pc.addTrack(track, stream);
+        });
+
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+
+        // Wait for ICE gathering
+        await new Promise((resolve) => {
+            if (pc.iceGatheringState === 'complete') return resolve();
+            const check = () => {
+                if (pc.iceGatheringState === 'complete') {
+                    pc.removeEventListener('icegatheringstatechange', check);
+                    resolve();
+                }
+            };
+            pc.addEventListener('icegatheringstatechange', check);
+            setTimeout(resolve, 2000);
+        });
+
+        // WHIP publish to MediaMTX
+        const whipPath = `commentary-${slot + 1}`;
+        const res = await fetch(`${WEBRTC_BASE}/${whipPath}/whip`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/sdp' },
+            body: pc.localDescription.sdp,
+        });
+
+        if (!res.ok) {
+            throw new Error(`WHIP publish failed: ${res.status}`);
+        }
+
+        const answerSDP = await res.text();
+        await pc.setRemoteDescription({ type: 'answer', sdp: answerSDP });
+
+        const sessionURL = res.headers.get('Location');
+
+        commentaryState.slots[slot] = { pc, stream, sessionURL, active: true };
+
+        statusEl.textContent = 'Connected';
+        statusEl.className = 'comm-status connected';
+        btn.textContent = 'Leave';
+        btn.style.background = '#f44336';
+
+        // Notify server this slot is active
+        await fetch(`${API_BASE}/api/commentary/slot`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                slot: slot,
+                active: true,
+                volume: parseInt(document.getElementById(`comm-vol-${slot}`).value) / 100,
+            }),
+        });
+
+        // Enable commentary mixing on first join
+        await fetch(`${API_BASE}/api/commentary/update`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: true }),
+        });
+
+        // Reconnect on failure
+        pc.onconnectionstatechange = () => {
+            if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+                console.warn(`Commentary slot ${slot} disconnected, cleaning up`);
+                leaveCommentary(slot);
+            }
+        };
+
+    } catch (err) {
+        console.error(`Commentary join failed for slot ${slot}:`, err);
+        statusEl.textContent = 'Failed: ' + err.message;
+        statusEl.className = 'comm-status';
+        btn.textContent = 'Join';
+        btn.style.background = '';
+    }
+}
+
+async function leaveCommentary(slot) {
+    const state = commentaryState.slots[slot];
+    const statusEl = document.getElementById(`comm-status-${slot}`);
+    const btn = document.getElementById(`btn-comm-${slot}`);
+
+    // Stop mic
+    if (state.stream) {
+        state.stream.getTracks().forEach(t => t.stop());
+    }
+
+    // Close peer connection
+    if (state.pc) {
+        state.pc.close();
+    }
+
+    // Delete WHIP session if we have one
+    if (state.sessionURL) {
+        try {
+            await fetch(state.sessionURL, { method: 'DELETE' });
+        } catch { /* ignore */ }
+    }
+
+    commentaryState.slots[slot] = { pc: null, stream: null, sessionURL: null, active: false };
+
+    statusEl.textContent = 'Disconnected';
+    statusEl.className = 'comm-status';
+    btn.textContent = 'Join';
+    btn.style.background = '';
+
+    // Notify server
+    await fetch(`${API_BASE}/api/commentary/slot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slot: slot, active: false }),
+    });
+
+    // Disable commentary if no slots active
+    const anyActive = commentaryState.slots.some(s => s.active);
+    if (!anyActive) {
+        await fetch(`${API_BASE}/api/commentary/update`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: false }),
+        });
+    }
+}
+
+let commentaryVolumeTimeout = null;
+function updateCommentaryVolume() {
+    // Debounce to avoid spamming the API
+    clearTimeout(commentaryVolumeTimeout);
+    commentaryVolumeTimeout = setTimeout(async () => {
+        const cameraVol = parseInt(document.getElementById('camera-vol').value) / 100;
+        const vol0 = parseInt(document.getElementById('comm-vol-0').value) / 100;
+        const vol1 = parseInt(document.getElementById('comm-vol-1').value) / 100;
+
+        await fetch(`${API_BASE}/api/commentary/update`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ camera_volume: cameraVol }),
+        });
+
+        // Update individual slot volumes
+        for (let i = 0; i < 2; i++) {
+            const vol = i === 0 ? vol0 : vol1;
+            await fetch(`${API_BASE}/api/commentary/slot`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ slot: i, volume: vol }),
+            });
+        }
+    }, 300);
+}

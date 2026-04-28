@@ -52,6 +52,20 @@ type Switcher struct {
 	audioDevice     string // avfoundation audio device index, empty = anullsrc
 	restartCount    int    // consecutive restart count for backoff
 	restartBackoff  time.Duration
+	commentary      CommentaryConfig // live commentary mixing
+}
+
+// CommentaryConfig holds the state for browser-based commentary mixing.
+type CommentaryConfig struct {
+	Enabled      bool    // whether commentary mixing is active
+	Slots        []CommentarySlot
+	CameraVolume float64 // 0.0–1.0, volume of camera/ambient audio
+}
+
+// CommentarySlot represents one commentator's audio feed.
+type CommentarySlot struct {
+	Active bool    // whether this slot has a connected commentator
+	Volume float64 // 0.0–1.0
 }
 
 // buildDefaultPipeline returns the GStreamer pipeline string for the default (no overlay) mode.
@@ -139,6 +153,13 @@ func New(rtspBase, mediaMTXAPI string, bf BridgeFactory, cameras []string) *Swit
 		cmdFactory:    defaultCmdFactory,
 		bridgeFactory: bf,
 		cameras:       cameras,
+		commentary: CommentaryConfig{
+			CameraVolume: 0.3,
+			Slots: []CommentarySlot{
+				{Volume: 1.0},
+				{Volume: 1.0},
+			},
+		},
 	}
 }
 
@@ -342,6 +363,114 @@ func (s *Switcher) StopAll() {
 	log.Printf("[switcher] StopAll complete")
 }
 
+// hasActiveCommentary returns true if any commentary slot is active.
+func (s *Switcher) hasActiveCommentary() bool {
+	for _, slot := range s.commentary.Slots {
+		if slot.Active {
+			return true
+		}
+	}
+	return false
+}
+
+// CommentaryStatus returns the current commentary configuration.
+func (s *Switcher) CommentaryStatus() CommentaryConfig {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Return a copy
+	cc := s.commentary
+	cc.Slots = make([]CommentarySlot, len(s.commentary.Slots))
+	copy(cc.Slots, s.commentary.Slots)
+	return cc
+}
+
+// SetCommentary updates the commentary configuration and restarts the pipeline
+// if currently live. Slots are initialized if not already set.
+func (s *Switcher) SetCommentary(cc CommentaryConfig) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	log.Printf("[switcher] SetCommentary: enabled=%v cameraVol=%.2f slots=%d", cc.Enabled, cc.CameraVolume, len(cc.Slots))
+
+	// Initialize 2 slots if none provided
+	if len(cc.Slots) == 0 {
+		cc.Slots = []CommentarySlot{
+			{Active: false, Volume: 1.0},
+			{Active: false, Volume: 1.0},
+		}
+	}
+
+	s.commentary = cc
+
+	// Restart pipeline if live
+	if s.live && !s.localMode {
+		log.Printf("[switcher] restarting pipeline for commentary change...")
+		s.restartPipeline()
+	}
+}
+
+// SetCommentarySlot updates a single commentary slot and restarts if needed.
+func (s *Switcher) SetCommentarySlot(index int, active bool, volume float64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if index < 0 || index >= len(s.commentary.Slots) {
+		return fmt.Errorf("invalid slot index %d", index)
+	}
+
+	wasActive := s.hasActiveCommentary()
+	s.commentary.Slots[index].Active = active
+	s.commentary.Slots[index].Volume = volume
+	nowActive := s.hasActiveCommentary()
+
+	log.Printf("[switcher] SetCommentarySlot[%d]: active=%v volume=%.2f (wasActive=%v nowActive=%v)", index, active, volume, wasActive, nowActive)
+
+	// Only restart if commentary state actually changed and we're live
+	if s.live && !s.localMode && (wasActive != nowActive || (s.commentary.Enabled && nowActive)) {
+		log.Printf("[switcher] restarting pipeline for commentary slot change...")
+		s.restartPipeline()
+	}
+	return nil
+}
+
+// SetCommentaryVolume updates volume levels without restarting the pipeline
+// if only volumes changed (pipeline restart needed for slot active/inactive changes).
+func (s *Switcher) SetCommentaryVolume(cameraVol float64, slotVolumes []float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.commentary.CameraVolume = cameraVol
+	for i, v := range slotVolumes {
+		if i < len(s.commentary.Slots) {
+			s.commentary.Slots[i].Volume = v
+		}
+	}
+
+	// Volume changes require pipeline restart since we can't change
+	// GStreamer element properties on a running gst-launch pipeline
+	if s.live && !s.localMode && s.commentary.Enabled && s.hasActiveCommentary() {
+		log.Printf("[switcher] restarting pipeline for volume change...")
+		s.restartPipeline()
+	}
+}
+
+// restartPipeline stops the current pipeline and starts a new one.
+// Must be called with s.mu held.
+func (s *Switcher) restartPipeline() {
+	oldCmd := s.cmd
+	if err := s.startFFmpeg(); err != nil {
+		log.Printf("[switcher] pipeline restart FAILED: %v", err)
+		s.cmd = oldCmd
+		return
+	}
+	if oldCmd != nil && oldCmd.Process != nil {
+		log.Printf("[switcher] stopping old pipeline PID=%d", oldCmd.Process.Pid)
+		if err := oldCmd.Process.Signal(os.Interrupt); err != nil {
+			_ = oldCmd.Process.Kill()
+		}
+	}
+}
+
 func (s *Switcher) startFFmpeg() error {
 	// Read from bridge proxy if available, otherwise fallback to direct RTSP
 	var rtspURL string
@@ -354,9 +483,14 @@ func (s *Switcher) startFFmpeg() error {
 	}
 	rtmpURL := s.rtmpDest
 
-	log.Printf("[switcher] startFFmpeg: %s → %s (active=%s overlayPath=%q audioDevice=%q)", rtspURL, rtmpURL, s.activeStream, s.overlayPath, s.audioDevice)
+	log.Printf("[switcher] startFFmpeg: %s → %s (active=%s overlayPath=%q audioDevice=%q commentary=%v)", rtspURL, rtmpURL, s.activeStream, s.overlayPath, s.audioDevice, s.commentary.Enabled)
 
-	s.cmd = s.cmdFactory(rtspURL, rtmpURL, s.audioDevice)
+	// Choose the appropriate cmd factory based on commentary state
+	factory := s.cmdFactory
+	if s.commentary.Enabled && s.hasActiveCommentary() {
+		factory = commentaryCmdFactory(s.rtspBase, s.commentary, s.overlayPath)
+	}
+	s.cmd = factory(rtspURL, rtmpURL, s.audioDevice)
 	s.cmd.Stderr = os.Stderr
 
 	log.Printf("[switcher] startFFmpeg: launching process %q with args: %v", s.cmd.Path, s.cmd.Args)

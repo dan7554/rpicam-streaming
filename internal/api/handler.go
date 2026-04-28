@@ -67,6 +67,9 @@ func (h *Handler) routes() {
 	h.mux.HandleFunc("POST /api/overlay/stop", h.stopOverlay)
 	h.mux.HandleFunc("GET /api/overlay/status", h.overlayStatus)
 	h.mux.HandleFunc("GET /api/audio/devices", h.getAudioDevices)
+	h.mux.HandleFunc("GET /api/commentary/status", h.commentaryStatus)
+	h.mux.HandleFunc("POST /api/commentary/update", h.commentaryUpdate)
+	h.mux.HandleFunc("POST /api/commentary/slot", h.commentarySlot)
 
 	// Serve web UI
 	h.mux.Handle("GET /", http.FileServer(http.Dir("web")))
@@ -385,4 +388,85 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, format string, args ...any) {
 	writeJSON(w, status, map[string]string{"error": fmt.Sprintf(format, args...)})
+}
+
+// --- Commentary API ---
+
+func (h *Handler) commentaryStatus(w http.ResponseWriter, r *http.Request) {
+	cc := h.sw.CommentaryStatus()
+
+	type slotResp struct {
+		Index  int     `json:"index"`
+		Active bool    `json:"active"`
+		Volume float64 `json:"volume"`
+	}
+	slots := make([]slotResp, len(cc.Slots))
+	for i, s := range cc.Slots {
+		slots[i] = slotResp{Index: i, Active: s.Active, Volume: s.Volume}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled":       cc.Enabled,
+		"camera_volume": cc.CameraVolume,
+		"slots":         slots,
+	})
+}
+
+func (h *Handler) commentaryUpdate(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled      *bool    `json:"enabled"`
+		CameraVolume *float64 `json:"camera_volume"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: %v", err)
+		return
+	}
+
+	cc := h.sw.CommentaryStatus()
+	if req.Enabled != nil {
+		cc.Enabled = *req.Enabled
+	}
+	if req.CameraVolume != nil {
+		cc.CameraVolume = *req.CameraVolume
+	}
+
+	log.Printf("[api] commentaryUpdate: enabled=%v cameraVol=%.2f", cc.Enabled, cc.CameraVolume)
+	h.sw.SetCommentary(cc)
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+func (h *Handler) commentarySlot(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Slot   int      `json:"slot"`
+		Active *bool    `json:"active"`
+		Volume *float64 `json:"volume"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: %v", err)
+		return
+	}
+
+	cc := h.sw.CommentaryStatus()
+	if req.Slot < 0 || req.Slot >= len(cc.Slots) {
+		writeError(w, http.StatusBadRequest, "invalid slot %d (have %d)", req.Slot, len(cc.Slots))
+		return
+	}
+
+	active := cc.Slots[req.Slot].Active
+	volume := cc.Slots[req.Slot].Volume
+	if req.Active != nil {
+		active = *req.Active
+	}
+	if req.Volume != nil {
+		volume = *req.Volume
+	}
+
+	log.Printf("[api] commentarySlot[%d]: active=%v volume=%.2f", req.Slot, active, volume)
+	if err := h.sw.SetCommentarySlot(req.Slot, active, volume); err != nil {
+		writeError(w, http.StatusBadRequest, "%v", err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }

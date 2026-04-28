@@ -320,3 +320,65 @@ h2 {
     background: #555;
     cursor: not-allowed;
 }
+
+/* Commentary */
+.commentary-slots {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.commentary-slot {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    background: #1a1a2e;
+    border-radius: 6px;
+}
+
+.commentary-slot .slot-label {
+    min-width: 110px;
+    font-weight: 600;
+}
+
+.commentary-slot button {
+    min-width: 60px;
+}
+
+.commentary-slot label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85em;
+}
+
+.commentary-slot input[type="range"] {
+    width: 100px;
+}
+
+.comm-status {
+    font-size: 0.8em;
+    color: #888;
+}
+
+.comm-status.connected {
+    color: #4caf50;
+}
+
+.commentary-master {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.commentary-master label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.commentary-master input[type="range"] {
+    width: 150px;
+}
