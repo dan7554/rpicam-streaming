@@ -8,6 +8,11 @@ A Go-based streaming system combining **MediaMTX**, **GStreamer**, and a custom 
 - **GStreamer pipelines** — video encoding, audio mixing, and overlay composition
 - **Browser-based commentary** — WHIP publish from the web UI, mixed via GStreamer audiomixer
 - **Race timing overlays** — MYLAPS/SpeedHive live timing rendered as a PNG timing tower
+- **Flag status indicators** — Red, Yellow, Green, and Checkered (checker pattern) flag overlay
+- **Custom overlay title** — Override the SpeedHive session name with a custom title
+- **SpeedHive Results API** — Supports both live timing and `/sessions/{id}` result URLs
+- **Multi-camera viewer** — Dedicated `/viewer` page with full-screen camera grid and click-to-switch
+- **Kick commentator** — Remove commentators from slots via the admin UI
 - **Multi-destination output** — YouTube RTMP, local RTMP, WebRTC preview
 - **Low-latency preview** — WebRTC with HLS fallback
 - **AWS deployment** — Terraform infrastructure-as-code (ALB, NLB, EC2)
@@ -53,12 +58,14 @@ A Go-based streaming system combining **MediaMTX**, **GStreamer**, and a custom 
            ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                      Web UI :8080                           │
-│  • Camera preview grid (WebRTC / HLS)                       │
+│  • Camera preview grid (WebRTC / HLS) with toggle           │
 │  • One-click camera switching                               │
 │  • Go Live / Stop controls with YouTube key                 │
-│  • MYLAPS overlay controls (format, scale, rows)            │
-│  • Commentary: 2 slots with per-mic + camera volume         │
+│  • MYLAPS overlay controls (format, scale, rows, title)     │
+│  • Flag controls (Red, Yellow, Green, Checkered, Clear)     │
+│  • Commentary: 2 slots with per-mic + camera volume + kick  │
 │  • Live output preview                                      │
+│  • /viewer — full-screen multi-camera grid                  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -167,13 +174,17 @@ make clean    # Remove build artifacts
 | `POST` | `/api/switch` | Switch camera (`{"stream": "cam3"}`) |
 | `POST` | `/api/live/start` | Start streaming (`{"stream", "youtube_key", "audio"}`) |
 | `POST` | `/api/live/stop` | Stop streaming |
-| `POST` | `/api/overlay/start` | Start timing overlay (`{"event_id", "format", "scale"}`) |
+| `POST` | `/api/overlay/start` | Start timing overlay (`{"event_id", "format", "scale", "title"}`) |
 | `POST` | `/api/overlay/stop` | Stop overlay |
 | `GET` | `/api/overlay/status` | Overlay active status + competitor count |
+| `POST` | `/api/overlay/flag` | Set flag status (`{"status": "red"}`) or clear (`{"status": ""}`) |
 | `GET` | `/api/commentary/status` | Commentary config (enabled, volumes, slots) |
 | `POST` | `/api/commentary/update` | Set commentary enabled + camera volume |
 | `POST` | `/api/commentary/slot` | Update commentator slot (active, volume) |
+| `POST` | `/api/commentary/kick` | Kick a commentator from their slot |
 | `GET` | `/api/audio/devices` | List macOS audio devices |
+| `GET` | `/api/version` | Build version info |
+| `GET` | `/viewer` | Full-screen multi-camera viewer page |
 
 ## AWS Deployment
 

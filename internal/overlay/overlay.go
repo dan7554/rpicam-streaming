@@ -32,7 +32,7 @@ type Competitor struct {
 	Class   string `json:"cln"`
 }
 
-// sessionResp is the raw MYLAPS API response.
+// sessionResp is the raw MYLAPS live timing API response.
 type sessionResp struct {
 	Competitors []Competitor `json:"l"`
 	Laps        int          `json:"ls"`    // laps completed by leader
@@ -40,6 +40,39 @@ type sessionResp struct {
 	RaceName    string       `json:"rnNam"` // session/race name
 	RaceTime    string       `json:"rcTm"`  // race elapsed time
 	EventName   string       `json:"eNam"`  // event name
+}
+
+// resultsResp is the EventResults API response for /sessions/{id}/classification.
+type resultsResp struct {
+	Type    string `json:"type"`
+	BestLap struct {
+		Name      string  `json:"name"`
+		LapNumber int     `json:"lapNumber"`
+		LapTime   string  `json:"lapTime"`
+		Speed     float64 `json:"speed"`
+	} `json:"bestLap"`
+	Rows []resultsRow `json:"rows"`
+}
+
+type resultsRow struct {
+	Name         string `json:"name"`
+	Position     int    `json:"position"`
+	StartNumber  string `json:"startNumber"`
+	BestTime     string `json:"bestTime"`
+	NumberOfLaps int    `json:"numberOfLaps"`
+	TotalTime    string `json:"totalTime"`
+	ResultClass  string `json:"resultClass"`
+	Status       string `json:"status"`
+	Difference   struct {
+		LapsBehind     int    `json:"lapsBehind"`
+		TimeDifference string `json:"timeDifference"`
+	} `json:"difference"`
+}
+
+// resultsSessionMeta is the session metadata from the EventResults API.
+type resultsSessionMeta struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
 }
 
 // Format controls the overlay layout style.
@@ -55,6 +88,7 @@ type Overlay struct {
 	eventID     string
 	sessionID   string
 	apiBase     string
+	resultsBase string // eventresults-api base URL
 	pngPath     string
 	competitors []Competitor
 	sessionName string
@@ -65,19 +99,24 @@ type Overlay struct {
 	maxRows     int
 	scale       int
 	interval    time.Duration
+	titleOverride string
+	flagStatus    string
+	useResultsAPI bool // true when using /sessions/{id} URL format
 	stopCh      chan struct{}
 	wg          sync.WaitGroup
 }
 
 // Config for creating an overlay.
 type Config struct {
-	EventID   string
-	SessionID string // if empty, uses /active endpoint
-	PNGPath   string // where to write the overlay PNG
-	Format    string // "full", "condensed", "minimal" (default "full")
-	MaxRows   int    // max competitors to show (default 10)
-	Scale     int    // render scale factor (default 1, use 2 for 1080p)
-	Interval  time.Duration
+	EventID    string
+	SessionID  string // if empty, uses /active endpoint
+	PNGPath    string // where to write the overlay PNG
+	Format     string // "full", "condensed", "minimal" (default "full")
+	MaxRows    int    // max competitors to show (default 10)
+	Scale      int    // render scale factor (default 1, use 2 for 1080p)
+	Interval   time.Duration
+	Title      string // custom title override (replaces SpeedHive session name)
+	FlagStatus string // flag status text, e.g. "Red Flag" (empty = no flag shown)
 }
 
 func New(cfg Config) *Overlay {
@@ -99,15 +138,19 @@ func New(cfg Config) *Overlay {
 		cfg.Scale = 1
 	}
 	return &Overlay{
-		eventID:   cfg.EventID,
-		sessionID: cfg.SessionID,
-		apiBase:   "https://lt-api.speedhive.com/api",
-		pngPath:   cfg.PNGPath,
-		format:    cfg.Format,
-		maxRows:   cfg.MaxRows,
-		scale:     cfg.Scale,
-		interval:  cfg.Interval,
-		stopCh:    make(chan struct{}),
+		eventID:       cfg.EventID,
+		sessionID:     cfg.SessionID,
+		apiBase:       "https://lt-api.speedhive.com/api",
+		resultsBase:   "https://eventresults-api.speedhive.com/api/v0.2.3/eventresults",
+		pngPath:       cfg.PNGPath,
+		format:        cfg.Format,
+		maxRows:       cfg.MaxRows,
+		scale:         cfg.Scale,
+		interval:      cfg.Interval,
+		titleOverride: cfg.Title,
+		flagStatus:    cfg.FlagStatus,
+		useResultsAPI: cfg.EventID == "" && cfg.SessionID != "",
+		stopCh:        make(chan struct{}),
 	}
 }
 
@@ -141,7 +184,130 @@ func (o *Overlay) Stop() {
 	log.Printf("[overlay] stopped")
 }
 
+// SetFlagStatus updates the flag status text and triggers a re-render.
+func (o *Overlay) SetFlagStatus(status string) {
+	o.mu.Lock()
+	o.flagStatus = status
+	o.mu.Unlock()
+	// Re-render immediately with new flag status
+	if err := o.render(); err != nil {
+		log.Printf("[overlay] SetFlagStatus re-render error: %v", err)
+	}
+}
+
 func (o *Overlay) poll() {
+	if o.useResultsAPI {
+		o.pollResults()
+	} else {
+		o.pollLiveTiming()
+	}
+}
+
+func (o *Overlay) pollResults() {
+	classURL := fmt.Sprintf("%s/sessions/%s/classification", o.resultsBase, o.sessionID)
+	log.Printf("[overlay] pollResults: GET %s", classURL)
+
+	data, err := o.fetchJSON(classURL)
+	if err != nil {
+		log.Printf("[overlay] pollResults: %v", err)
+		return
+	}
+
+	var results resultsResp
+	if err := json.Unmarshal(data, &results); err != nil {
+		log.Printf("[overlay] pollResults: JSON decode error: %v", err)
+		return
+	}
+
+	// Fetch session name if not already set and no title override
+	o.mu.RLock()
+	needName := o.sessionName == "" && o.titleOverride == ""
+	o.mu.RUnlock()
+	if needName {
+		metaURL := fmt.Sprintf("%s/sessions/%s", o.resultsBase, o.sessionID)
+		if metaData, err := o.fetchJSON(metaURL); err == nil {
+			var meta resultsSessionMeta
+			if json.Unmarshal(metaData, &meta) == nil && meta.Name != "" {
+				o.mu.Lock()
+				o.sessionName = meta.Name
+				o.mu.Unlock()
+			}
+		}
+	}
+
+	// Convert results rows to Competitor format
+	comps := make([]Competitor, 0, len(results.Rows))
+	for _, r := range results.Rows {
+		if r.Status != "Normal" {
+			continue
+		}
+		gap := ""
+		if r.Difference.LapsBehind > 0 {
+			gap = fmt.Sprintf("%d Lap", r.Difference.LapsBehind)
+			if r.Difference.LapsBehind > 1 {
+				gap += "s"
+			}
+		} else if r.Difference.TimeDifference != "" && r.Difference.TimeDifference != "00.000" {
+			gap = "+" + r.Difference.TimeDifference
+		}
+		comps = append(comps, Competitor{
+			Pos:     fmt.Sprintf("%d", r.Position),
+			Number:  r.StartNumber,
+			Name:    r.Name,
+			BestLap: r.BestTime,
+			Gap:     gap,
+			Laps:    r.NumberOfLaps,
+			Class:   r.ResultClass,
+		})
+	}
+
+	log.Printf("[overlay] pollResults: got %d competitors", len(comps))
+
+	o.mu.Lock()
+	o.competitors = comps
+	if len(comps) > 0 && o.sessionName == "" {
+		o.sessionName = comps[0].Class
+	}
+	if len(comps) > 0 {
+		o.laps = comps[0].Laps
+	}
+	o.mu.Unlock()
+
+	if err := o.render(); err != nil {
+		log.Printf("[overlay] pollResults: render error: %v", err)
+	} else {
+		log.Printf("[overlay] pollResults: rendered %d rows to %s", min(len(comps), o.maxRows), o.pngPath)
+	}
+}
+
+func (o *Overlay) fetchJSON(url string) ([]byte, error) {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("request create error: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Origin", "https://speedhive.mylaps.com")
+	req.Header.Set("Referer", "https://speedhive.mylaps.com/")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP error: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		io.Copy(io.Discard, resp.Body)
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read error: %w", err)
+	}
+	return body, nil
+}
+
+func (o *Overlay) pollLiveTiming() {
 	var url string
 	if o.sessionID != "" {
 		url = fmt.Sprintf("%s/events/%s/sessions/%s/data", o.apiBase, o.eventID, o.sessionID)
@@ -215,10 +381,14 @@ func (o *Overlay) render() error {
 	o.mu.RLock()
 	comps := o.competitors
 	sessionName := o.sessionName
+	if o.titleOverride != "" {
+		sessionName = o.titleOverride
+	}
 	laps := o.laps
 	lapsToGo := o.lapsToGo
 	raceTime := o.raceTime
 	format := o.format
+	flagStatus := o.flagStatus
 	o.mu.RUnlock()
 
 	// Filter out DNS/DNF entries
@@ -237,11 +407,11 @@ func (o *Overlay) render() error {
 
 	switch format {
 	case FormatCondensed:
-		return o.renderCondensed(comps[:n], sessionName, laps, lapsToGo, raceTime, bestLapTime, bestLapNum)
+		return o.renderCondensed(comps[:n], sessionName, laps, lapsToGo, raceTime, bestLapTime, bestLapNum, flagStatus)
 	case FormatMinimal:
-		return o.renderMinimal(comps[:n], sessionName, laps, lapsToGo, raceTime, bestLapTime, bestLapNum)
+		return o.renderMinimal(comps[:n], sessionName, laps, lapsToGo, raceTime, bestLapTime, bestLapNum, flagStatus)
 	default:
-		return o.renderFull(comps[:n], sessionName, laps, lapsToGo, raceTime, bestLapTime, bestLapNum)
+		return o.renderFull(comps[:n], sessionName, laps, lapsToGo, raceTime, bestLapTime, bestLapNum, flagStatus)
 	}
 }
 
@@ -317,7 +487,7 @@ func titleCase(s string) string {
 }
 
 // renderFull is the original wide format: P, #, Name, Laps, Gap
-func (o *Overlay) renderFull(comps []Competitor, sessionName string, laps, lapsToGo int, raceTime string, bestLapTime, bestLapNum string) error {
+func (o *Overlay) renderFull(comps []Competitor, sessionName string, laps, lapsToGo int, raceTime string, bestLapTime, bestLapNum string, flagStatus string) error {
 	face := inconsolata.Bold8x16
 
 	const (
@@ -331,18 +501,34 @@ func (o *Overlay) renderFull(comps []Competitor, sessionName string, laps, lapsT
 		colName    = 170
 		colLaps    = 50
 		colGap     = 90
-		totalW     = colPos + colNum + colName + colLaps + colGap + padX*2
+		towerW     = colPos + colNum + colName + colLaps + colGap + padX*2
+		flagGap    = 12
+		flagPadX   = 10
+		flagPadY   = 6
 	)
 	n := len(comps)
 	totalH := headerH + subHeaderH + rowH*n + 4
 
+	// Calculate flag box dimensions
+	flagBoxW := 0
+	flagBoxH := 0
+	if flagStatus != "" {
+		flagBoxW = len(flagStatus)*charW + flagPadX*2
+		flagBoxH = 16 + flagPadY*2
+	}
+
+	totalW := towerW
+	if flagBoxW > 0 {
+		totalW = towerW + flagGap + flagBoxW
+	}
+
 	img := image.NewRGBA(image.Rect(0, 0, totalW, totalH))
 
 	bgColor := color.RGBA{0, 0, 0, 200}
-	fillRect(img, 0, 0, totalW, totalH, bgColor)
+	fillRect(img, 0, 0, towerW, totalH, bgColor)
 
 	headerColor := color.RGBA{20, 20, 80, 230}
-	fillRect(img, 0, 0, totalW, headerH, headerColor)
+	fillRect(img, 0, 0, towerW, headerH, headerColor)
 
 	white := color.RGBA{255, 255, 255, 255}
 	yellow := color.RGBA{255, 255, 0, 255}
@@ -356,6 +542,24 @@ func (o *Overlay) renderFull(comps []Competitor, sessionName string, laps, lapsT
 	}
 	drawString(img, face, padX, headerH-8, title, white)
 
+	// Flag status — standalone box to the right of the tower, vertically below header
+	if flagStatus != "" {
+		flagX := towerW + flagGap
+		flagY := headerH + subHeaderH + 4 // same gap as between title and rows
+		flagBg := flagColor(flagStatus)
+		flagText := strings.ToUpper(flagStatus)
+		flagTextW := len(flagText)*charW + flagPadX*2
+		if flagTextW > flagBoxW {
+			flagBoxW = flagTextW
+		}
+		fillRect(img, flagX, flagY, flagBoxW, flagBoxH, flagBg)
+		textColor := white
+		if strings.Contains(strings.ToLower(flagStatus), "yellow") {
+			textColor = color.RGBA{0, 0, 0, 255}
+		}
+		drawString(img, face, flagX+flagPadX, flagY+flagBoxH-flagPadY-2, flagText, textColor)
+	}
+
 	lapsInfo := ""
 	if lapsToGo > 0 {
 		lapsInfo = fmt.Sprintf("Lap %d  %d to go", laps, lapsToGo)
@@ -363,24 +567,24 @@ func (o *Overlay) renderFull(comps []Competitor, sessionName string, laps, lapsT
 		lapsInfo = fmt.Sprintf("Lap %d", laps)
 	}
 	if lapsInfo != "" {
-		lapsInfoX := totalW - padX - len(lapsInfo)*charW
+		lapsInfoX := towerW - padX - len(lapsInfo)*charW
 		drawString(img, face, lapsInfoX, headerH-8, lapsInfo, yellow)
 	}
 
 	subHeaderColor := color.RGBA{15, 15, 60, 220}
-	fillRect(img, 0, headerH, totalW, subHeaderH, subHeaderColor)
+	fillRect(img, 0, headerH, towerW, subHeaderH, subHeaderColor)
 	if raceTime != "" {
 		drawString(img, face, padX, headerH+subHeaderH-5, "Race: "+raceTime, cyan)
 	}
 	if bestLapTime != "" {
 		blStr := fmt.Sprintf("Best: %s (#%s)", bestLapTime, bestLapNum)
-		blX := totalW - padX - len(blStr)*charW
+		blX := towerW - padX - len(blStr)*charW
 		drawString(img, face, blX, headerH+subHeaderH-5, blStr, color.RGBA{255, 0, 255, 255})
 	}
 
 	y0 := headerH + subHeaderH
 	headerRowColor := color.RGBA{40, 40, 40, 200}
-	fillRect(img, 0, y0, totalW, rowH, headerRowColor)
+	fillRect(img, 0, y0, towerW, rowH, headerRowColor)
 	drawString(img, face, padX, y0+rowH-6, "P", gray)
 	drawString(img, face, padX+colPos, y0+rowH-6, "#", gray)
 	drawString(img, face, padX+colPos+colNum, y0+rowH-6, "Name", gray)
@@ -392,7 +596,7 @@ func (o *Overlay) renderFull(comps []Competitor, sessionName string, laps, lapsT
 		ry := y0 + rowH*(i+1)
 
 		if i%2 == 1 {
-			fillRect(img, 0, ry, totalW, rowH, color.RGBA{30, 30, 30, 200})
+			fillRect(img, 0, ry, towerW, rowH, color.RGBA{30, 30, 30, 200})
 		}
 
 		posColor := white
@@ -422,14 +626,14 @@ func (o *Overlay) renderFull(comps []Competitor, sessionName string, laps, lapsT
 
 // renderCondensed draws a narrow left-side tower: P, #, "J. Doe", Gap
 // Header is a separate bar; data rows are compact underneath.
-func (o *Overlay) renderCondensed(comps []Competitor, sessionName string, laps, lapsToGo int, raceTime string, bestLapTime, bestLapNum string) error {
+func (o *Overlay) renderCondensed(comps []Competitor, sessionName string, laps, lapsToGo int, raceTime string, bestLapTime, bestLapNum string, flagStatus string) error {
 	face := inconsolata.Bold8x16
 
 	const (
 		rowH      = 22
 		titleH    = 26
 		bestLapH  = 20
-		gapH      = 4 // space between header and data
+		gapH      = 4 // space between header and data, and between boxes
 		padX      = 8
 		charW     = 8
 		colPos    = 28  // "1" / "20"
@@ -437,6 +641,7 @@ func (o *Overlay) renderCondensed(comps []Competitor, sessionName string, laps, 
 		colName   = 112 // "J. Giannotto" (14 chars)
 		colGap    = 64  // "+1.23"
 		dataW     = colPos + colNum + colName + colGap + padX*2
+		boxPadX   = 10
 	)
 	n := len(comps)
 
@@ -463,12 +668,51 @@ func (o *Overlay) renderCondensed(comps []Competitor, sessionName string, laps, 
 		headerW = dataW
 	}
 
+	// Build lap info text
+	lapText := ""
+	totalLaps := laps + lapsToGo
+	if lapsToGo == 1 {
+		lapText = "FINAL LAP"
+	} else if lapsToGo > 0 && lapsToGo <= 5 {
+		lapText = fmt.Sprintf("%d LAPS TO GO", lapsToGo)
+	} else if lapsToGo > 5 {
+		lapText = fmt.Sprintf("Lap %d of %d", laps, totalLaps)
+	} else if laps > 0 {
+		lapText = fmt.Sprintf("Lap %d", laps)
+	}
+
+	// Lap and flag boxes: same height as titleH, inline horizontally to the right of header
+	lapBoxW := 0
+	if lapText != "" {
+		lapBoxW = len(lapText)*charW + boxPadX*2
+	}
+
+	flagBoxW := 0
+	isCheckered := strings.Contains(strings.ToLower(flagStatus), "checker")
+	if flagStatus != "" {
+		if isCheckered {
+			flagBoxW = titleH * 2 // fixed width checker pattern, no text
+		} else {
+			flagText := strings.ToUpper(flagStatus)
+			flagBoxW = len(flagText)*charW + boxPadX*2
+		}
+	}
+
+	// Image width: header + gap + lap box + gap + flag box
+	imgW := headerW
+	if lapBoxW > 0 {
+		imgW += gapH + lapBoxW
+	}
+	if flagBoxW > 0 {
+		imgW += gapH + flagBoxW
+	}
+
 	totalH := headerH + gapH + rowH*n + 2
 
-	img := image.NewRGBA(image.Rect(0, 0, headerW, totalH))
+	img := image.NewRGBA(image.Rect(0, 0, imgW, totalH))
 
 	// Transparent base (header may be wider than data)
-	fillRect(img, 0, 0, headerW, totalH, color.RGBA{0, 0, 0, 0})
+	fillRect(img, 0, 0, imgW, totalH, color.RGBA{0, 0, 0, 0})
 
 	// Header bar — dark blue, full width
 	headerColor := color.RGBA{15, 18, 60, 245}
@@ -483,6 +727,48 @@ func (o *Overlay) renderCondensed(comps []Competitor, sessionName string, laps, 
 
 	// Title row
 	drawString(img, face, padX, titleH-8, sessionName, white)
+
+	// Right-side boxes: lap and flag inline horizontally, same height as title bar
+	curX := headerW + gapH
+
+	// Lap info box
+	if lapText != "" {
+		lapBg := color.RGBA{15, 18, 60, 245} // same blue as header
+		fillRect(img, curX, 0, lapBoxW, titleH, lapBg)
+		drawString(img, face, curX+boxPadX, titleH-8, lapText, white)
+		curX += lapBoxW + gapH
+	}
+
+	// Flag status box — to the right of lap box, same height
+	if flagStatus != "" {
+		if isCheckered {
+			// Draw checker pattern: alternating black/white squares
+			sqSize := titleH / 4
+			if sqSize < 3 {
+				sqSize = 3
+			}
+			black := color.RGBA{0, 0, 0, 255}
+			for row := 0; row < titleH; row++ {
+				for col := 0; col < flagBoxW; col++ {
+					if (row/sqSize+col/sqSize)%2 == 0 {
+						img.SetRGBA(curX+col, row, white)
+					} else {
+						img.SetRGBA(curX+col, row, black)
+					}
+				}
+			}
+		} else {
+			flagBg := flagColor(flagStatus)
+			flagText := strings.ToUpper(flagStatus)
+			fillRect(img, curX, 0, flagBoxW, titleH, flagBg)
+			textColor := white
+			if strings.Contains(strings.ToLower(flagStatus), "yellow") {
+				textColor = color.RGBA{0, 0, 0, 255}
+			}
+			drawString(img, face, curX+boxPadX, titleH-8, flagText, textColor)
+		}
+	}
+
 	// Best lap row (below title)
 	if bestLapTime != "" {
 		drawString(img, face, padX, titleH+bestLapH-6, blText, color.RGBA{255, 0, 255, 255})
@@ -532,7 +818,7 @@ func (o *Overlay) renderCondensed(comps []Competitor, sessionName string, laps, 
 }
 
 // renderMinimal draws an ultra-compact tower: P, #, Gap
-func (o *Overlay) renderMinimal(comps []Competitor, sessionName string, laps, lapsToGo int, raceTime string, bestLapTime, bestLapNum string) error {
+func (o *Overlay) renderMinimal(comps []Competitor, sessionName string, laps, lapsToGo int, raceTime string, bestLapTime, bestLapNum string, flagStatus string) error {
 	face := inconsolata.Bold8x16
 
 	const (
@@ -635,4 +921,21 @@ func drawString(img *image.RGBA, face font.Face, x, y int, s string, col color.R
 		Dot:  fixed.Point26_6{X: fixed.I(x), Y: fixed.I(y)},
 	}
 	d.DrawString(s)
+}
+
+// flagColor returns the background color for a given flag status text.
+func flagColor(status string) color.RGBA {
+	s := strings.ToLower(status)
+	switch {
+	case strings.Contains(s, "red"):
+		return color.RGBA{220, 30, 30, 255}
+	case strings.Contains(s, "yellow"):
+		return color.RGBA{230, 190, 0, 255}
+	case strings.Contains(s, "green"):
+		return color.RGBA{30, 160, 50, 255}
+	case strings.Contains(s, "checker"):
+		return color.RGBA{40, 40, 40, 255}
+	default:
+		return color.RGBA{220, 30, 30, 255}
+	}
 }

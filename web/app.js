@@ -40,7 +40,13 @@ async function init() {
     });
 
     // Start WebRTC players (HLS fallback)
-    STREAMS.forEach(startPreview);
+    const previewsEnabled = localStorage.getItem('cam-previews-enabled') !== 'false';
+    document.getElementById('cam-previews-enabled').checked = previewsEnabled;
+    if (previewsEnabled) {
+        STREAMS.forEach(startPreview);
+    } else {
+        document.getElementById('camera-grid').style.display = 'none';
+    }
 
     // Poll status
     setInterval(pollStatus, 2000);
@@ -60,6 +66,10 @@ async function init() {
     // Overlay URL: server > localStorage
     const overlayUrl = serverCfg.overlay_url || localStorage.getItem('overlay-url') || '';
     if (overlayUrl) document.getElementById('overlay-url').value = overlayUrl;
+
+    // Overlay title: localStorage
+    const overlayTitle = localStorage.getItem('overlay-title') || '';
+    if (overlayTitle) document.getElementById('overlay-title').value = overlayTitle;
 
     // Overlay format: server > default
     if (serverCfg.overlay_format) document.getElementById('overlay-format').value = serverCfg.overlay_format;
@@ -197,6 +207,25 @@ function cleanupWebRTC(name) {
         p.pc.close();
     }
     delete players[name];
+}
+
+function toggleCamPreviews() {
+    const enabled = document.getElementById('cam-previews-enabled').checked;
+    localStorage.setItem('cam-previews-enabled', enabled);
+    const grid = document.getElementById('camera-grid');
+    if (enabled) {
+        grid.style.display = '';
+        STREAMS.forEach(name => {
+            if (!players[name]) startPreview(name);
+        });
+    } else {
+        grid.style.display = 'none';
+        STREAMS.forEach(name => {
+            cleanupWebRTC(name);
+            const video = document.getElementById(`video-${name}`);
+            if (video) video.srcObject = null;
+        });
+    }
 }
 
 function startHLS(name) {
@@ -352,10 +381,14 @@ function updateCommentaryUI(data) {
         const i = slot.index;
         const statusEl = document.getElementById(`comm-status-${i}`);
         const btn = document.getElementById(`btn-comm-${i}`);
+        const kickBtn = document.getElementById(`btn-kick-${i}`);
         if (!statusEl || !btn) continue;
 
         // Skip if this is our own active slot (we manage our own state)
-        if (commentaryState.slots[i].active) continue;
+        if (commentaryState.slots[i].active) {
+            if (kickBtn) kickBtn.classList.add('hidden');
+            continue;
+        }
 
         if (slot.active) {
             // Someone else is on this slot
@@ -364,6 +397,7 @@ function updateCommentaryUI(data) {
             btn.textContent = 'In Use';
             btn.disabled = true;
             btn.style.background = '#666';
+            if (kickBtn) kickBtn.classList.remove('hidden');
         } else {
             // Slot is free — only reset if we previously showed "In Use"
             if (btn.textContent === 'In Use') {
@@ -373,7 +407,23 @@ function updateCommentaryUI(data) {
                 btn.disabled = false;
                 btn.style.background = '';
             }
+            if (kickBtn) kickBtn.classList.add('hidden');
         }
+    }
+}
+
+async function kickCommentary(slot) {
+    if (!confirm(`Kick Commentator ${slot + 1}?`)) return;
+    try {
+        await fetch(`${API_BASE}/api/commentary/kick`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ slot }),
+        });
+        const kickBtn = document.getElementById(`btn-kick-${slot}`);
+        if (kickBtn) kickBtn.classList.add('hidden');
+    } catch (err) {
+        console.error('Kick failed:', err);
     }
 }
 
@@ -609,6 +659,9 @@ async function startOverlay() {
     const scale = parseInt(document.getElementById('overlay-scale').value, 10) || 1;
     localStorage.setItem('overlay-scale', scale);
 
+    const title = document.getElementById('overlay-title').value.trim();
+    localStorage.setItem('overlay-title', title);
+
     const body = {};
     if (input.startsWith('http')) {
         body.url = input;
@@ -618,6 +671,7 @@ async function startOverlay() {
     body.format = format;
     body.max_rows = maxRows;
     body.scale = scale;
+    if (title) body.title = title;
 
     try {
         const res = await fetch(`${API_BASE}/api/overlay/start`, {
@@ -663,6 +717,7 @@ function updateOverlayUI(data) {
     const competitors = document.getElementById('overlay-competitors');
     const btnStart = document.getElementById('btn-overlay-start');
     const btnStop = document.getElementById('btn-overlay-stop');
+    const flagControls = document.getElementById('flag-controls');
 
     if (data.active) {
         statusText.textContent = 'Active';
@@ -670,12 +725,14 @@ function updateOverlayUI(data) {
         competitors.textContent = `${data.competitors} competitors`;
         btnStart.disabled = true;
         btnStop.disabled = false;
+        if (flagControls) flagControls.classList.remove('hidden');
     } else {
         statusText.textContent = 'Off';
         statusText.className = '';
         competitors.textContent = '';
         btnStart.disabled = false;
         btnStop.disabled = true;
+        if (flagControls) flagControls.classList.add('hidden');
     }
 }
 
@@ -943,4 +1000,20 @@ function updateCommentaryVolume() {
             body: JSON.stringify({ camera_volume: cameraVol }),
         });
     }, 300);
+}
+
+async function setFlag(flagStatus) {
+    try {
+        const res = await fetch(`${API_BASE}/api/overlay/flag`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ flag_status: flagStatus }),
+        });
+        if (res.ok) {
+            const label = document.getElementById('flag-status-text');
+            if (label) label.textContent = flagStatus ? `Active: ${flagStatus}` : '';
+        }
+    } catch (err) {
+        console.error('Set flag failed:', err);
+    }
 }

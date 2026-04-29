@@ -18,7 +18,10 @@
     <main>
         <!-- Stream Previews -->
         <section id="previews">
-            <h2>Camera Feeds</h2>
+            <h2>Camera Feeds
+                <label class="cam-toggle"><input type="checkbox" id="cam-previews-enabled" checked onchange="toggleCamPreviews()"> Show Previews</label>
+                <a href="/viewer" target="_blank" class="viewer-link">Open Viewer ↗</a>
+            </h2>
             <div class="grid" id="camera-grid">
                 <!-- Populated by JS -->
             </div>
@@ -46,6 +49,7 @@
             <h2>Timing Overlay</h2>
             <div class="controls">
                 <input type="text" id="overlay-url" placeholder="SpeedHive URL or Event ID" autocomplete="off">
+                <input type="text" id="overlay-title" placeholder="Custom title (optional, overrides SpeedHive)" autocomplete="off">
                 <div class="overlay-options">
                     <label for="overlay-format">Format:</label>
                     <select id="overlay-format">
@@ -62,6 +66,15 @@
                     <button id="btn-overlay-start" onclick="startOverlay()">Start Overlay</button>
                     <button id="btn-overlay-stop" onclick="stopOverlay()" disabled>Stop</button>
                 </div>
+            </div>
+            <div class="flag-controls hidden" id="flag-controls">
+                <label>Flag:</label>
+                <button class="flag-btn flag-red" onclick="setFlag('Red Flag')">Red Flag</button>
+                <button class="flag-btn flag-yellow" onclick="setFlag('Yellow Flag')">Yellow Flag</button>
+                <button class="flag-btn flag-green" onclick="setFlag('Green Flag')">Green Flag</button>
+                <button class="flag-btn flag-checkered" onclick="setFlag('Checkered Flag')"></button>
+                <button class="flag-btn flag-clear" onclick="setFlag('')">Clear</button>
+                <span id="flag-status-text" class="flag-status-text"></span>
             </div>
             <div id="overlay-status-bar">
                 <span id="overlay-status-text">Off</span>
@@ -80,12 +93,14 @@
                     <div class="commentary-slot" id="commentary-slot-0">
                         <span class="slot-label">Commentator 1</span>
                         <button id="btn-comm-0" onclick="toggleCommentary(0)">Join</button>
+                        <button id="btn-kick-0" class="kick-btn hidden" onclick="kickCommentary(0)">Kick</button>
                         <label>Mic: <input type="range" id="comm-vol-0" min="0" max="100" value="100" oninput="updateCommentaryVolume()"> <span id="comm-vol-0-val">100%</span></label>
                         <span id="comm-status-0" class="comm-status">Disconnected</span>
                     </div>
                     <div class="commentary-slot" id="commentary-slot-1">
                         <span class="slot-label">Commentator 2</span>
                         <button id="btn-comm-1" onclick="toggleCommentary(1)">Join</button>
+                        <button id="btn-kick-1" class="kick-btn hidden" onclick="kickCommentary(1)">Kick</button>
                         <label>Mic: <input type="range" id="comm-vol-1" min="0" max="100" value="100" oninput="updateCommentaryVolume()"> <span id="comm-vol-1-val">100%</span></label>
                         <span id="comm-status-1" class="comm-status">Disconnected</span>
                     </div>

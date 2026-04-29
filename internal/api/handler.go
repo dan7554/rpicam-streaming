@@ -80,13 +80,20 @@ func (h *Handler) routes() {
 	h.mux.HandleFunc("POST /api/overlay/start", h.startOverlay)
 	h.mux.HandleFunc("POST /api/overlay/stop", h.stopOverlay)
 	h.mux.HandleFunc("GET /api/overlay/status", h.overlayStatus)
+	h.mux.HandleFunc("POST /api/overlay/flag", h.overlayFlag)
 	h.mux.HandleFunc("GET /api/audio/devices", h.getAudioDevices)
 	h.mux.HandleFunc("GET /api/commentary/status", h.commentaryStatus)
 	h.mux.HandleFunc("POST /api/commentary/update", h.commentaryUpdate)
 	h.mux.HandleFunc("POST /api/commentary/slot", h.commentarySlot)
+	h.mux.HandleFunc("POST /api/commentary/kick", h.commentaryKick)
 	h.mux.HandleFunc("GET /api/config", h.getConfig)
 	h.mux.HandleFunc("POST /api/config", h.postConfig)
 	h.mux.HandleFunc("GET /api/version", h.getVersion)
+
+	// Serve viewer page at /viewer
+	h.mux.HandleFunc("GET /viewer", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "web/viewer.html")
+	})
 
 	// Serve web UI
 	h.mux.Handle("GET /", http.FileServer(http.Dir("web")))
@@ -247,31 +254,41 @@ func (h *Handler) stopLive(w http.ResponseWriter, r *http.Request) {
 }
 
 type overlayStartReq struct {
-	URL       string `json:"url"`        // SpeedHive URL (alternative to event_id/session_id)
-	EventID   string `json:"event_id"`
-	SessionID string `json:"session_id"` // optional — uses /active if empty
-	Format    string `json:"format"`     // "full", "condensed", "minimal" (default "full")
-	MaxRows   int    `json:"max_rows"`
-	Scale     int    `json:"scale"`      // render scale factor (default 1, use 2 for 1080p)
+	URL        string `json:"url"`         // SpeedHive URL (alternative to event_id/session_id)
+	EventID    string `json:"event_id"`
+	SessionID  string `json:"session_id"`  // optional — uses /active if empty
+	Format     string `json:"format"`      // "full", "condensed", "minimal" (default "full")
+	MaxRows    int    `json:"max_rows"`
+	Scale      int    `json:"scale"`       // render scale factor (default 1, use 2 for 1080p)
+	Title      string `json:"title"`       // custom title override (replaces SpeedHive session name)
+	FlagStatus string `json:"flag_status"` // flag status text, e.g. "Red Flag"
 }
 
 // parseSpeedHiveURL extracts event_id and session_id from a SpeedHive URL.
-// Format: https://speedhive.mylaps.com/livetiming/{event_id}/sessions/{session_id}
+// Supported formats:
+//
+//	https://speedhive.mylaps.com/livetiming/{event_id}
+//	https://speedhive.mylaps.com/livetiming/{event_id}/sessions/{session_id}
+//	https://speedhive.mylaps.com/sessions/{session_id}
 func parseSpeedHiveURL(raw string) (eventID, sessionID string, err error) {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return "", "", fmt.Errorf("invalid URL: %w", err)
 	}
-	// Path: /livetiming/{event_id} or /livetiming/{event_id}/sessions/{session_id}
 	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
-	if len(parts) < 2 || parts[0] != "livetiming" {
-		return "", "", fmt.Errorf("expected /livetiming/{event_id}[/sessions/{session_id}]")
+	// /sessions/{session_id} — session-only URL
+	if len(parts) == 2 && parts[0] == "sessions" {
+		return "", parts[1], nil
 	}
-	eventID = parts[1]
-	if len(parts) >= 4 && parts[2] == "sessions" {
-		sessionID = parts[3]
+	// /livetiming/{event_id}[/sessions/{session_id}]
+	if len(parts) >= 2 && parts[0] == "livetiming" {
+		eventID = parts[1]
+		if len(parts) >= 4 && parts[2] == "sessions" {
+			sessionID = parts[3]
+		}
+		return eventID, sessionID, nil
 	}
-	return eventID, sessionID, nil
+	return "", "", fmt.Errorf("expected /livetiming/{event_id}[/sessions/{session_id}] or /sessions/{session_id}")
 }
 
 func (h *Handler) startOverlay(w http.ResponseWriter, r *http.Request) {
@@ -299,9 +316,9 @@ func (h *Handler) startOverlay(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if req.EventID == "" {
-		log.Printf("[api] startOverlay: no event_id")
-		writeError(w, http.StatusBadRequest, "event_id or url required")
+	if req.EventID == "" && req.SessionID == "" {
+		log.Printf("[api] startOverlay: no event_id or session_id")
+		writeError(w, http.StatusBadRequest, "event_id, session_id, or url required")
 		return
 	}
 
@@ -323,12 +340,14 @@ func (h *Handler) startOverlay(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[api] startOverlay: pngPath=%s overlayDir=%s", pngPath, h.cfg.OverlayDir)
 
 	h.overlay = overlay.New(overlay.Config{
-		EventID:   req.EventID,
-		SessionID: req.SessionID,
-		PNGPath:   pngPath,
-		Format:    req.Format,
-		MaxRows:   req.MaxRows,
-		Scale:     req.Scale,
+		EventID:    req.EventID,
+		SessionID:  req.SessionID,
+		PNGPath:    pngPath,
+		Format:     req.Format,
+		MaxRows:    req.MaxRows,
+		Scale:      req.Scale,
+		Title:      req.Title,
+		FlagStatus: req.FlagStatus,
 	})
 	h.overlay.Start()
 
@@ -379,6 +398,23 @@ func (h *Handler) overlayStatus(w http.ResponseWriter, r *http.Request) {
 		"active":      true,
 		"competitors": len(comps),
 	})
+}
+
+func (h *Handler) overlayFlag(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FlagStatus string `json:"flag_status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: %v", err)
+		return
+	}
+	if h.overlay == nil {
+		writeError(w, http.StatusBadRequest, "no overlay active")
+		return
+	}
+	h.overlay.SetFlagStatus(req.FlagStatus)
+	log.Printf("[api] overlayFlag: set to %q", req.FlagStatus)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "flag_status": req.FlagStatus})
 }
 
 type audioDevice struct {
@@ -508,6 +544,27 @@ func (h *Handler) commentarySlot(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+func (h *Handler) commentaryKick(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Slot int `json:"slot"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: %v", err)
+		return
+	}
+	cc := h.sw.CommentaryStatus()
+	if req.Slot < 0 || req.Slot >= len(cc.Slots) {
+		writeError(w, http.StatusBadRequest, "invalid slot %d", req.Slot)
+		return
+	}
+	log.Printf("[api] commentaryKick[%d]", req.Slot)
+	if err := h.sw.SetCommentarySlot(req.Slot, false, cc.Slots[req.Slot].Volume); err != nil {
+		writeError(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "kicked"})
 }
 
 // --- UI Config API ---

@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Camera Viewer</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📺</text></svg>">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; overflow: hidden; background: #000; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; }
+
+        #viewer-grid {
+            display: grid;
+            width: 100vw;
+            height: 100vh;
+            gap: 2px;
+        }
+
+        .viewer-cell {
+            position: relative;
+            overflow: hidden;
+            background: #111;
+            cursor: pointer;
+            border: 3px solid transparent;
+            transition: border-color 0.2s;
+        }
+
+        .viewer-cell.selected {
+            border-color: #e53935;
+        }
+
+        .viewer-cell video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+        }
+
+        .viewer-cell .cam-label {
+            position: absolute;
+            top: 8px;
+            left: 10px;
+            background: rgba(0,0,0,0.6);
+            padding: 2px 10px;
+            border-radius: 4px;
+            font-size: 13px;
+            font-weight: 600;
+            pointer-events: none;
+        }
+
+        .viewer-cell .cam-status {
+            position: absolute;
+            top: 8px;
+            right: 10px;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #555;
+            pointer-events: none;
+        }
+
+        .viewer-cell .cam-status.ready { background: #4caf50; }
+
+        .viewer-cell.selected .cam-label {
+            background: rgba(229,57,53,0.8);
+            color: white;
+        }
+
+        #toast {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(229,57,53,0.9);
+            color: white;
+            padding: 8px 24px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            opacity: 0;
+            transition: opacity 0.3s;
+            pointer-events: none;
+            z-index: 100;
+        }
+
+        #toast.show { opacity: 1; }
+
+        #status-bar {
+            position: fixed;
+            top: 0;
+            right: 0;
+            padding: 6px 14px;
+            background: rgba(0,0,0,0.7);
+            font-size: 12px;
+            color: #888;
+            z-index: 100;
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        #status-bar .live-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #555;
+            display: inline-block;
+        }
+
+        #status-bar .live-dot.on {
+            background: #e53935;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+    </style>
+</head>
+<body>
+    <div id="viewer-grid"></div>
+    <div id="toast"></div>
+    <div id="status-bar">
+        <span class="live-dot" id="live-dot"></span>
+        <span id="status-text">Idle</span>
+        <span id="active-cam"></span>
+    </div>
+
+    <script>
+        const WEBRTC_BASE = '/webrtc';
+        const API_BASE = '';
+        let STREAMS = [];
+        let activeCam = null;
+        let isLive = false;
+        const players = {};
+
+        async function init() {
+            try {
+                const res = await fetch(`${API_BASE}/api/streams`);
+                const data = await res.json();
+                STREAMS = (data.items || []).map(i => i.name);
+            } catch {
+                STREAMS = ['cam2', 'cam3'];
+            }
+
+            buildGrid();
+            STREAMS.forEach(startPreview);
+            setInterval(pollStatus, 2000);
+            pollStatus();
+        }
+
+        function buildGrid() {
+            const grid = document.getElementById('viewer-grid');
+            const count = STREAMS.length;
+            const cols = count <= 1 ? 1 : count <= 4 ? 2 : 3;
+            const rows = Math.ceil(count / cols);
+            grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+            grid.style.gridTemplateRows = `repeat(${rows}, 1fr)`;
+
+            STREAMS.forEach(name => {
+                const cell = document.createElement('div');
+                cell.className = 'viewer-cell';
+                cell.id = `cell-${name}`;
+                cell.innerHTML = `
+                    <video id="video-${name}" muted autoplay playsinline></video>
+                    <div class="cam-label">${name.toUpperCase()}</div>
+                    <div class="cam-status" id="status-${name}"></div>
+                `;
+                cell.addEventListener('click', () => switchTo(name));
+                grid.appendChild(cell);
+            });
+        }
+
+        async function startPreview(name) {
+            try {
+                await startWebRTC(name);
+            } catch {
+                scheduleRetry(name);
+            }
+        }
+
+        function scheduleRetry(name) {
+            setTimeout(() => {
+                startWebRTC(name).catch(() => scheduleRetry(name));
+            }, 5000);
+        }
+
+        async function startWebRTC(name) {
+            const video = document.getElementById(`video-${name}`);
+            const pc = new RTCPeerConnection({ iceServers: [] });
+
+            pc.addTransceiver('video', { direction: 'recvonly' });
+            pc.addTransceiver('audio', { direction: 'recvonly' });
+
+            pc.ontrack = (event) => {
+                if (event.streams[0]) video.srcObject = event.streams[0];
+            };
+
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+
+            await new Promise((resolve) => {
+                if (pc.iceGatheringState === 'complete') return resolve();
+                const check = () => {
+                    if (pc.iceGatheringState === 'complete') {
+                        pc.removeEventListener('icegatheringstatechange', check);
+                        resolve();
+                    }
+                };
+                pc.addEventListener('icegatheringstatechange', check);
+                setTimeout(resolve, 500);
+            });
+
+            const res = await fetch(`${WEBRTC_BASE}/${name}/whep`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/sdp' },
+                body: pc.localDescription.sdp,
+            });
+            if (!res.ok) throw new Error(`WHEP ${res.status}`);
+
+            const answerSDP = await res.text();
+            await pc.setRemoteDescription({ type: 'answer', sdp: answerSDP });
+
+            const sessionURL = res.headers.get('Location');
+
+            pc.onconnectionstatechange = () => {
+                if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+                    if (players[name]?.pc) players[name].pc.close();
+                    delete players[name];
+                    const statusDot = document.getElementById(`status-${name}`);
+                    if (statusDot) statusDot.classList.remove('ready');
+                    setTimeout(() => startPreview(name), 2000);
+                }
+            };
+
+            players[name] = { pc, sessionURL };
+            const statusDot = document.getElementById(`status-${name}`);
+            if (statusDot) statusDot.classList.add('ready');
+            video.play().catch(() => {});
+        }
+
+        async function switchTo(name) {
+            try {
+                const res = await fetch(`${API_BASE}/api/switch`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ stream: name }),
+                });
+                if (res.ok) {
+                    showToast(`Switched to ${name.toUpperCase()}`);
+                    pollStatus();
+                } else {
+                    const data = await res.json();
+                    showToast(data.error || 'Switch failed');
+                }
+            } catch (err) {
+                showToast('Error: ' + err.message);
+            }
+        }
+
+        async function pollStatus() {
+            try {
+                const res = await fetch(`${API_BASE}/api/status`);
+                const status = await res.json();
+                activeCam = status.active_stream;
+                isLive = status.live;
+
+                // Update status bar
+                const dot = document.getElementById('live-dot');
+                const text = document.getElementById('status-text');
+                const camText = document.getElementById('active-cam');
+                dot.className = 'live-dot' + (isLive ? ' on' : '');
+                text.textContent = isLive ? 'LIVE' : 'Idle';
+                camText.textContent = activeCam ? `Active: ${activeCam.toUpperCase()}` : '';
+
+                // Highlight selected cell
+                STREAMS.forEach(name => {
+                    const cell = document.getElementById(`cell-${name}`);
+                    if (cell) cell.classList.toggle('selected', name === activeCam);
+                });
+            } catch {}
+        }
+
+        function showToast(msg) {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.classList.add('show');
+            setTimeout(() => t.classList.remove('show'), 2000);
+        }
+
+        document.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+</html>
