@@ -126,8 +126,9 @@ func buildPipeline(overlayPath, rtspURL, rtmpURL, audioDevice, rtspBase string, 
 // includes camera audio + 2 commentary RTSP sources. When no commentator is
 // connected, the silence publisher on that path provides silent Opus frames.
 func alwaysOnAudioMix(rtspBase string, cameraVol float64) string {
+	// Camera audio comes as Opus via RTSP (SRT cameras publish Opus over MPEG-TS)
 	return fmt.Sprintf(
-		"cam. ! rtpmp4gdepay ! aacparse ! avdec_aac ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! volume name=camvol volume=%.2f ! audiomixer name=amix latency=200000000 "+
+		"cam. ! rtpopusdepay ! opusdec ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! volume name=camvol volume=%.2f ! audiomixer name=amix latency=200000000 "+
 			"rtspsrc location=%s/commentary-1 protocols=tcp latency=200 name=comm1 "+
 			"comm1. ! rtpopusdepay ! opusdec ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! amix. "+
 			"rtspsrc location=%s/commentary-2 protocols=tcp latency=200 name=comm2 "+

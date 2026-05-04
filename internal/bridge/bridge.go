@@ -39,10 +39,10 @@ type Bridge struct {
 	pendingVideoRebase bool // true = next video keyframe needs offset recalculation
 
 	// Audio uses monotonic timestamp regeneration instead of offset-based
-	// rewriting. The Pi sends audio in burst pairs (33ms+5ms gaps) which
-	// causes GStreamer's jitter buffer to randomly produce artifacts on
-	// startup. We regenerate perfectly-spaced timestamps (1024 samples per
-	// AAC frame at 48kHz) so downstream always sees clean timing.
+	// rewriting. The Pi sends audio in burst pairs which cause GStreamer's
+	// jitter buffer to randomly produce artifacts on startup.
+	// We regenerate perfectly-spaced timestamps so downstream sees clean timing.
+	// Opus at 48kHz with 20ms frames = 960 samples per frame.
 	nextAudioTS  uint32 // next audio RTP timestamp to assign
 	nextAudioSeq uint16 // next audio RTP sequence number to assign
 }
@@ -207,11 +207,11 @@ func (b *Bridge) connectCamera(name string, first bool) error {
 				b.lastVideoSeq = pkt.SequenceNumber
 			} else {
 				// Monotonic audio timestamp regeneration: assign perfectly-
-				// spaced timestamps (1024 samples per AAC frame at 48kHz)
+				// spaced timestamps (960 samples per Opus frame at 48kHz/20ms)
 				// instead of forwarding the Pi's jittery burst timestamps.
 				pkt.Timestamp = b.nextAudioTS
 				pkt.SequenceNumber = b.nextAudioSeq
-				b.nextAudioTS += 1024 // 1024 samples per AAC-LC frame
+				b.nextAudioTS += 960 // 960 samples per Opus frame (20ms at 48kHz)
 				b.nextAudioSeq++
 			}
 			b.mu.Unlock()
