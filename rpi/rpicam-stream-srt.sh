@@ -187,20 +187,19 @@ while true; do
         if [ "$PROTOCOL" = "srt" ]; then
             # SRT with audio: MPEG-TS mux with Opus audio
             # Opus is used because WebRTC (the browser viewer) only supports Opus, not AAC.
-            # Audio queue uses min-threshold-time to delay audio reaching mux,
-            # ensuring video arrives first so the initial MPEG-TS PMT includes both tracks.
-            # Without this, mpegtsmux sends PMT with audio-only (x264enc is slower to start),
-            # and MediaMTX only reads the first PMT, missing the video track entirely.
+            # mpegtsmux latency=3s ensures it waits for data on ALL pads before
+            # writing the first PMT. Without this, audio arrives before x264enc
+            # produces its first frame, so the PMT only lists audio and MediaMTX
+            # (which only reads the first PMT) misses the video track entirely.
             gst-launch-1.0 -e \
                 libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
                 queue max-size-buffers=1 leaky=downstream ! \
                 videoconvert ! x264enc tune=zerolatency speed-preset=faster bitrate=${BITRATE} key-int-max=30 bframes=0 threads=4 ! \
-                h264parse ! mpegtsmux name=mux ! \
+                h264parse ! mpegtsmux name=mux latency=3000000000 ! \
                 srtsink uri="srt://${MEDIAMTX_HOST}:${SRT_PORT}?streamid=publish:${STREAM_NAME}&pkt_size=1316" latency=${SRT_LATENCY} \
                 alsasrc device="$AUDIO_DEVICE" buffer-time=200000 ! "audio/x-raw,rate=48000,channels=1" ! \
                 queue max-size-buffers=1 max-size-time=500000000 leaky=downstream ! \
-                audioconvert ! opusenc bitrate=128000 frame-size=20 ! opusparse ! \
-                queue max-size-buffers=60 max-size-time=2000000000 min-threshold-time=2000000000 ! mux. \
+                audioconvert ! opusenc bitrate=128000 frame-size=20 ! opusparse ! mux. \
                 2>&1 &
         else
             # RTMP with audio
