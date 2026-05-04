@@ -515,3 +515,20 @@ h2 {
     color: #66bb6a;
     text-decoration: underline;
 }
+
+/* Ads */
+.ads-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+.ads-table th, .ads-table td { padding: 6px 8px; text-align: left; border-bottom: 1px solid #333; }
+.ads-table th { color: #aaa; font-size: 0.85em; }
+.ads-table td input[type="checkbox"] { margin: 0; }
+.ads-table .status-ready { color: #4caf50; }
+.ads-table .status-transcoding { color: #ff9800; }
+.ads-table .status-pending { color: #888; }
+.ads-table .status-error { color: #f44336; }
+.ads-table .ad-actions button { background: none; border: none; color: #64b5f6; cursor: pointer; padding: 2px 6px; font-size: 0.9em; }
+.ads-table .ad-actions button:hover { text-decoration: underline; }
+.ads-table .ad-actions button.del-btn { color: #f44336; }
+#ad-preview-container { margin-top: 10px; }
+#ad-preview-container video { max-width: 100%; max-height: 300px; border-radius: 4px; }
+#ad-playback-bar { margin-top: 8px; color: #ff9800; font-weight: bold; }
+#ad-upload-status { margin-left: 8px; color: #aaa; font-size: 0.9em; }

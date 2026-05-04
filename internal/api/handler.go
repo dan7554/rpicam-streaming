@@ -15,6 +15,9 @@ import (
 	"strings"
 	"time"
 
+	"io"
+
+	"github.com/dchristiani/media-mtx/internal/ads"
 	"github.com/dchristiani/media-mtx/internal/config"
 	"github.com/dchristiani/media-mtx/internal/overlay"
 	"github.com/dchristiani/media-mtx/internal/switcher"
@@ -30,6 +33,7 @@ type Handler struct {
 	overlay      *overlay.Overlay
 	uiCfg        *uiconfig.Store
 	fleet        *FleetStore
+	adStore      *ads.Store
 	buildVersion string
 }
 
@@ -67,6 +71,14 @@ func NewHandler(cfg *config.Config, sw *switcher.Switcher) *Handler {
 		return nil
 	}
 
+	// Initialize ad store
+	adDir := filepath.Join(filepath.Dir(cfg.OverlayDir), "ads")
+	if adStore, err := ads.NewStore(adDir); err != nil {
+		log.Printf("[api] WARNING: ads store init failed: %v", err)
+	} else {
+		h.adStore = adStore
+	}
+
 	h.routes()
 	h.startMediaMTXWatchdog()
 	return h
@@ -92,6 +104,15 @@ func (h *Handler) routes() {
 	h.mux.HandleFunc("GET /api/config", h.getConfig)
 	h.mux.HandleFunc("POST /api/config", h.postConfig)
 	h.mux.HandleFunc("GET /api/version", h.getVersion)
+
+	// Ads
+	h.mux.HandleFunc("POST /api/ads/upload", h.adsUpload)
+	h.mux.HandleFunc("GET /api/ads", h.adsList)
+	h.mux.HandleFunc("DELETE /api/ads/{id}", h.adsDelete)
+	h.mux.HandleFunc("POST /api/ads/play", h.adsPlay)
+	h.mux.HandleFunc("POST /api/ads/stop", h.adsStop)
+	h.mux.HandleFunc("GET /api/ads/playback", h.adsPlayback)
+	h.mux.HandleFunc("GET /api/ads/preview/{id}", h.adsPreview)
 
 	// Fleet management
 	h.mux.HandleFunc("POST /api/fleet/heartbeat", h.fleetHeartbeat)
@@ -448,6 +469,133 @@ func (h *Handler) overlayFlag(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[api] overlayFlag: set to %q", req.FlagStatus)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "flag_status": req.FlagStatus})
 }
+
+// --- Ads ---
+
+func (h *Handler) adsUpload(w http.ResponseWriter, r *http.Request) {
+	if h.adStore == nil {
+		writeError(w, http.StatusInternalServerError, "ad store not initialized")
+		return
+	}
+
+	// 500MB max
+	r.ParseMultipartForm(500 << 20)
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "missing file: %v", err)
+		return
+	}
+	defer file.Close()
+
+	name := strings.TrimSuffix(header.Filename, filepath.Ext(header.Filename))
+
+	// Save original
+	origDir := filepath.Join(filepath.Dir(h.cfg.OverlayDir), "ads", "originals")
+	os.MkdirAll(origDir, 0755)
+	ext := filepath.Ext(header.Filename)
+	if ext == "" {
+		ext = ".mp4"
+	}
+	origPath := filepath.Join(origDir, fmt.Sprintf("%d%s", time.Now().UnixNano(), ext))
+	dst, err := os.Create(origPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "save file: %v", err)
+		return
+	}
+	if _, err := io.Copy(dst, file); err != nil {
+		dst.Close()
+		writeError(w, http.StatusInternalServerError, "write file: %v", err)
+		return
+	}
+	dst.Close()
+
+	ad := h.adStore.Add(name, origPath)
+	log.Printf("[api] adsUpload: %s (%s) → transcoding", name, ad.ID)
+	writeJSON(w, http.StatusOK, ad)
+}
+
+func (h *Handler) adsList(w http.ResponseWriter, r *http.Request) {
+	if h.adStore == nil {
+		writeJSON(w, http.StatusOK, []struct{}{})
+		return
+	}
+	writeJSON(w, http.StatusOK, h.adStore.List())
+}
+
+func (h *Handler) adsDelete(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if h.adStore == nil || !h.adStore.Delete(id) {
+		writeError(w, http.StatusNotFound, "ad not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (h *Handler) adsPlay(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: %v", err)
+		return
+	}
+	if len(req.IDs) == 0 {
+		writeError(w, http.StatusBadRequest, "no ad IDs provided")
+		return
+	}
+
+	var files []string
+	var names []string
+	for _, id := range req.IDs {
+		ad := h.adStore.Get(id)
+		if ad == nil {
+			writeError(w, http.StatusNotFound, "ad %s not found", id)
+			return
+		}
+		if ad.Status != "ready" {
+			writeError(w, http.StatusConflict, "ad %s not ready (status: %s)", id, ad.Status)
+			return
+		}
+		files = append(files, ad.TransFile)
+		names = append(names, ad.Name)
+	}
+
+	if err := h.sw.PlayAds(files, names); err != nil {
+		writeError(w, http.StatusConflict, "play ads: %v", err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "playing"})
+}
+
+func (h *Handler) adsStop(w http.ResponseWriter, r *http.Request) {
+	if err := h.sw.StopAds(); err != nil {
+		writeError(w, http.StatusConflict, "stop ads: %v", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+}
+
+func (h *Handler) adsPlayback(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, h.sw.AdStatus())
+}
+
+func (h *Handler) adsPreview(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	ad := h.adStore.Get(id)
+	if ad == nil {
+		writeError(w, http.StatusNotFound, "ad not found")
+		return
+	}
+	// Serve original if not transcoded yet, otherwise transcoded
+	path := ad.TransFile
+	if path == "" {
+		path = ad.OrigFile
+	}
+	http.ServeFile(w, r, path)
+}
+
+// --- Audio ---
 
 type audioDevice struct {
 	Index string `json:"index"`

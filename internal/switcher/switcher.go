@@ -59,6 +59,14 @@ type Switcher struct {
 	silenceProcs    []*exec.Cmd        // silence → UDP (one per slot)
 	relayProcs      []*exec.Cmd        // UDP → commentary-N RTSP (always-on, one per slot)
 	whipBridgeProcs []*exec.Cmd        // commentary-N-whip RTSP → UDP (active when commentator connected)
+
+	// Ad playback
+	adPlaying    bool        // true while an ad playlist is running
+	adCmd        *exec.Cmd   // current ad ffmpeg process
+	adStopCh     chan struct{} // closed to abort ad playlist
+	adCurrentIdx int         // index of current ad in playlist
+	adTotal      int         // total ads in playlist
+	adCurrentName string     // name of currently playing ad
 }
 
 // CommentaryConfig holds the state for browser-based commentary mixing.
@@ -557,6 +565,165 @@ func (s *Switcher) StopLive() error {
 	s.activeStream = ""
 	s.localMode = false
 	log.Printf("[switcher] live session STOPPED")
+	return nil
+}
+
+// AdPlaybackStatus returns the current ad playback state.
+type AdPlaybackStatus struct {
+	Playing    bool   `json:"playing"`
+	CurrentIdx int    `json:"current_idx"`
+	Total      int    `json:"total"`
+	CurrentAd  string `json:"current_ad"`
+}
+
+func (s *Switcher) AdStatus() AdPlaybackStatus {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return AdPlaybackStatus{
+		Playing:    s.adPlaying,
+		CurrentIdx: s.adCurrentIdx,
+		Total:      s.adTotal,
+		CurrentAd:  s.adCurrentName,
+	}
+}
+
+// PlayAds stops the main pipeline, hides overlay, plays ads in order to RTMP+RTSP,
+// then restores the pipeline and overlay. Runs in the background.
+func (s *Switcher) PlayAds(adFiles []string, adNames []string) error {
+	s.mu.Lock()
+	if !s.live {
+		s.mu.Unlock()
+		return fmt.Errorf("not live")
+	}
+	if s.adPlaying {
+		s.mu.Unlock()
+		return fmt.Errorf("ads already playing")
+	}
+	s.adPlaying = true
+	s.adTotal = len(adFiles)
+	s.adCurrentIdx = 0
+	s.adStopCh = make(chan struct{})
+	rtmpDest := s.rtmpDest
+	overlayPath := s.overlayPath
+	s.mu.Unlock()
+
+	go func() {
+		log.Printf("[switcher] ad playback starting: %d ads", len(adFiles))
+
+		// Hide overlay
+		if overlayPath != "" {
+			writeTransparentPNG(overlayPath)
+		}
+
+		// Stop main pipeline (keep bridge alive)
+		s.mu.Lock()
+		s.stopFFmpeg()
+		s.mu.Unlock()
+
+		// Small delay for pipeline teardown
+		time.Sleep(1 * time.Second)
+
+		for i, adFile := range adFiles {
+			select {
+			case <-s.adStopCh:
+				log.Printf("[switcher] ad playback aborted at ad %d/%d", i+1, len(adFiles))
+				goto done
+			default:
+			}
+
+			name := adFile
+			if i < len(adNames) {
+				name = adNames[i]
+			}
+
+			s.mu.Lock()
+			s.adCurrentIdx = i + 1
+			s.adCurrentName = name
+			s.mu.Unlock()
+
+			log.Printf("[switcher] playing ad %d/%d: %s", i+1, len(adFiles), name)
+
+			args := []string{
+				"-re",
+				"-i", adFile,
+				"-c:v", "copy",
+				"-c:a", "copy",
+				"-f", "flv", rtmpDest,
+			}
+
+			cmd := exec.Command("ffmpeg", args...)
+			cmd.Stderr = os.Stderr
+
+			s.mu.Lock()
+			s.adCmd = cmd
+			s.mu.Unlock()
+
+			if err := cmd.Start(); err != nil {
+				log.Printf("[switcher] ad ffmpeg start FAILED: %v", err)
+				continue
+			}
+
+			// Wait for ad to finish or stop signal
+			doneCh := make(chan error, 1)
+			go func() { doneCh <- cmd.Wait() }()
+
+			select {
+			case err := <-doneCh:
+				if err != nil {
+					log.Printf("[switcher] ad %d finished with error: %v", i+1, err)
+				} else {
+					log.Printf("[switcher] ad %d finished cleanly", i+1)
+				}
+			case <-s.adStopCh:
+				cmd.Process.Kill()
+				<-doneCh
+				log.Printf("[switcher] ad %d killed (stop requested)", i+1)
+				goto done
+			}
+
+			// Brief pause between ads
+			if i < len(adFiles)-1 {
+				time.Sleep(500 * time.Millisecond)
+			}
+		}
+
+	done:
+		log.Printf("[switcher] ad playback finished, restoring live pipeline")
+
+		s.mu.Lock()
+		s.adPlaying = false
+		s.adCmd = nil
+		s.adCurrentIdx = 0
+		s.adTotal = 0
+		s.adCurrentName = ""
+
+		// Restart the main pipeline
+		s.restartCount = 0
+		s.restartBackoff = 0
+		if s.live {
+			if err := s.startFFmpeg(); err != nil {
+				log.Printf("[switcher] failed to restart pipeline after ads: %v", err)
+			}
+		}
+		s.mu.Unlock()
+
+		log.Printf("[switcher] live pipeline restored after ads")
+	}()
+
+	return nil
+}
+
+// StopAds aborts the current ad playlist and returns to camera.
+func (s *Switcher) StopAds() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.adPlaying {
+		return fmt.Errorf("no ads playing")
+	}
+	close(s.adStopCh)
+	if s.adCmd != nil && s.adCmd.Process != nil {
+		s.adCmd.Process.Kill()
+	}
 	return nil
 }
 

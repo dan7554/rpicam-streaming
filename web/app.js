@@ -56,6 +56,11 @@ async function init() {
     setInterval(pollOverlayStatus, 3000);
     pollOverlayStatus();
 
+    // Poll ads
+    setInterval(pollAds, 3000);
+    pollAds();
+    setInterval(pollAdPlayback, 2000);
+
     // Load server-side config, fall back to localStorage
     let serverCfg = {};
     try {
@@ -1071,4 +1076,168 @@ async function setFlag(flagStatus) {
     } catch (err) {
         console.error('Set flag failed:', err);
     }
+}
+
+// --- Ads ---
+
+async function uploadAd() {
+    const input = document.getElementById('ad-file');
+    if (!input.files.length) return;
+    const file = input.files[0];
+    const status = document.getElementById('ad-upload-status');
+    status.textContent = `Uploading ${file.name}...`;
+
+    const form = new FormData();
+    form.append('file', file);
+
+    try {
+        const res = await fetch(`${API_BASE}/api/ads/upload`, { method: 'POST', body: form });
+        const data = await res.json();
+        if (res.ok) {
+            status.textContent = `Uploaded! Transcoding...`;
+            pollAds();
+        } else {
+            status.textContent = `Error: ${data.error}`;
+        }
+    } catch (err) {
+        status.textContent = `Upload failed: ${err.message}`;
+    }
+    input.value = '';
+}
+
+async function pollAds() {
+    try {
+        const res = await fetch(`${API_BASE}/api/ads`);
+        const ads = await res.json();
+        renderAdsTable(ads || []);
+    } catch {}
+}
+
+function renderAdsTable(ads) {
+    const tbody = document.getElementById('ads-tbody');
+    if (!tbody) return;
+    const playBtn = document.getElementById('btn-ads-play');
+
+    tbody.innerHTML = '';
+    for (const ad of ads) {
+        const tr = document.createElement('tr');
+        const dur = ad.duration > 0 ? `${Math.round(ad.duration)}s` : '-';
+        const statusClass = `status-${ad.status}`;
+        const isReady = ad.status === 'ready';
+        tr.innerHTML = `
+            <td><input type="checkbox" class="ad-check" data-id="${ad.id}" ${isReady ? '' : 'disabled'}></td>
+            <td>${escapeHtml(ad.name)}</td>
+            <td>${dur}</td>
+            <td><span class="${statusClass}">${ad.status}</span></td>
+            <td class="ad-actions">
+                ${isReady ? `<button onclick="previewAd('${ad.id}')">Preview</button>` : ''}
+                <button class="del-btn" onclick="deleteAd('${ad.id}')">Delete</button>
+            </td>
+        `;
+        tbody.appendChild(tr);
+    }
+
+    // Update select-all state
+    const allChecks = tbody.querySelectorAll('.ad-check:not(:disabled)');
+    const selectAll = document.getElementById('ads-select-all');
+    if (selectAll) selectAll.checked = allChecks.length > 0 && [...allChecks].every(c => c.checked);
+
+    // Enable play button if any checked
+    updateAdPlayButton();
+
+    // Clear upload status if all done
+    const status = document.getElementById('ad-upload-status');
+    if (status && ads.every(a => a.status === 'ready' || a.status === 'error')) {
+        if (status.textContent.includes('Transcoding')) status.textContent = '';
+    }
+}
+
+function escapeHtml(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+}
+
+function toggleAllAds(checked) {
+    document.querySelectorAll('.ad-check:not(:disabled)').forEach(c => c.checked = checked);
+    updateAdPlayButton();
+}
+
+function updateAdPlayButton() {
+    const btn = document.getElementById('btn-ads-play');
+    if (btn) {
+        const any = document.querySelectorAll('.ad-check:checked').length > 0;
+        btn.disabled = !any;
+    }
+}
+
+// Listen for checkbox changes on ads table
+document.addEventListener('change', (e) => {
+    if (e.target.classList.contains('ad-check')) updateAdPlayButton();
+});
+
+function previewAd(id) {
+    const container = document.getElementById('ad-preview-container');
+    const video = document.getElementById('ad-preview-video');
+    if (!container || !video) return;
+    video.src = `${API_BASE}/api/ads/preview/${id}`;
+    container.classList.remove('hidden');
+    video.play();
+}
+
+async function deleteAd(id) {
+    if (!confirm('Delete this ad?')) return;
+    try {
+        await fetch(`${API_BASE}/api/ads/${id}`, { method: 'DELETE' });
+        pollAds();
+    } catch (err) {
+        alert('Delete failed: ' + err.message);
+    }
+}
+
+async function playSelectedAds() {
+    const checks = document.querySelectorAll('.ad-check:checked');
+    const ids = [...checks].map(c => c.dataset.id);
+    if (!ids.length) return;
+
+    try {
+        const res = await fetch(`${API_BASE}/api/ads/play`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+            alert(data.error || 'Failed to play ads');
+        }
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+
+async function stopAds() {
+    try {
+        await fetch(`${API_BASE}/api/ads/stop`, { method: 'POST' });
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+
+async function pollAdPlayback() {
+    try {
+        const res = await fetch(`${API_BASE}/api/ads/playback`);
+        const data = await res.json();
+        const bar = document.getElementById('ad-playback-bar');
+        const text = document.getElementById('ad-playback-text');
+        const stopBtn = document.getElementById('btn-ads-stop');
+        if (data.playing) {
+            bar.classList.remove('hidden');
+            text.textContent = `Playing ad ${data.current_idx}/${data.total}: ${data.current_ad}`;
+            if (stopBtn) stopBtn.disabled = false;
+        } else {
+            bar.classList.add('hidden');
+            text.textContent = '';
+            if (stopBtn) stopBtn.disabled = true;
+        }
+    } catch {}
 }

@@ -87,6 +87,40 @@
             </div>
         </section>
 
+        <!-- Advertisements -->
+        <section id="ads-section">
+            <h2>Advertisements</h2>
+            <div class="controls">
+                <div class="ad-upload">
+                    <input type="file" id="ad-file" accept="video/*" style="display:none" onchange="uploadAd()">
+                    <button onclick="document.getElementById('ad-file').click()">Upload Video</button>
+                    <span id="ad-upload-status"></span>
+                </div>
+                <table id="ads-table" class="ads-table">
+                    <thead>
+                        <tr>
+                            <th><input type="checkbox" id="ads-select-all" onchange="toggleAllAds(this.checked)"></th>
+                            <th>Name</th>
+                            <th>Duration</th>
+                            <th>Status</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="ads-tbody"></tbody>
+                </table>
+                <div class="btn-group" style="margin-top:8px">
+                    <button id="btn-ads-play" onclick="playSelectedAds()" disabled>Play Selected</button>
+                    <button id="btn-ads-stop" onclick="stopAds()" disabled>Stop Ads</button>
+                </div>
+                <div id="ad-playback-bar" class="hidden">
+                    <span id="ad-playback-text"></span>
+                </div>
+                <div id="ad-preview-container" class="hidden">
+                    <video id="ad-preview-video" controls></video>
+                </div>
+            </div>
+        </section>
+
         <!-- Commentary -->
         <section id="commentary-section">
             <h2>Commentary</h2>
