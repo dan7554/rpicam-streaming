@@ -200,7 +200,7 @@ while true; do
                 alsasrc device="$AUDIO_DEVICE" buffer-time=200000 ! "audio/x-raw,rate=48000,channels=1" ! \
                 queue max-size-buffers=1 max-size-time=500000000 leaky=downstream ! \
                 audioconvert ! opusenc bitrate=128000 frame-size=20 ! opusparse ! \
-                queue max-size-buffers=60 max-size-time=2000000000 min-threshold-time=500000000 ! mux. \
+                queue max-size-buffers=60 max-size-time=2000000000 min-threshold-time=2000000000 ! mux. \
                 2>&1 &
         else
             # RTMP with audio
