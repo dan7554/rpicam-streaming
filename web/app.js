@@ -156,6 +156,12 @@ async function startWebRTC(name) {
 
     pc.ontrack = (event) => {
         if (event.streams[0]) video.srcObject = event.streams[0];
+        if (event.receiver && event.receiver.playoutDelayHint !== undefined) {
+            event.receiver.playoutDelayHint = 0;
+        }
+        if (event.receiver && event.receiver.jitterBufferTarget !== undefined) {
+            event.receiver.jitterBufferTarget = 0;
+        }
     };
 
     const offer = await pc.createOffer();
@@ -544,6 +550,12 @@ async function startOutputWebRTC(stream) {
                 video.srcObject = new MediaStream();
             }
             video.srcObject.addTrack(event.track);
+        }
+        if (event.receiver && event.receiver.playoutDelayHint !== undefined) {
+            event.receiver.playoutDelayHint = 0;
+        }
+        if (event.receiver && event.receiver.jitterBufferTarget !== undefined) {
+            event.receiver.jitterBufferTarget = 0;
         }
         video.muted = false;
         video.play().catch(() => {});
