@@ -72,7 +72,7 @@ else
 fi
 
 # 4. Copy files
-echo "[4/6] Deploying files..."
+echo "[4/7] Deploying stream service..."
 ssh "$PI_HOST" "sudo mkdir -p /opt/rpicam-stream"
 scp "$SCRIPT_DIR/rpicam-stream.sh" "$PI_HOST:/tmp/rpicam-stream.sh"
 scp "$SCRIPT_DIR/rpicam-stream.service" "$PI_HOST:/tmp/rpicam-stream.service"
@@ -81,20 +81,40 @@ ssh "$PI_HOST" "
     sudo chmod +x /opt/rpicam-stream/rpicam-stream.sh
     sudo mv /tmp/rpicam-stream.service /etc/systemd/system/rpicam-stream.service
     echo 'MEDIAMTX_HOST=$SERVER_IP' | sudo tee /etc/rpicam-stream.conf > /dev/null
+    echo 'PROTOCOL=srt' | sudo tee -a /etc/rpicam-stream.conf > /dev/null
     echo 'AUDIO_DEVICE=hw:2,0' | sudo tee -a /etc/rpicam-stream.conf > /dev/null
+    echo 'WIDTH=1920' | sudo tee -a /etc/rpicam-stream.conf > /dev/null
+    echo 'HEIGHT=1080' | sudo tee -a /etc/rpicam-stream.conf > /dev/null
+    echo 'BITRATE=3000' | sudo tee -a /etc/rpicam-stream.conf > /dev/null
     sudo systemctl daemon-reload
 "
 
-# 5. Enable and start
-echo "[5/6] Starting service..."
+# 5. Deploy health agent
+echo "[5/7] Deploying health agent..."
+scp "$SCRIPT_DIR/health-agent.sh" "$PI_HOST:/tmp/health-agent.sh"
+scp "$SCRIPT_DIR/health-agent.service" "$PI_HOST:/tmp/health-agent.service"
+DEVICE_NAME=$(ssh "$PI_HOST" "hostname" 2>/dev/null)
+ssh "$PI_HOST" "
+    sudo cp /tmp/health-agent.sh /usr/local/bin/health-agent.sh
+    sudo chmod +x /usr/local/bin/health-agent.sh
+    sudo cp /tmp/health-agent.service /etc/systemd/system/health-agent.service
+    echo 'SERVER_URL=https://stream.racetrackstreaming.com' | sudo tee /etc/health-agent.conf > /dev/null
+    echo 'DEVICE_NAME=$DEVICE_NAME' | sudo tee -a /etc/health-agent.conf > /dev/null
+    echo 'INTERVAL=30' | sudo tee -a /etc/health-agent.conf > /dev/null
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now health-agent
+"
+
+# 6. Enable and start stream
+echo "[6/7] Starting stream service..."
 ssh "$PI_HOST" "
     sudo systemctl stop rpicam-stream 2>/dev/null || true
     sudo systemctl enable rpicam-stream
     sudo systemctl start rpicam-stream
 "
 
-# 6. Verify
-echo "[6/6] Verifying..."
+# 7. Verify
+echo "[7/7] Verifying..."
 sleep 5
 ssh "$PI_HOST" "
     echo '--- Service ---'
@@ -109,10 +129,10 @@ stream_name=$(ssh "$PI_HOST" "hostname | sed 's/rpicam/cam/'")
 echo ""
 echo "=== Deploy complete ==="
 echo "  Stream name: $stream_name"
-echo "  Target: rtmp://$SERVER_IP:1935/$stream_name"
-echo "  View: http://localhost:8080 (select $stream_name)"
+echo "  Protocol: SRT (UDP :8890)"
+echo "  Target: srt://$SERVER_IP:8890 (streamid=publish:$stream_name)"
+echo "  Health agent: reporting to http://$SERVER_IP:8080/api/fleet/heartbeat"
+echo "  View: http://$SERVER_IP:8080 (select $stream_name)"
+echo "  Fleet: http://$SERVER_IP:8080/fleet"
 echo "  Logs: ssh $PI_HOST 'journalctl -fu rpicam-stream'"
-echo ""
-echo "  If behind a Mac firewall, start a tunnel from this machine:"
-echo "    ssh -R 1935:localhost:1935 -N $PI_HOST"
-echo "  Then: ssh $PI_HOST 'sudo sed -i s/MEDIAMTX_HOST=.*/MEDIAMTX_HOST=127.0.0.1/ /etc/rpicam-stream.conf && sudo systemctl restart rpicam-stream'"
+echo "  Health: ssh $PI_HOST 'journalctl -fu health-agent'"

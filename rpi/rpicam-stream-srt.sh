@@ -186,6 +186,11 @@ while true; do
     if $has_audio; then
         if [ "$PROTOCOL" = "srt" ]; then
             # SRT with audio: MPEG-TS mux
+            # Note: MPEG-TS audio uses MPEG audio (mp2) for maximum compatibility with MediaMTX
+            # Audio queue uses min-threshold-time to delay audio reaching mux,
+            # ensuring video arrives first so the initial MPEG-TS PMT includes both tracks.
+            # Without this, mpegtsmux sends PMT with audio-only (x264enc is slower to start),
+            # and MediaMTX only reads the first PMT, missing the video track entirely.
             gst-launch-1.0 -e \
                 libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
                 queue max-size-buffers=1 leaky=downstream ! \
@@ -194,7 +199,8 @@ while true; do
                 srtsink uri="srt://${MEDIAMTX_HOST}:${SRT_PORT}?streamid=publish:${STREAM_NAME}&pkt_size=1316" latency=${SRT_LATENCY} \
                 alsasrc device="$AUDIO_DEVICE" buffer-time=200000 ! "audio/x-raw,rate=48000,channels=1" ! \
                 queue max-size-buffers=1 max-size-time=500000000 leaky=downstream ! \
-                audioconvert ! avenc_aac ! aacparse ! mux. \
+                audioconvert ! avenc_aac bitrate=128000 ! aacparse ! \
+                queue max-size-buffers=60 max-size-time=2000000000 min-threshold-time=500000000 ! mux. \
                 2>&1 &
         else
             # RTMP with audio

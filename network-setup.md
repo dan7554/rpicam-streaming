@@ -34,6 +34,7 @@ sudo nmcli connection up "rpicam-starlink-2"
 sudo nmcli connection add type wifi con-name "rpicam-starlink-5" ssid "rpicam-starlink-5" \
   wifi-sec.key-mgmt wpa-psk wifi-sec.psk "rpicamera" \
   connection.autoconnect yes connection.autoconnect-priority 20 \
-  802-11-wireless.band bg
+  802-11-wireless.band a
 sudo nmcli connection up "rpicam-starlink-5"
+
 
