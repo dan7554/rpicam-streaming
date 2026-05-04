@@ -185,8 +185,8 @@ while true; do
 
     if $has_audio; then
         if [ "$PROTOCOL" = "srt" ]; then
-            # SRT with audio: MPEG-TS mux
-            # Note: MPEG-TS audio uses MPEG audio (mp2) for maximum compatibility with MediaMTX
+            # SRT with audio: MPEG-TS mux with Opus audio
+            # Opus is used because WebRTC (the browser viewer) only supports Opus, not AAC.
             # Audio queue uses min-threshold-time to delay audio reaching mux,
             # ensuring video arrives first so the initial MPEG-TS PMT includes both tracks.
             # Without this, mpegtsmux sends PMT with audio-only (x264enc is slower to start),
@@ -199,7 +199,7 @@ while true; do
                 srtsink uri="srt://${MEDIAMTX_HOST}:${SRT_PORT}?streamid=publish:${STREAM_NAME}&pkt_size=1316" latency=${SRT_LATENCY} \
                 alsasrc device="$AUDIO_DEVICE" buffer-time=200000 ! "audio/x-raw,rate=48000,channels=1" ! \
                 queue max-size-buffers=1 max-size-time=500000000 leaky=downstream ! \
-                audioconvert ! avenc_aac bitrate=128000 ! aacparse ! \
+                audioconvert ! opusenc bitrate=128000 frame-size=20 ! opusparse ! \
                 queue max-size-buffers=60 max-size-time=2000000000 min-threshold-time=500000000 ! mux. \
                 2>&1 &
         else
