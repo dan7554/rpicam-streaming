@@ -56,15 +56,19 @@
                     <select id="overlay-format">
                         <option value="full">Full (P, #, Name, Laps, Gap)</option>
                         <option value="condensed" selected>Condensed (P, #, J. Doe, Gap)</option>
+                        <option value="condensed-nogap">Condensed No Gap (P, #, J. Doe)</option>
+                        <option value="short">Short (P, #, J. Doe, Gap)</option>
+                        <option value="short-nogap">Short No Gap (P, #, J. Doe)</option>
                         <option value="minimal">Minimal (P, #, Gap)</option>
                     </select>
                     <label for="overlay-max-rows">Rows:</label>
-                    <input type="number" id="overlay-max-rows" min="3" max="30" value="20">
+                    <input type="number" id="overlay-max-rows" min="3" max="30" value="25">
                     <label for="overlay-scale">Scale:</label>
                     <input type="number" id="overlay-scale" min="1" max="4" value="1" style="width:50px">
                 </div>
                 <div class="btn-group">
                     <button id="btn-overlay-start" onclick="startOverlay()">Start Overlay</button>
+                    <button id="btn-overlay-update" onclick="updateOverlay()" disabled>Update</button>
                     <button id="btn-overlay-stop" onclick="stopOverlay()" disabled>Stop</button>
                 </div>
             </div>

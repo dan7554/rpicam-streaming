@@ -734,6 +734,26 @@ async function stopOverlay() {
     }
 }
 
+async function updateOverlay() {
+    const format = document.getElementById('overlay-format').value;
+    const maxRows = parseInt(document.getElementById('overlay-max-rows').value, 10) || 0;
+    const scale = parseInt(document.getElementById('overlay-scale').value, 10) || 1;
+    const title = document.getElementById('overlay-title').value.trim();
+    try {
+        const res = await fetch(`${API_BASE}/api/overlay/update`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ format, max_rows: maxRows, scale, title: title || undefined }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+            alert(data.error || 'Failed to update overlay');
+        }
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+
 async function pollOverlayStatus() {
     try {
         const res = await fetch(`${API_BASE}/api/overlay/status`);
@@ -749,6 +769,7 @@ function updateOverlayUI(data) {
     const competitors = document.getElementById('overlay-competitors');
     const btnStart = document.getElementById('btn-overlay-start');
     const btnStop = document.getElementById('btn-overlay-stop');
+    const btnUpdate = document.getElementById('btn-overlay-update');
     const flagControls = document.getElementById('flag-controls');
 
     if (data.active) {
@@ -757,6 +778,7 @@ function updateOverlayUI(data) {
         competitors.textContent = `${data.competitors} competitors`;
         btnStart.disabled = true;
         btnStop.disabled = false;
+        if (btnUpdate) btnUpdate.disabled = false;
         if (flagControls) flagControls.classList.remove('hidden');
     } else {
         statusText.textContent = 'Off';
@@ -764,6 +786,7 @@ function updateOverlayUI(data) {
         competitors.textContent = '';
         btnStart.disabled = false;
         btnStop.disabled = true;
+        if (btnUpdate) btnUpdate.disabled = true;
         if (flagControls) flagControls.classList.add('hidden');
     }
 }

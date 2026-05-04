@@ -8,9 +8,10 @@ import (
 	"image/png"
 	"io"
 	"log"
-	"strings"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -77,10 +78,160 @@ type resultsSessionMeta struct {
 
 // Format controls the overlay layout style.
 const (
-	FormatFull      = "full"      // P, #, Name, Laps, Gap (wide, default 10 rows)
-	FormatCondensed = "condensed" // P, #, "J. Doe", Gap (narrow left-side tower, up to 20 rows)
-	FormatMinimal   = "minimal"   // P, #, Gap (ultra-compact)
+	FormatFull           = "full"           // P, #, Name, Laps, Gap (wide, default 10 rows)
+	FormatCondensed      = "condensed"      // P, #, "J. Doe", Gap (narrow left-side tower, up to 20 rows)
+	FormatCondensedNoGap = "condensed-nogap" // P, #, "J. Doe" (no gap column)
+	FormatShort          = "short"          // P, #, "J. Doe", Gap (3-letter last name)
+	FormatShortNoGap     = "short-nogap"    // P, #, "J. Doe" (3-letter last name, no gap)
+	FormatMinimal        = "minimal"        // P, #, Gap (ultra-compact)
 )
+
+// Style controls the visual appearance of the overlay.
+// Zero values use defaults.
+type Style struct {
+	// Colors (RGBA hex strings like "#0F123CAA", parsed to color.RGBA)
+	HeaderBg     string `json:"header_bg"`      // header bar background
+	AccentColor  string `json:"accent_color"`   // accent line under header
+	RowBgEven    string `json:"row_bg_even"`     // even row background
+	RowBgOdd     string `json:"row_bg_odd"`      // odd row background
+	RowSeparator string `json:"row_separator"`   // thin line between rows
+	TextColor    string `json:"text_color"`      // main text (name) color
+	PosColor     string `json:"pos_color"`       // position number color
+	P1Color      string `json:"p1_color"`        // P1 position color
+	NumColor     string `json:"num_color"`       // car number color
+	GapColor     string `json:"gap_color"`       // gap text color
+	BestLapColor string `json:"best_lap_color"`  // best lap info color
+	LapInfoColor string `json:"lap_info_color"`  // lap count info color
+
+	// Sizing
+	RowHeight    int `json:"row_height"`     // row height in pixels (default 22)
+	HeaderHeight int `json:"header_height"`  // header/title height (default 26)
+	PadX         int `json:"pad_x"`          // left padding (default 8)
+	PadRight     int `json:"pad_right"`      // right padding after last column (default 0)
+	Opacity      int `json:"opacity"`        // row background opacity 0-255 (default 230)
+	ColNameW     int `json:"col_name_w"`     // name column width in pixels (0 = format default)
+	ColGapW      int `json:"col_gap_w"`      // gap column width in pixels (default 64)
+
+	// Element position offsets (pixels, can be negative)
+	FlagOffsetX    int `json:"flag_offset_x"`     // flag box X offset from default
+	FlagOffsetY    int `json:"flag_offset_y"`     // flag box Y offset from default
+	LapInfoOffsetX int `json:"lap_info_offset_x"` // lap info box X offset from default
+	LapInfoOffsetY int `json:"lap_info_offset_y"` // lap info box Y offset from default
+	BestLapOffsetX int `json:"best_lap_offset_x"` // best lap text X offset from default
+	BestLapOffsetY int `json:"best_lap_offset_y"` // best lap text Y offset from default
+	TowerOffsetX   int `json:"tower_offset_x"`    // data rows X offset from default
+	TowerOffsetY   int `json:"tower_offset_y"`    // data rows Y offset from default
+}
+
+// DefaultStyle returns the default dark-blue racing style.
+func DefaultStyle() Style {
+	return Style{
+		HeaderBg:     "#0F123CF5",
+		AccentColor:  "#C8AA00FF",
+		RowBgEven:    "#121632",
+		RowBgOdd:     "#0C0F26",
+		RowSeparator: "#282D46B4",
+		TextColor:    "#FFFFFFFF",
+		PosColor:     "#FFDC28FF",
+		P1Color:      "#FFD700FF",
+		NumColor:     "#DCDCDCFF",
+		GapColor:     "#00D25AFF",
+		BestLapColor: "#FF00FFFF",
+		LapInfoColor: "#FFFFFFFF",
+		RowHeight:    22,
+		HeaderHeight: 26,
+		PadX:         8,
+		PadRight:     0,
+		Opacity:      230,
+		ColNameW:     55,
+		ColGapW:      55,
+		FlagOffsetX:  5,
+	}
+}
+
+// styleColor parses a hex color string to color.RGBA.
+// Supports "#RRGGBB", "#RRGGBBAA", or returns fallback.
+func styleColor(hex string, fallback color.RGBA) color.RGBA {
+	hex = strings.TrimPrefix(hex, "#")
+	if len(hex) == 6 {
+		hex += "FF"
+	}
+	if len(hex) != 8 {
+		return fallback
+	}
+	r, _ := strconv.ParseUint(hex[0:2], 16, 8)
+	g, _ := strconv.ParseUint(hex[2:4], 16, 8)
+	b, _ := strconv.ParseUint(hex[4:6], 16, 8)
+	a, _ := strconv.ParseUint(hex[6:8], 16, 8)
+	return color.RGBA{uint8(r), uint8(g), uint8(b), uint8(a)}
+}
+
+// resolved returns the style with all colors parsed, using defaults for empty values.
+func (s Style) resolved() resolvedStyle {
+	d := DefaultStyle()
+	rs := resolvedStyle{
+		headerBg:     styleColor(or(s.HeaderBg, d.HeaderBg), color.RGBA{15, 18, 60, 245}),
+		accentColor:  styleColor(or(s.AccentColor, d.AccentColor), color.RGBA{200, 170, 0, 255}),
+		rowBgEven:    styleColor(or(s.RowBgEven, d.RowBgEven), color.RGBA{18, 22, 50, 230}),
+		rowBgOdd:     styleColor(or(s.RowBgOdd, d.RowBgOdd), color.RGBA{12, 15, 38, 230}),
+		rowSeparator: styleColor(or(s.RowSeparator, d.RowSeparator), color.RGBA{40, 45, 70, 180}),
+		textColor:    styleColor(or(s.TextColor, d.TextColor), color.RGBA{255, 255, 255, 255}),
+		posColor:     styleColor(or(s.PosColor, d.PosColor), color.RGBA{255, 220, 40, 255}),
+		p1Color:      styleColor(or(s.P1Color, d.P1Color), color.RGBA{255, 215, 0, 255}),
+		numColor:     styleColor(or(s.NumColor, d.NumColor), color.RGBA{220, 220, 220, 255}),
+		gapColor:     styleColor(or(s.GapColor, d.GapColor), color.RGBA{0, 210, 90, 255}),
+		bestLapColor: styleColor(or(s.BestLapColor, d.BestLapColor), color.RGBA{255, 0, 255, 255}),
+		lapInfoColor: styleColor(or(s.LapInfoColor, d.LapInfoColor), color.RGBA{255, 255, 255, 255}),
+		rowHeight:    orInt(s.RowHeight, d.RowHeight),
+		headerHeight: orInt(s.HeaderHeight, d.HeaderHeight),
+		padX:         orInt(s.PadX, d.PadX),
+		padRight:     s.PadRight, // 0 is valid default
+		opacity:      orInt(s.Opacity, d.Opacity),
+		colNameW:     s.ColNameW, // 0 means use format default
+		colGapW:      orInt(s.ColGapW, d.ColGapW),
+		flagOffsetX:    s.FlagOffsetX,
+		flagOffsetY:    s.FlagOffsetY,
+		lapInfoOffsetX: s.LapInfoOffsetX,
+		lapInfoOffsetY: s.LapInfoOffsetY,
+		bestLapOffsetX: s.BestLapOffsetX,
+		bestLapOffsetY: s.BestLapOffsetY,
+		towerOffsetX:   s.TowerOffsetX,
+		towerOffsetY:   s.TowerOffsetY,
+	}
+	// Apply opacity override to row backgrounds
+	if s.Opacity > 0 {
+		rs.rowBgEven.A = uint8(rs.opacity)
+		rs.rowBgOdd.A = uint8(rs.opacity)
+	}
+	return rs
+}
+
+type resolvedStyle struct {
+	headerBg, accentColor                      color.RGBA
+	rowBgEven, rowBgOdd, rowSeparator          color.RGBA
+	textColor, posColor, p1Color, numColor     color.RGBA
+	gapColor, bestLapColor, lapInfoColor       color.RGBA
+	rowHeight, headerHeight, padX, padRight, opacity int
+	colNameW, colGapW                                int
+	flagOffsetX, flagOffsetY                         int
+	lapInfoOffsetX, lapInfoOffsetY                   int
+	bestLapOffsetX, bestLapOffsetY                   int
+	towerOffsetX, towerOffsetY                       int
+}
+
+func or(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+func orInt(a, b int) int {
+	if a != 0 {
+		return a
+	}
+	return b
+}
 
 // Overlay polls a MYLAPS live timing session and renders a PNG timing tower.
 type Overlay struct {
@@ -101,6 +252,7 @@ type Overlay struct {
 	interval    time.Duration
 	titleOverride string
 	flagStatus    string
+	style         Style
 	useResultsAPI bool // true when using /sessions/{id} URL format
 	stopCh      chan struct{}
 	wg          sync.WaitGroup
@@ -124,12 +276,7 @@ func New(cfg Config) *Overlay {
 		cfg.Format = FormatFull
 	}
 	if cfg.MaxRows == 0 {
-		switch cfg.Format {
-		case FormatCondensed:
-			cfg.MaxRows = 20
-		default:
-			cfg.MaxRows = 10
-		}
+		cfg.MaxRows = 25
 	}
 	if cfg.Interval == 0 {
 		cfg.Interval = 4 * time.Second
@@ -192,6 +339,26 @@ func (o *Overlay) SetFlagStatus(status string) {
 	// Re-render immediately with new flag status
 	if err := o.render(); err != nil {
 		log.Printf("[overlay] SetFlagStatus re-render error: %v", err)
+	}
+}
+
+// Update changes overlay settings without restarting the poll loop.
+func (o *Overlay) Update(format string, maxRows, scale int, title string) {
+	o.mu.Lock()
+	if format != "" {
+		o.format = format
+	}
+	if maxRows > 0 {
+		o.maxRows = maxRows
+	}
+	if scale > 0 {
+		o.scale = scale
+	}
+	o.titleOverride = title
+	o.mu.Unlock()
+	log.Printf("[overlay] Update: format=%s maxRows=%d scale=%d title=%q", format, maxRows, scale, title)
+	if err := o.render(); err != nil {
+		log.Printf("[overlay] Update re-render error: %v", err)
 	}
 }
 
@@ -408,6 +575,12 @@ func (o *Overlay) render() error {
 	switch format {
 	case FormatCondensed:
 		return o.renderCondensed(comps[:n], sessionName, laps, lapsToGo, raceTime, bestLapTime, bestLapNum, flagStatus)
+	case FormatCondensedNoGap:
+		return o.renderCondensedVariant(comps[:n], sessionName, laps, lapsToGo, raceTime, bestLapTime, bestLapNum, flagStatus, false, condensedName, 13, 112)
+	case FormatShort:
+		return o.renderCondensedVariant(comps[:n], sessionName, laps, lapsToGo, raceTime, bestLapTime, bestLapNum, flagStatus, true, shortName, 7, 64)
+	case FormatShortNoGap:
+		return o.renderCondensedVariant(comps[:n], sessionName, laps, lapsToGo, raceTime, bestLapTime, bestLapNum, flagStatus, false, shortName, 7, 64)
 	case FormatMinimal:
 		return o.renderMinimal(comps[:n], sessionName, laps, lapsToGo, raceTime, bestLapTime, bestLapNum, flagStatus)
 	default:
@@ -450,11 +623,16 @@ func bestLap(comps []Competitor) (lap string, rider string) {
 }
 
 // truncGap truncates a gap string to hundredths (2 decimal places).
-// "+1.234" → "+1.23", "12.3456" → "12.34", "1 Lap" → "1 Lap"
+// For gaps containing ":" (over 1 minute), decimals are removed entirely.
+// "+1.234" → "+1.23", "+1:23.456" → "+1:23", "1 Lap" → "1 Lap"
 func truncGap(gap string) string {
 	dot := strings.LastIndex(gap, ".")
 	if dot < 0 {
 		return gap
+	}
+	// Over 1 minute: drop all decimals
+	if strings.Contains(gap, ":") {
+		return gap[:dot]
 	}
 	decimals := gap[dot+1:]
 	if len(decimals) > 2 {
@@ -474,7 +652,29 @@ func condensedName(full string) string {
 	}
 	initial := strings.ToUpper(string([]rune(parts[0])[0]))
 	last := titleCase(parts[len(parts)-1])
-	return initial + ". " + last
+	return initial + "." + last
+}
+
+// shortName formats "John Smith" → "J.Smi", "JOHN SMITH" → "J.Smi" (3-letter last name)
+func shortName(full string) string {
+	parts := strings.Fields(strings.TrimSpace(full))
+	if len(parts) == 0 {
+		return ""
+	}
+	if len(parts) == 1 {
+		tc := titleCase(parts[0])
+		if len([]rune(tc)) > 3 {
+			return string([]rune(tc)[:3])
+		}
+		return tc
+	}
+	initial := strings.ToUpper(string([]rune(parts[0])[0]))
+	last := titleCase(parts[len(parts)-1])
+	runes := []rune(last)
+	if len(runes) > 3 {
+		last = string(runes[:3])
+	}
+	return initial + "." + last
 }
 
 func titleCase(s string) string {
@@ -608,7 +808,7 @@ func (o *Overlay) renderFull(comps []Competitor, sessionName string, laps, lapsT
 		if len(name) > 18 {
 			name = name[:18]
 		}
-		gap := c.Gap
+		gap := truncGap(c.Gap)
 		if gap == "" {
 			gap = "-"
 		}
@@ -627,22 +827,36 @@ func (o *Overlay) renderFull(comps []Competitor, sessionName string, laps, lapsT
 // renderCondensed draws a narrow left-side tower: P, #, "J. Doe", Gap
 // Header is a separate bar; data rows are compact underneath.
 func (o *Overlay) renderCondensed(comps []Competitor, sessionName string, laps, lapsToGo int, raceTime string, bestLapTime, bestLapNum string, flagStatus string) error {
-	face := inconsolata.Bold8x16
+	return o.renderCondensedVariant(comps, sessionName, laps, lapsToGo, raceTime, bestLapTime, bestLapNum, flagStatus, true, condensedName, 13, 112)
+}
 
+// renderCondensedVariant is the shared implementation for condensed-style formats.
+// showGap controls whether the gap column is rendered.
+// nameFn formats competitor names. maxNameLen truncates names. colNameW is the column pixel width for names.
+func (o *Overlay) renderCondensedVariant(comps []Competitor, sessionName string, laps, lapsToGo int, raceTime string, bestLapTime, bestLapNum string, flagStatus string, showGap bool, nameFn func(string) string, maxNameLen int, colNameW int) error {
+	face := inconsolata.Bold8x16
+	st := o.style.resolved()
+
+	rowH := st.rowHeight
+	titleH := st.headerHeight
+	padX := st.padX
 	const (
-		rowH      = 22
-		titleH    = 26
 		bestLapH  = 20
-		gapH      = 4 // space between header and data, and between boxes
-		padX      = 8
+		gapH      = 4
 		charW     = 8
-		colPos    = 28  // "1" / "20"
-		colNum    = 40  // "919"
-		colName   = 112 // "J. Giannotto" (14 chars)
-		colGap    = 64  // "+1.23"
-		dataW     = colPos + colNum + colName + colGap + padX*2
+		colPos    = 28
+		colNum    = 40
 		boxPadX   = 10
 	)
+	colGap := st.colGapW
+	colName := colNameW
+	if st.colNameW > 0 {
+		colName = st.colNameW
+	}
+	dataW := colPos + colNum + colName + padX + st.padRight
+	if showGap {
+		dataW += colGap
+	}
 	n := len(comps)
 
 	// Header height: title row + optional best lap row
@@ -691,14 +905,15 @@ func (o *Overlay) renderCondensed(comps []Competitor, sessionName string, laps, 
 	isCheckered := strings.Contains(strings.ToLower(flagStatus), "checker")
 	if flagStatus != "" {
 		if isCheckered {
-			flagBoxW = titleH * 2 // fixed width checker pattern, no text
+			flagText := "CHECKERED"
+			flagBoxW = len(flagText)*charW + boxPadX*2
 		} else {
 			flagText := strings.ToUpper(flagStatus)
 			flagBoxW = len(flagText)*charW + boxPadX*2
 		}
 	}
 
-	// Image width: header + gap + lap box + gap + flag box
+	// Image width: header + gap + lap box + gap + flag box (with offsets)
 	imgW := headerW
 	if lapBoxW > 0 {
 		imgW += gapH + lapBoxW
@@ -706,8 +921,31 @@ func (o *Overlay) renderCondensed(comps []Competitor, sessionName string, laps, 
 	if flagBoxW > 0 {
 		imgW += gapH + flagBoxW
 	}
+	// Expand image to fit offsets
+	extraW := 0
+	if st.flagOffsetX > 0 {
+		extraW = max(extraW, st.flagOffsetX)
+	}
+	if st.lapInfoOffsetX > 0 {
+		extraW = max(extraW, st.lapInfoOffsetX)
+	}
+	if st.towerOffsetX > 0 {
+		extraW = max(extraW, st.towerOffsetX)
+	}
+	imgW += extraW
 
-	totalH := headerH + gapH + rowH*n + 2
+	extraH := 0
+	if st.flagOffsetY > 0 {
+		extraH = max(extraH, st.flagOffsetY)
+	}
+	if st.towerOffsetY > 0 {
+		extraH = max(extraH, st.towerOffsetY)
+	}
+	if st.bestLapOffsetY > 0 {
+		extraH = max(extraH, st.bestLapOffsetY)
+	}
+
+	totalH := headerH + gapH + rowH*n + 2 + extraH
 
 	img := image.NewRGBA(image.Rect(0, 0, imgW, totalH))
 
@@ -715,32 +953,31 @@ func (o *Overlay) renderCondensed(comps []Competitor, sessionName string, laps, 
 	fillRect(img, 0, 0, imgW, totalH, color.RGBA{0, 0, 0, 0})
 
 	// Header bar — dark blue, full width
-	headerColor := color.RGBA{15, 18, 60, 245}
-	fillRect(img, 0, 0, headerW, headerH, headerColor)
+	fillRect(img, 0, 0, headerW, headerH, st.headerBg)
 	// Gold accent line under header
-	fillRect(img, 0, headerH-2, headerW, 2, color.RGBA{200, 170, 0, 255})
+	fillRect(img, 0, headerH-2, headerW, 2, st.accentColor)
 
 	white := color.RGBA{255, 255, 255, 255}
-	yellow := color.RGBA{255, 220, 40, 255}
-	green := color.RGBA{0, 210, 90, 255}
-	numColor := color.RGBA{220, 220, 220, 255}
 
 	// Title row
-	drawString(img, face, padX, titleH-8, sessionName, white)
+	drawString(img, face, padX, titleH-8, sessionName, st.textColor)
 
 	// Right-side boxes: lap and flag inline horizontally, same height as title bar
 	curX := headerW + gapH
 
 	// Lap info box
 	if lapText != "" {
-		lapBg := color.RGBA{15, 18, 60, 245} // same blue as header
-		fillRect(img, curX, 0, lapBoxW, titleH, lapBg)
-		drawString(img, face, curX+boxPadX, titleH-8, lapText, white)
+		lapX := curX + st.lapInfoOffsetX
+		lapY := st.lapInfoOffsetY
+		fillRect(img, lapX, lapY, lapBoxW, titleH, st.headerBg)
+		drawString(img, face, lapX+boxPadX, lapY+titleH-8, lapText, st.lapInfoColor)
 		curX += lapBoxW + gapH
 	}
 
 	// Flag status box — to the right of lap box, same height
 	if flagStatus != "" {
+		flagX := curX + st.flagOffsetX
+		flagY := st.flagOffsetY
 		if isCheckered {
 			// Draw checker pattern: alternating black/white squares
 			sqSize := titleH / 4
@@ -751,67 +988,71 @@ func (o *Overlay) renderCondensed(comps []Competitor, sessionName string, laps, 
 			for row := 0; row < titleH; row++ {
 				for col := 0; col < flagBoxW; col++ {
 					if (row/sqSize+col/sqSize)%2 == 0 {
-						img.SetRGBA(curX+col, row, white)
+						img.SetRGBA(flagX+col, flagY+row, white)
 					} else {
-						img.SetRGBA(curX+col, row, black)
+						img.SetRGBA(flagX+col, flagY+row, black)
 					}
 				}
 			}
 		} else {
 			flagBg := flagColor(flagStatus)
 			flagText := strings.ToUpper(flagStatus)
-			fillRect(img, curX, 0, flagBoxW, titleH, flagBg)
+			fillRect(img, flagX, flagY, flagBoxW, titleH, flagBg)
 			textColor := white
 			if strings.Contains(strings.ToLower(flagStatus), "yellow") {
 				textColor = color.RGBA{0, 0, 0, 255}
 			}
-			drawString(img, face, curX+boxPadX, titleH-8, flagText, textColor)
+			drawString(img, face, flagX+boxPadX, flagY+titleH-8, flagText, textColor)
 		}
 	}
 
 	// Best lap row (below title)
 	if bestLapTime != "" {
-		drawString(img, face, padX, titleH+bestLapH-6, blText, color.RGBA{255, 0, 255, 255})
+		blX := padX + st.bestLapOffsetX
+		blY := titleH + bestLapH - 6 + st.bestLapOffsetY
+		drawString(img, face, blX, blY, blText, st.bestLapColor)
 	}
 
 	// Data rows — left-aligned, narrower than header
-	dataTop := headerH + gapH
+	dataTop := headerH + gapH + st.towerOffsetY
+	towerX := st.towerOffsetX
 	for i := 0; i < n; i++ {
 		c := comps[i]
 		ry := dataTop + rowH*i
 
 		// Alternating row backgrounds
 		if i%2 == 0 {
-			fillRect(img, 0, ry, dataW, rowH, color.RGBA{18, 22, 50, 230})
+			fillRect(img, towerX, ry, dataW, rowH, st.rowBgEven)
 		} else {
-			fillRect(img, 0, ry, dataW, rowH, color.RGBA{12, 15, 38, 230})
+			fillRect(img, towerX, ry, dataW, rowH, st.rowBgOdd)
 		}
 		// Thin separator line
-		fillRect(img, 0, ry+rowH-1, dataW, 1, color.RGBA{40, 45, 70, 180})
+		fillRect(img, towerX, ry+rowH-1, dataW, 1, st.rowSeparator)
 
-		posColor := yellow
+		posColor := st.posColor
 		if c.Pos == "1" {
-			posColor = color.RGBA{255, 215, 0, 255}
+			posColor = st.p1Color
 		}
 
-		name := condensedName(c.Name)
-		if len(name) > 13 {
-			name = name[:13]
-		}
-
-		gap := truncGap(c.Gap)
-		if gap == "" {
-			gap = "-"
-		}
-		if len(gap) > 7 {
-			gap = gap[:7]
+		name := nameFn(c.Name)
+		if len(name) > maxNameLen {
+			name = name[:maxNameLen]
 		}
 
 		textY := ry + rowH - 5
-		drawString(img, face, padX, textY, c.Pos, posColor)
-		drawString(img, face, padX+colPos, textY, c.Number, numColor)
-		drawString(img, face, padX+colPos+colNum, textY, name, white)
-		drawString(img, face, padX+colPos+colNum+colName, textY, gap, green)
+		drawString(img, face, towerX+padX, textY, c.Pos, posColor)
+		drawString(img, face, towerX+padX+colPos, textY, c.Number, st.numColor)
+		drawString(img, face, towerX+padX+colPos+colNum, textY, name, st.textColor)
+		if showGap {
+			gap := truncGap(c.Gap)
+			if gap == "" {
+				gap = "-"
+			}
+			if len(gap) > 7 {
+				gap = gap[:7]
+			}
+			drawString(img, face, towerX+padX+colPos+colNum+colName, textY, gap, st.gapColor)
+		}
 	}
 
 	return o.writePNG(img)
@@ -855,7 +1096,7 @@ func (o *Overlay) renderMinimal(comps []Competitor, sessionName string, laps, la
 			posColor = yellow
 		}
 
-		gap := c.Gap
+		gap := truncGap(c.Gap)
 		if gap == "" {
 			gap = "-"
 		}
@@ -938,4 +1179,40 @@ func flagColor(status string) color.RGBA {
 	default:
 		return color.RGBA{220, 30, 30, 255}
 	}
+}
+
+// RenderPreview renders an overlay with the given parameters and returns PNG bytes.
+// This is for dev preview only — it does not write to disk or poll any API.
+func RenderPreview(format string, maxRows, scale int, title, flag string, comps []Competitor, laps, lapsToGo int, raceTime string, style ...Style) ([]byte, error) {
+	f, err := os.CreateTemp("", "overlay-preview-*.png")
+	if err != nil {
+		return nil, err
+	}
+	tmpPath := f.Name()
+	f.Close()
+	defer os.Remove(tmpPath)
+
+	var s Style
+	if len(style) > 0 {
+		s = style[0]
+	}
+
+	o := &Overlay{
+		pngPath:       tmpPath,
+		format:        format,
+		maxRows:       maxRows,
+		scale:         scale,
+		titleOverride: title,
+		flagStatus:    flag,
+		competitors:   comps,
+		laps:          laps,
+		lapsToGo:      lapsToGo,
+		raceTime:      raceTime,
+		style:         s,
+		stopCh:        make(chan struct{}),
+	}
+	if err := o.render(); err != nil {
+		return nil, err
+	}
+	return os.ReadFile(tmpPath)
 }

@@ -81,6 +81,7 @@ func (h *Handler) routes() {
 	h.mux.HandleFunc("POST /api/live/stop", h.stopLive)
 	h.mux.HandleFunc("POST /api/overlay/start", h.startOverlay)
 	h.mux.HandleFunc("POST /api/overlay/stop", h.stopOverlay)
+	h.mux.HandleFunc("POST /api/overlay/update", h.updateOverlay)
 	h.mux.HandleFunc("GET /api/overlay/status", h.overlayStatus)
 	h.mux.HandleFunc("POST /api/overlay/flag", h.overlayFlag)
 	h.mux.HandleFunc("GET /api/audio/devices", h.getAudioDevices)
@@ -396,6 +397,26 @@ func (h *Handler) stopOverlay(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[api] stopOverlay: SUCCESS")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+}
+
+func (h *Handler) updateOverlay(w http.ResponseWriter, r *http.Request) {
+	if h.overlay == nil {
+		writeError(w, http.StatusConflict, "no overlay running")
+		return
+	}
+	var req struct {
+		Format  string `json:"format"`
+		MaxRows int    `json:"max_rows"`
+		Scale   int    `json:"scale"`
+		Title   string `json:"title"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: %v", err)
+		return
+	}
+	log.Printf("[api] updateOverlay: format=%s maxRows=%d scale=%d title=%q", req.Format, req.MaxRows, req.Scale, req.Title)
+	h.overlay.Update(req.Format, req.MaxRows, req.Scale, req.Title)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
 func (h *Handler) overlayStatus(w http.ResponseWriter, r *http.Request) {

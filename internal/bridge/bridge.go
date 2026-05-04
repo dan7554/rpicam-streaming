@@ -28,7 +28,9 @@ type Bridge struct {
 	server           *gortsplib.Server
 	stream         *gortsplib.ServerStream
 	clients        []*gortsplib.Client
+	cameras        []string             // camera names, parallel to clients
 	serverMedias   []*description.Media
+	stopCh         chan struct{}         // closed on Stop to halt reconnect goroutines
 
 	// RTP timestamp/seq rewriting to ensure continuity across camera switches.
 	// Without this, switching cameras causes timestamp discontinuities that
@@ -63,6 +65,7 @@ func (b *Bridge) Start(cameras []string, active string) error {
 	log.Printf("[bridge] Start: cameras=%v active=%s", cameras, active)
 	b.mu.Lock()
 	b.active = active
+	b.stopCh = make(chan struct{})
 	b.mu.Unlock()
 
 	b.server = &gortsplib.Server{
@@ -118,6 +121,12 @@ func (b *Bridge) Start(cameras []string, active string) error {
 			b.Stop()
 			return fmt.Errorf("connect %s: %w", cam, err)
 		}
+	}
+
+	// Start reconnect monitors for each camera
+	b.cameras = sorted
+	for i, cam := range sorted {
+		go b.monitorCamera(i, cam)
 	}
 
 	log.Printf("[bridge] started on rtsp://localhost%s/stream (%d cameras, active: %s)",
@@ -269,6 +278,175 @@ func (b *Bridge) connectCamera(name string, first bool) error {
 	return nil
 }
 
+// monitorCamera watches a camera's RTSP client for disconnection and
+// reconnects with exponential backoff.
+func (b *Bridge) monitorCamera(idx int, name string) {
+	for {
+		b.mu.RLock()
+		c := b.clients[idx]
+		b.mu.RUnlock()
+
+		err := c.Wait()
+
+		// Check if bridge is shutting down
+		select {
+		case <-b.stopCh:
+			return
+		default:
+		}
+
+		log.Printf("[bridge] camera %s disconnected: %v", name, err)
+
+		// Reconnect with exponential backoff
+		backoff := 2 * time.Second
+		maxBackoff := 30 * time.Second
+		for {
+			select {
+			case <-b.stopCh:
+				return
+			default:
+			}
+
+			log.Printf("[bridge] reconnecting camera %s in %v...", name, backoff)
+
+			select {
+			case <-time.After(backoff):
+			case <-b.stopCh:
+				return
+			}
+
+			if err := b.reconnectCamera(idx, name); err != nil {
+				log.Printf("[bridge] camera %s reconnect FAILED: %v", name, err)
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+				continue
+			}
+
+			log.Printf("[bridge] camera %s reconnected successfully", name)
+			break
+		}
+	}
+}
+
+// reconnectCamera replaces the client at the given index with a fresh connection.
+func (b *Bridge) reconnectCamera(idx int, name string) error {
+	rawURL := b.rtspBase + "/" + name
+	u, err := base.ParseURL(rawURL)
+	if err != nil {
+		return err
+	}
+
+	c := &gortsplib.Client{
+		Scheme: u.Scheme,
+		Host:   u.Host,
+	}
+	if err := c.Start(); err != nil {
+		return fmt.Errorf("client start: %w", err)
+	}
+
+	desc, _, err := c.Describe(u)
+	if err != nil {
+		c.Close()
+		return fmt.Errorf("DESCRIBE: %w", err)
+	}
+
+	if err := c.SetupAll(desc.BaseURL, desc.Medias); err != nil {
+		c.Close()
+		return fmt.Errorf("SETUP: %w", err)
+	}
+
+	// Map client medias → server medias by type
+	b.mu.RLock()
+	serverMedias := b.serverMedias
+	b.mu.RUnlock()
+
+	mediaMap := make(map[*description.Media]*description.Media)
+	for _, cm := range desc.Medias {
+		for _, sm := range serverMedias {
+			if cm.Type == sm.Type {
+				mediaMap[cm] = sm
+				break
+			}
+		}
+	}
+
+	camName := name
+	c.OnPacketRTPAny(func(medi *description.Media, _ format.Format, pkt *rtp.Packet) {
+		b.mu.RLock()
+		isActive := b.active == camName
+		needsKF := b.needsKeyframe
+		b.mu.RUnlock()
+		if !isActive {
+			return
+		}
+		if needsKF {
+			if medi.Type == description.MediaTypeVideo {
+				if !isH264Keyframe(pkt) {
+					b.mu.Lock()
+					b.droppedVideoPkts++
+					b.mu.Unlock()
+					return
+				}
+				b.mu.Lock()
+				elapsed := time.Since(b.switchTime)
+				dropped := b.droppedVideoPkts
+				b.needsKeyframe = false
+				b.droppedVideoPkts = 0
+				if b.pendingVideoRebase {
+					b.videoTSOffset = int64(b.lastVideoTS) - int64(pkt.Timestamp) + 3000
+					b.videoSeqOffset = int32(b.lastVideoSeq) - int32(pkt.SequenceNumber) + 1
+					b.pendingVideoRebase = false
+				}
+				b.mu.Unlock()
+				log.Printf("[bridge] keyframe received from %s in %dms (dropped %d video pkts)",
+					camName, elapsed.Milliseconds(), dropped)
+			} else {
+				return
+			}
+		}
+		if sm, ok := mediaMap[medi]; ok {
+			b.mu.Lock()
+			if medi.Type == description.MediaTypeVideo {
+				pkt.Timestamp = uint32(int64(pkt.Timestamp) + b.videoTSOffset)
+				pkt.SequenceNumber = uint16(int32(pkt.SequenceNumber) + b.videoSeqOffset)
+				b.lastVideoTS = pkt.Timestamp
+				b.lastVideoSeq = pkt.SequenceNumber
+			} else {
+				pkt.Timestamp = b.nextAudioTS
+				pkt.SequenceNumber = b.nextAudioSeq
+				b.nextAudioTS += 960
+				b.nextAudioSeq++
+			}
+			b.mu.Unlock()
+			if err := b.stream.WritePacketRTP(sm, pkt); err != nil {
+				log.Printf("bridge write error: %v", err)
+			}
+		}
+	})
+
+	_, err = c.Play(nil)
+	if err != nil {
+		c.Close()
+		return fmt.Errorf("PLAY: %w", err)
+	}
+
+	// Force a keyframe wait if this is the active camera reconnecting
+	b.mu.Lock()
+	b.clients[idx] = c
+	if b.active == name {
+		b.needsKeyframe = true
+		b.pendingVideoRebase = true
+		b.switchTime = time.Now()
+		b.droppedVideoPkts = 0
+		log.Printf("[bridge] active camera %s reconnected, waiting for keyframe", name)
+	}
+	b.mu.Unlock()
+
+	return nil
+}
+
 // isH264Keyframe checks if an RTP packet contains the start of an H264 IDR
 // (keyframe). Handles single NAL, STAP-A, and FU-A packetization.
 func isH264Keyframe(pkt *rtp.Packet) bool {
@@ -321,11 +499,16 @@ func (b *Bridge) ProxyURL() string {
 // Stop shuts down the bridge server and all camera connections.
 func (b *Bridge) Stop() {
 	log.Printf("[bridge] Stop: shutting down (%d clients)", len(b.clients))
+	// Signal monitor goroutines to stop
+	if b.stopCh != nil {
+		close(b.stopCh)
+	}
 	for i, c := range b.clients {
 		log.Printf("[bridge] Stop: closing client %d", i)
 		c.Close()
 	}
 	b.clients = nil
+	b.cameras = nil
 	if b.stream != nil {
 		b.stream.Close()
 		b.stream = nil
