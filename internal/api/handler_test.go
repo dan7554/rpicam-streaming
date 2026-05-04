@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dchristiani/media-mtx/internal/config"
 	"github.com/dchristiani/media-mtx/internal/switcher"
@@ -23,8 +24,12 @@ type fakeBridge struct {
 
 func (f *fakeBridge) Start(cameras []string, active string) error { f.active = active; return nil }
 func (f *fakeBridge) Switch(camera string)                        { f.active = camera }
+func (f *fakeBridge) SwitchNoWait(camera string)                   { f.active = camera }
 func (f *fakeBridge) ProxyURL() string                            { return "rtsp://localhost:8555/stream" }
 func (f *fakeBridge) Stop()                                       {}
+func (f *fakeBridge) ConnectSource(name string) error             { return nil }
+func (f *fakeBridge) DisconnectSource(name string)                {}
+func (f *fakeBridge) WaitForKeyframe(name string, timeout time.Duration) bool { return true }
 
 func fakeBridgeFactory() switcher.Bridger { return &fakeBridge{} }
 

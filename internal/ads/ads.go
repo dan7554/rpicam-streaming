@@ -180,6 +180,7 @@ func (s *Store) processQueue() {
 }
 
 // transcode converts a video to H264 1080p30 + AAC 128k.
+// Uses GOP size of 2 (keyframe every ~67ms) so bridge switching is near-instant.
 func transcode(src, dst string) error {
 	cmd := exec.Command("ffmpeg", "-y",
 		"-i", src,
@@ -188,6 +189,8 @@ func transcode(src, dst string) error {
 		"-b:v", "5000k",
 		"-maxrate", "6000k",
 		"-bufsize", "10000k",
+		"-g", "2",
+		"-keyint_min", "2",
 		"-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,fps=30",
 		"-c:a", "aac",
 		"-b:a", "128k",

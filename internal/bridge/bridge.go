@@ -48,6 +48,9 @@ type Bridge struct {
 	// Opus at 48kHz with 20ms frames = 960 samples per frame.
 	nextAudioTS  uint32 // next audio RTP timestamp to assign
 	nextAudioSeq uint16 // next audio RTP sequence number to assign
+
+	// Per-source keyframe readiness signalling for zero-freeze switching.
+	keyframeCh map[string]chan struct{}
 }
 
 // New creates a bridge that listens on addr (e.g. ":8555") and reads cameras
@@ -66,6 +69,7 @@ func (b *Bridge) Start(cameras []string, active string) error {
 	b.mu.Lock()
 	b.active = active
 	b.stopCh = make(chan struct{})
+	b.keyframeCh = make(map[string]chan struct{})
 	b.mu.Unlock()
 
 	b.server = &gortsplib.Server{
@@ -189,11 +193,22 @@ func (b *Bridge) connectCamera(name string, first bool) error {
 	}
 
 	// Map client medias → server medias by type (video → video, audio → audio).
+	// Also build a payload type mapping so incoming packets use the server's PT.
 	mediaMap := make(map[*description.Media]*description.Media)
+	ptMap := make(map[uint8]uint8) // client PT → server PT
 	for _, cm := range desc.Medias {
 		for _, sm := range b.serverMedias {
 			if cm.Type == sm.Type {
 				mediaMap[cm] = sm
+				// Map payload types: use first format from each side
+				if len(cm.Formats) > 0 && len(sm.Formats) > 0 {
+					clientPT := cm.Formats[0].PayloadType()
+					serverPT := sm.Formats[0].PayloadType()
+					if clientPT != serverPT {
+						ptMap[clientPT] = serverPT
+						log.Printf("[bridge] connectCamera %s: PT remap %s %d → %d", name, cm.Type, clientPT, serverPT)
+					}
+				}
 				log.Printf("[bridge] connectCamera %s: mapped %s media (client → server)", name, cm.Type)
 				break
 			}
@@ -207,6 +222,18 @@ func (b *Bridge) connectCamera(name string, first bool) error {
 		needsKF := b.needsKeyframe
 		b.mu.RUnlock()
 		if !isActive {
+			// Detect keyframes from non-active sources for pre-switch readiness
+			if medi.Type == description.MediaTypeVideo && isH264Keyframe(pkt) {
+				b.mu.Lock()
+				if ch, ok := b.keyframeCh[camName]; ok {
+					select {
+					case <-ch:
+					default:
+						close(ch)
+					}
+				}
+				b.mu.Unlock()
+			}
 			return
 		}
 		// After a switch, drop ALL packets until we see a keyframe (IDR).
@@ -260,8 +287,14 @@ func (b *Bridge) connectCamera(name string, first bool) error {
 				b.nextAudioSeq++
 			}
 			b.mu.Unlock()
-			if err := b.stream.WritePacketRTP(sm, pkt); err != nil {
-				log.Printf("bridge write error: %v", err)
+			// Remap payload type if client/server differ
+			if newPT, ok := ptMap[pkt.PayloadType]; ok {
+				pkt.PayloadType = newPT
+			}
+			if b.stream != nil {
+				if err := b.stream.WritePacketRTP(sm, pkt); err != nil {
+					log.Printf("bridge write error: %v", err)
+				}
 			}
 		}
 	})
@@ -283,6 +316,10 @@ func (b *Bridge) connectCamera(name string, first bool) error {
 func (b *Bridge) monitorCamera(idx int, name string) {
 	for {
 		b.mu.RLock()
+		if idx >= len(b.clients) || b.clients[idx] == nil {
+			b.mu.RUnlock()
+			return
+		}
 		c := b.clients[idx]
 		b.mu.RUnlock()
 
@@ -363,10 +400,18 @@ func (b *Bridge) reconnectCamera(idx int, name string) error {
 	b.mu.RUnlock()
 
 	mediaMap := make(map[*description.Media]*description.Media)
+	ptMap := make(map[uint8]uint8)
 	for _, cm := range desc.Medias {
 		for _, sm := range serverMedias {
 			if cm.Type == sm.Type {
 				mediaMap[cm] = sm
+				if len(cm.Formats) > 0 && len(sm.Formats) > 0 {
+					clientPT := cm.Formats[0].PayloadType()
+					serverPT := sm.Formats[0].PayloadType()
+					if clientPT != serverPT {
+						ptMap[clientPT] = serverPT
+					}
+				}
 				break
 			}
 		}
@@ -379,6 +424,18 @@ func (b *Bridge) reconnectCamera(idx int, name string) error {
 		needsKF := b.needsKeyframe
 		b.mu.RUnlock()
 		if !isActive {
+			// Detect keyframes from non-active sources for pre-switch readiness
+			if medi.Type == description.MediaTypeVideo && isH264Keyframe(pkt) {
+				b.mu.Lock()
+				if ch, ok := b.keyframeCh[camName]; ok {
+					select {
+					case <-ch:
+					default:
+						close(ch)
+					}
+				}
+				b.mu.Unlock()
+			}
 			return
 		}
 		if needsKF {
@@ -420,8 +477,13 @@ func (b *Bridge) reconnectCamera(idx int, name string) error {
 				b.nextAudioSeq++
 			}
 			b.mu.Unlock()
-			if err := b.stream.WritePacketRTP(sm, pkt); err != nil {
-				log.Printf("bridge write error: %v", err)
+			if newPT, ok := ptMap[pkt.PayloadType]; ok {
+				pkt.PayloadType = newPT
+			}
+			if b.stream != nil {
+				if err := b.stream.WritePacketRTP(sm, pkt); err != nil {
+					log.Printf("bridge write error: %v", err)
+				}
 			}
 		}
 	})
@@ -491,6 +553,22 @@ func (b *Bridge) Switch(camera string) {
 	log.Printf("[bridge] Switch: %s → %s (waiting for live keyframe)", old, camera)
 }
 
+// SwitchNoWait changes the active camera but skips the keyframe gate.
+// Use after WaitForKeyframe has confirmed readiness — the next packet
+// from the source will be at or near a keyframe boundary.
+func (b *Bridge) SwitchNoWait(camera string) {
+	b.mu.Lock()
+	old := b.active
+	b.active = camera
+	b.needsKeyframe = false
+	b.pendingVideoRebase = true
+	b.switchTime = time.Now()
+	b.droppedVideoPkts = 0
+	b.mu.Unlock()
+
+	log.Printf("[bridge] SwitchNoWait: %s → %s (keyframe pre-confirmed)", old, camera)
+}
+
 // ProxyURL returns the RTSP URL of the bridge output.
 func (b *Bridge) ProxyURL() string {
 	return "rtsp://localhost" + b.addr + "/stream"
@@ -504,8 +582,10 @@ func (b *Bridge) Stop() {
 		close(b.stopCh)
 	}
 	for i, c := range b.clients {
-		log.Printf("[bridge] Stop: closing client %d", i)
-		c.Close()
+		if c != nil {
+			log.Printf("[bridge] Stop: closing client %d", i)
+			c.Close()
+		}
 	}
 	b.clients = nil
 	b.cameras = nil
@@ -518,6 +598,66 @@ func (b *Bridge) Stop() {
 		b.server = nil
 	}
 	log.Printf("[bridge] stopped")
+}
+
+// ConnectSource dynamically connects to rtspBase/<name> as a new source.
+// Used for ad playback — the ad is published to mediamtx, then connected
+// to the bridge so it can be switched to like any camera.
+func (b *Bridge) ConnectSource(name string) error {
+	log.Printf("[bridge] ConnectSource: %s", name)
+	b.mu.Lock()
+	b.keyframeCh[name] = make(chan struct{})
+	b.mu.Unlock()
+	if err := b.connectCamera(name, false); err != nil {
+		b.mu.Lock()
+		delete(b.keyframeCh, name)
+		b.mu.Unlock()
+		return fmt.Errorf("connect source %s: %w", name, err)
+	}
+	b.mu.Lock()
+	b.cameras = append(b.cameras, name)
+	b.mu.Unlock()
+	log.Printf("[bridge] ConnectSource: %s connected (total sources: %d)", name, len(b.cameras))
+	return nil
+}
+
+// WaitForKeyframe blocks until a keyframe is received from the named source
+// or the timeout expires. Returns true if a keyframe was seen.
+func (b *Bridge) WaitForKeyframe(name string, timeout time.Duration) bool {
+	b.mu.RLock()
+	ch, ok := b.keyframeCh[name]
+	b.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	select {
+	case <-ch:
+		log.Printf("[bridge] WaitForKeyframe: %s keyframe ready", name)
+		return true
+	case <-time.After(timeout):
+		log.Printf("[bridge] WaitForKeyframe: %s timed out after %v", name, timeout)
+		return false
+	}
+}
+
+// DisconnectSource disconnects a dynamically-added source by name.
+// Sets the client slot to nil rather than removing it, to avoid shifting
+// indices that monitorCamera goroutines depend on.
+func (b *Bridge) DisconnectSource(name string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for i, cam := range b.cameras {
+		if cam == name {
+			if i < len(b.clients) && b.clients[i] != nil {
+				b.clients[i].Close()
+				b.clients[i] = nil
+			}
+			delete(b.keyframeCh, name)
+			log.Printf("[bridge] DisconnectSource: %s closed (slot %d)", name, i)
+			return
+		}
+	}
+	log.Printf("[bridge] DisconnectSource: %s not found", name)
 }
 
 // RTSP server handler implementations

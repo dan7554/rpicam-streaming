@@ -1116,22 +1116,30 @@ async function pollAds() {
 function renderAdsTable(ads) {
     const tbody = document.getElementById('ads-tbody');
     if (!tbody) return;
-    const playBtn = document.getElementById('btn-ads-play');
+
+    // Preserve checked state across re-renders
+    const checkedIds = new Set([...document.querySelectorAll('.ad-check:checked')].map(c => c.dataset.id));
 
     tbody.innerHTML = '';
+    if (!ads.length) {
+        tbody.innerHTML = '<tr class="ads-empty-row"><td colspan="5" style="text-align:center;color:#555;padding:20px">No ads uploaded</td></tr>';
+        updateAdPlayButton();
+        return;
+    }
     for (const ad of ads) {
         const tr = document.createElement('tr');
         const dur = ad.duration > 0 ? `${Math.round(ad.duration)}s` : '-';
         const statusClass = `status-${ad.status}`;
         const isReady = ad.status === 'ready';
+        const wasChecked = checkedIds.has(ad.id) && isReady;
         tr.innerHTML = `
-            <td><input type="checkbox" class="ad-check" data-id="${ad.id}" ${isReady ? '' : 'disabled'}></td>
+            <td><input type="checkbox" class="ad-check" data-id="${ad.id}" ${wasChecked ? 'checked' : ''} ${isReady ? '' : 'disabled'}></td>
             <td>${escapeHtml(ad.name)}</td>
             <td>${dur}</td>
             <td><span class="${statusClass}">${ad.status}</span></td>
             <td class="ad-actions">
-                ${isReady ? `<button onclick="previewAd('${ad.id}')">Preview</button>` : ''}
-                <button class="del-btn" onclick="deleteAd('${ad.id}')">Delete</button>
+                ${isReady ? `<button onclick="previewAd('${ad.id}')">▶ Preview</button>` : ''}
+                <button class="del-btn" onclick="deleteAd('${ad.id}')">✕</button>
             </td>
         `;
         tbody.appendChild(tr);
@@ -1181,7 +1189,7 @@ function previewAd(id) {
     const video = document.getElementById('ad-preview-video');
     if (!container || !video) return;
     video.src = `${API_BASE}/api/ads/preview/${id}`;
-    container.classList.remove('hidden');
+    container.classList.remove('ad-preview-empty');
     video.play();
 }
 
@@ -1223,6 +1231,8 @@ async function stopAds() {
     }
 }
 
+let adWasPlaying = false;
+
 async function pollAdPlayback() {
     try {
         const res = await fetch(`${API_BASE}/api/ads/playback`);
@@ -1234,10 +1244,12 @@ async function pollAdPlayback() {
             bar.classList.remove('hidden');
             text.textContent = `Playing ad ${data.current_idx}/${data.total}: ${data.current_ad}`;
             if (stopBtn) stopBtn.disabled = false;
+            adWasPlaying = true;
         } else {
             bar.classList.add('hidden');
             text.textContent = '';
             if (stopBtn) stopBtn.disabled = true;
+            adWasPlaying = false;
         }
     } catch {}
 }

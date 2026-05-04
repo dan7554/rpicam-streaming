@@ -89,34 +89,41 @@
 
         <!-- Advertisements -->
         <section id="ads-section">
-            <h2>Advertisements</h2>
-            <div class="controls">
-                <div class="ad-upload">
-                    <input type="file" id="ad-file" accept="video/*" style="display:none" onchange="uploadAd()">
-                    <button onclick="document.getElementById('ad-file').click()">Upload Video</button>
-                    <span id="ad-upload-status"></span>
+            <div class="ads-card">
+                <div class="ads-left">
+                    <h2>Advertisements</h2>
+                    <div class="ad-upload">
+                        <input type="file" id="ad-file" accept="video/*" style="display:none" onchange="uploadAd()">
+                        <button onclick="document.getElementById('ad-file').click()">＋ Upload Video</button>
+                        <span id="ad-upload-status"></span>
+                    </div>
+                    <table id="ads-table" class="ads-table">
+                        <thead>
+                            <tr>
+                                <th style="width:32px"><input type="checkbox" id="ads-select-all" onchange="toggleAllAds(this.checked)"></th>
+                                <th>Name</th>
+                                <th style="width:70px">Duration</th>
+                                <th style="width:90px">Status</th>
+                                <th style="width:100px;text-align:right">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="ads-tbody">
+                            <tr class="ads-empty-row"><td colspan="5" style="text-align:center;color:#555;padding:20px">No ads uploaded</td></tr>
+                        </tbody>
+                    </table>
+                    <div class="ads-controls">
+                        <button id="btn-ads-play" onclick="playSelectedAds()" disabled>▶ Play Selected</button>
+                        <button id="btn-ads-stop" onclick="stopAds()" disabled>■ Stop Ads</button>
+                    </div>
                 </div>
-                <table id="ads-table" class="ads-table">
-                    <thead>
-                        <tr>
-                            <th><input type="checkbox" id="ads-select-all" onchange="toggleAllAds(this.checked)"></th>
-                            <th>Name</th>
-                            <th>Duration</th>
-                            <th>Status</th>
-                            <th></th>
-                        </tr>
-                    </thead>
-                    <tbody id="ads-tbody"></tbody>
-                </table>
-                <div class="btn-group" style="margin-top:8px">
-                    <button id="btn-ads-play" onclick="playSelectedAds()" disabled>Play Selected</button>
-                    <button id="btn-ads-stop" onclick="stopAds()" disabled>Stop Ads</button>
-                </div>
-                <div id="ad-playback-bar" class="hidden">
-                    <span id="ad-playback-text"></span>
-                </div>
-                <div id="ad-preview-container" class="hidden">
-                    <video id="ad-preview-video" controls></video>
+                <div class="ads-right">
+                    <div id="ad-preview-container" class="ad-preview-empty">
+                        <div class="ad-preview-placeholder">No preview</div>
+                        <video id="ad-preview-video" controls></video>
+                    </div>
+                    <div id="ad-playback-bar" class="hidden">
+                        <span id="ad-playback-text"></span>
+                    </div>
                 </div>
             </div>
         </section>

@@ -27,8 +27,12 @@ func previewRTSPURL(rtmpURL string) string {
 type Bridger interface {
 	Start(cameras []string, active string) error
 	Switch(camera string)
+	SwitchNoWait(camera string)
 	ProxyURL() string
 	Stop()
+	ConnectSource(name string) error
+	DisconnectSource(name string)
+	WaitForKeyframe(name string, timeout time.Duration) bool
 }
 
 // BridgeFactory creates a Bridger on demand.
@@ -587,8 +591,9 @@ func (s *Switcher) AdStatus() AdPlaybackStatus {
 	}
 }
 
-// PlayAds stops the main pipeline, hides overlay, plays ads in order to RTMP+RTSP,
-// then restores the pipeline and overlay. Runs in the background.
+// PlayAds publishes each ad to mediamtx as an RTSP source, then switches
+// the bridge to it — the GStreamer pipeline stays up the entire time.
+// When done, switches back to the previous camera. Runs in the background.
 func (s *Switcher) PlayAds(adFiles []string, adNames []string) error {
 	s.mu.Lock()
 	if !s.live {
@@ -599,29 +604,23 @@ func (s *Switcher) PlayAds(adFiles []string, adNames []string) error {
 		s.mu.Unlock()
 		return fmt.Errorf("ads already playing")
 	}
+	if s.bridge == nil {
+		s.mu.Unlock()
+		return fmt.Errorf("bridge not available")
+	}
 	s.adPlaying = true
 	s.adTotal = len(adFiles)
 	s.adCurrentIdx = 0
 	s.adStopCh = make(chan struct{})
-	rtmpDest := s.rtmpDest
+	previousCamera := s.activeStream
 	overlayPath := s.overlayPath
+	bridge := s.bridge
 	s.mu.Unlock()
 
+	const adSourceName = "ad-playback"
+
 	go func() {
-		log.Printf("[switcher] ad playback starting: %d ads", len(adFiles))
-
-		// Hide overlay
-		if overlayPath != "" {
-			writeTransparentPNG(overlayPath)
-		}
-
-		// Stop main pipeline (keep bridge alive)
-		s.mu.Lock()
-		s.stopFFmpeg()
-		s.mu.Unlock()
-
-		// Small delay for pipeline teardown
-		time.Sleep(1 * time.Second)
+		log.Printf("[switcher] ad playback starting: %d ads (will restore cam %s)", len(adFiles), previousCamera)
 
 		for i, adFile := range adFiles {
 			select {
@@ -643,12 +642,14 @@ func (s *Switcher) PlayAds(adFiles []string, adNames []string) error {
 
 			log.Printf("[switcher] playing ad %d/%d: %s", i+1, len(adFiles), name)
 
+			// Publish ad to mediamtx as RTSP with H264+Opus (matching camera format)
 			args := []string{
 				"-re",
 				"-i", adFile,
 				"-c:v", "copy",
-				"-c:a", "copy",
-				"-f", "flv", rtmpDest,
+				"-c:a", "libopus", "-b:a", "128k", "-ar", "48000", "-ac", "1",
+				"-f", "rtsp", "-rtsp_transport", "tcp",
+				fmt.Sprintf("rtsp://localhost:8554/%s", adSourceName),
 			}
 
 			cmd := exec.Command("ffmpeg", args...)
@@ -661,6 +662,37 @@ func (s *Switcher) PlayAds(adFiles []string, adNames []string) error {
 			if err := cmd.Start(); err != nil {
 				log.Printf("[switcher] ad ffmpeg start FAILED: %v", err)
 				continue
+			}
+
+			// Wait for mediamtx to register the stream, then connect bridge.
+			connectStart := time.Now()
+			var connected bool
+			for attempt := 0; attempt < 20; attempt++ {
+				if err := bridge.ConnectSource(adSourceName); err == nil {
+					connected = true
+					break
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+			log.Printf("[switcher] bridge connect took %dms (ok=%v)", time.Since(connectStart).Milliseconds(), connected)
+			if !connected {
+				log.Printf("[switcher] bridge connect ad source FAILED after retries")
+				cmd.Process.Kill()
+				cmd.Wait()
+				continue
+			}
+			// Wait for a keyframe from the ad source to confirm stream is live,
+			// then switch with keyframe gate (GOP=2, gate is <67ms — imperceptible).
+			startWait := time.Now()
+			keyframeReady := bridge.WaitForKeyframe(adSourceName, 5*time.Second)
+			log.Printf("[switcher] ad keyframe wait took %dms (ready=%v)", time.Since(startWait).Milliseconds(), keyframeReady)
+			totalElapsed := time.Since(connectStart)
+			log.Printf("[switcher] total ad setup time: %dms (this much of ad start is lost)", totalElapsed.Milliseconds())
+			bridge.Switch(adSourceName)
+
+			// Hide overlay now that we've switched to the ad
+			if overlayPath != "" {
+				writeTransparentPNG(overlayPath)
 			}
 
 			// Wait for ad to finish or stop signal
@@ -678,8 +710,17 @@ func (s *Switcher) PlayAds(adFiles []string, adNames []string) error {
 				cmd.Process.Kill()
 				<-doneCh
 				log.Printf("[switcher] ad %d killed (stop requested)", i+1)
+				// Switch back before cleanup
+				bridge.Switch(previousCamera)
+				time.Sleep(200 * time.Millisecond)
+				bridge.DisconnectSource(adSourceName)
 				goto done
 			}
+
+			// Switch back to camera between ads (or after last ad)
+			bridge.Switch(previousCamera)
+			time.Sleep(200 * time.Millisecond)
+			bridge.DisconnectSource(adSourceName)
 
 			// Brief pause between ads
 			if i < len(adFiles)-1 {
@@ -688,7 +729,11 @@ func (s *Switcher) PlayAds(adFiles []string, adNames []string) error {
 		}
 
 	done:
-		log.Printf("[switcher] ad playback finished, restoring live pipeline")
+		log.Printf("[switcher] ad playback finished, restoring cam %s", previousCamera)
+
+		// Restore overlay
+		// The overlay poll loop is still running and will re-render the next PNG
+		// on its normal schedule. No action needed beyond letting it run.
 
 		s.mu.Lock()
 		s.adPlaying = false
@@ -696,18 +741,9 @@ func (s *Switcher) PlayAds(adFiles []string, adNames []string) error {
 		s.adCurrentIdx = 0
 		s.adTotal = 0
 		s.adCurrentName = ""
-
-		// Restart the main pipeline
-		s.restartCount = 0
-		s.restartBackoff = 0
-		if s.live {
-			if err := s.startFFmpeg(); err != nil {
-				log.Printf("[switcher] failed to restart pipeline after ads: %v", err)
-			}
-		}
 		s.mu.Unlock()
 
-		log.Printf("[switcher] live pipeline restored after ads")
+		log.Printf("[switcher] ad playback complete, live pipeline never stopped")
 	}()
 
 	return nil
