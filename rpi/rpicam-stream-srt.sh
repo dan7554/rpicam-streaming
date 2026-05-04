@@ -61,9 +61,10 @@ wait_for_camera() {
 # Wait for server reachability
 wait_for_server() {
     if [ "$PROTOCOL" = "srt" ]; then
-        # For SRT (UDP), just check if host is reachable via ping
-        while ! ping -c 1 -W 2 "$MEDIAMTX_HOST" > /dev/null 2>&1; do
-            log "Waiting for host $MEDIAMTX_HOST..."
+        # For SRT (UDP), check host reachability via RTMP TCP port
+        # (ping may be blocked by security groups)
+        while ! timeout 3 bash -c "</dev/tcp/$MEDIAMTX_HOST/$RTMP_PORT" 2>/dev/null; do
+            log "Waiting for host $MEDIAMTX_HOST (checking port $RTMP_PORT)..."
             sleep "$RETRY_DELAY"
         done
         log "Host $MEDIAMTX_HOST reachable (SRT/UDP)"

@@ -91,11 +91,14 @@ DEPLOY_DIR := /opt/racetrack
 ## deploy: Cross-compile and deploy server + web + config to EC2
 deploy: deploy-build
 	@echo "==> Deploying to $(EC2_USER)@$(EC2_HOST)..."
-	@scp $(SSH_OPTS) bin/server-linux $(EC2_USER)@$(EC2_HOST):$(DEPLOY_DIR)/bin/server
+	@scp $(SSH_OPTS) bin/server-linux $(EC2_USER)@$(EC2_HOST):/tmp/server
+	@ssh $(SSH_OPTS) $(EC2_USER)@$(EC2_HOST) "sudo mv /tmp/server $(DEPLOY_DIR)/bin/server && sudo chmod +x $(DEPLOY_DIR)/bin/server"
 	@sed 's/__EIP__/$(EC2_HOST)/g' deploy/mediamtx-aws.yml > /tmp/mediamtx-aws-deploy.yml
-	@scp $(SSH_OPTS) /tmp/mediamtx-aws-deploy.yml $(EC2_USER)@$(EC2_HOST):$(DEPLOY_DIR)/mediamtx.yml
+	@scp $(SSH_OPTS) /tmp/mediamtx-aws-deploy.yml $(EC2_USER)@$(EC2_HOST):/tmp/mediamtx.yml
+	@ssh $(SSH_OPTS) $(EC2_USER)@$(EC2_HOST) "sudo mv /tmp/mediamtx.yml $(DEPLOY_DIR)/mediamtx.yml"
 	@rm -f /tmp/mediamtx-aws-deploy.yml
-	@rsync -az --delete -e "ssh $(SSH_OPTS)" web/ $(EC2_USER)@$(EC2_HOST):$(DEPLOY_DIR)/web/
+	@rsync -az --delete -e "ssh $(SSH_OPTS)" web/ $(EC2_USER)@$(EC2_HOST):/tmp/racetrack-web/
+	@ssh $(SSH_OPTS) $(EC2_USER)@$(EC2_HOST) "sudo rsync -a --delete /tmp/racetrack-web/ $(DEPLOY_DIR)/web/ && rm -rf /tmp/racetrack-web"
 	@ssh $(SSH_OPTS) $(EC2_USER)@$(EC2_HOST) "sudo systemctl restart mediamtx stream-server"
 	@echo "==> Deploy complete. UI: https://stream.racetrackstreaming.com"
 
@@ -108,7 +111,8 @@ deploy-build:
 deploy-config:
 	@echo "==> Deploying config to $(EC2_HOST)..."
 	@sed 's/__EIP__/$(EC2_HOST)/g' deploy/mediamtx-aws.yml > /tmp/mediamtx-aws-deploy.yml
-	@scp $(SSH_OPTS) /tmp/mediamtx-aws-deploy.yml $(EC2_USER)@$(EC2_HOST):$(DEPLOY_DIR)/mediamtx.yml
+	@scp $(SSH_OPTS) /tmp/mediamtx-aws-deploy.yml $(EC2_USER)@$(EC2_HOST):/tmp/mediamtx.yml
+	@ssh $(SSH_OPTS) $(EC2_USER)@$(EC2_HOST) "sudo mv /tmp/mediamtx.yml $(DEPLOY_DIR)/mediamtx.yml"
 	@rm -f /tmp/mediamtx-aws-deploy.yml
 	@ssh $(SSH_OPTS) $(EC2_USER)@$(EC2_HOST) "sudo systemctl restart mediamtx"
 	@echo "==> Config deployed."
@@ -116,13 +120,15 @@ deploy-config:
 ## deploy-web: Push only web UI changes (no restart needed)
 deploy-web:
 	@echo "==> Deploying web UI to $(EC2_HOST)..."
-	@rsync -az --delete -e "ssh $(SSH_OPTS)" web/ $(EC2_USER)@$(EC2_HOST):$(DEPLOY_DIR)/web/
+	@rsync -az --delete -e "ssh $(SSH_OPTS)" web/ $(EC2_USER)@$(EC2_HOST):/tmp/racetrack-web/
+	@ssh $(SSH_OPTS) $(EC2_USER)@$(EC2_HOST) "sudo rsync -a --delete /tmp/racetrack-web/ $(DEPLOY_DIR)/web/ && rm -rf /tmp/racetrack-web"
 	@echo "==> Web UI deployed (live on next page load)."
 
 ## deploy-server: Push only server binary and restart
 deploy-server: deploy-build
 	@echo "==> Deploying server binary to $(EC2_HOST)..."
-	@scp $(SSH_OPTS) bin/server-linux $(EC2_USER)@$(EC2_HOST):$(DEPLOY_DIR)/bin/server
+	@scp $(SSH_OPTS) bin/server-linux $(EC2_USER)@$(EC2_HOST):/tmp/server
+	@ssh $(SSH_OPTS) $(EC2_USER)@$(EC2_HOST) "sudo mv /tmp/server $(DEPLOY_DIR)/bin/server && sudo chmod +x $(DEPLOY_DIR)/bin/server"
 	@ssh $(SSH_OPTS) $(EC2_USER)@$(EC2_HOST) "sudo systemctl restart stream-server"
 	@echo "==> Server deployed."
 

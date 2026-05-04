@@ -42,6 +42,24 @@ resource "aws_security_group" "ec2" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  # SRT ingest (UDP)
+  ingress {
+    description = "SRT ingest"
+    from_port   = 8890
+    to_port     = 8890
+    protocol    = "udp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # WHIP signaling (direct to MediaMTX, bypasses ALB)
+  ingress {
+    description = "WHIP signaling"
+    from_port   = 8889
+    to_port     = 8889
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
   # Go server from ALB
   ingress {
     description     = "HTTP from ALB"

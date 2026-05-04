@@ -81,3 +81,38 @@ resource "aws_lb_listener" "webrtc" {
     target_group_arn = aws_lb_target_group.webrtc.arn
   }
 }
+
+# --- SRT target group + listener (UDP 8890) ---
+
+resource "aws_lb_target_group" "srt" {
+  name        = "racetrack-srt"
+  port        = 8890
+  protocol    = "UDP"
+  vpc_id      = aws_vpc.main.id
+  target_type = "instance"
+
+  health_check {
+    protocol            = "TCP"
+    port                = "8080"
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+    interval            = 10
+  }
+}
+
+resource "aws_lb_target_group_attachment" "srt" {
+  target_group_arn = aws_lb_target_group.srt.arn
+  target_id        = aws_instance.streaming.id
+  port             = 8890
+}
+
+resource "aws_lb_listener" "srt" {
+  load_balancer_arn = aws_lb.nlb.arn
+  port              = 8890
+  protocol          = "UDP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.srt.arn
+  }
+}

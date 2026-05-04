@@ -27,12 +27,13 @@ webrtcAddress: :8889
 
 # ICE configuration for WebRTC behind NLB
 # __EIP__ is replaced automatically by `make deploy` with the Terraform EIP
-webrtcICEHostNAT1To1IPs: [__EIP__]
-webrtcICEUDPMuxAddress: :8189
-webrtcICETCPMuxAddress: :8189
+webrtcAdditionalHosts: [__EIP__]
+webrtcLocalUDPAddress: :8189
+webrtcLocalTCPAddress: :8189
 
-# Disable unused
-srt: no
+# SRT - low-latency UDP ingest from Pi cameras
+srt: yes
+srtAddress: :8890
 
 # Path defaults
 pathDefaults:
