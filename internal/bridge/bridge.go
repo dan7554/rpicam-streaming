@@ -3,6 +3,7 @@ package bridge
 import (
 	"fmt"
 	"log"
+	"sort"
 	"sync"
 	"time"
 
@@ -75,8 +76,43 @@ func (b *Bridge) Start(cameras []string, active string) error {
 	}
 	log.Printf("[bridge] RTSP server listening on %s", b.addr)
 
+	// Probe all cameras to find media counts, then connect the one with the
+	// most medias first so the server stream template includes audio if any
+	// camera has it. Without this, a video-only camera connected first would
+	// create a video-only template, silently dropping audio from other cameras.
+	type camProbe struct {
+		name       string
+		mediaCount int
+	}
+	probes := make([]camProbe, len(cameras))
 	for i, cam := range cameras {
-		log.Printf("[bridge] connecting camera %d/%d: %s (first=%v)", i+1, len(cameras), cam, i == 0)
+		rawURL := b.rtspBase + "/" + cam
+		u, _ := base.ParseURL(rawURL)
+		c := &gortsplib.Client{Scheme: u.Scheme, Host: u.Host}
+		if err := c.Start(); err != nil {
+			probes[i] = camProbe{cam, 0}
+			continue
+		}
+		desc, _, err := c.Describe(u)
+		c.Close()
+		if err != nil {
+			probes[i] = camProbe{cam, 0}
+			continue
+		}
+		probes[i] = camProbe{cam, len(desc.Medias)}
+		log.Printf("[bridge] probe %s: %d medias", cam, len(desc.Medias))
+	}
+	sort.SliceStable(probes, func(i, j int) bool {
+		return probes[i].mediaCount > probes[j].mediaCount
+	})
+	sorted := make([]string, len(probes))
+	for i, p := range probes {
+		sorted[i] = p.name
+	}
+	log.Printf("[bridge] connection order (most medias first): %v", sorted)
+
+	for i, cam := range sorted {
+		log.Printf("[bridge] connecting camera %d/%d: %s (first=%v)", i+1, len(sorted), cam, i == 0)
 		if err := b.connectCamera(cam, i == 0); err != nil {
 			log.Printf("[bridge] camera %s connect FAILED: %v", cam, err)
 			b.Stop()
