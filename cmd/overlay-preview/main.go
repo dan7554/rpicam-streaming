@@ -117,6 +117,12 @@ func handleRender(w http.ResponseWriter, r *http.Request) {
 	if v, _ := strconv.Atoi(q.Get("pad_right")); v > 0 {
 		style.PadRight = v
 	}
+	if v, _ := strconv.Atoi(q.Get("col_pos_w")); v > 0 {
+		style.ColPosW = v
+	}
+	if v, _ := strconv.Atoi(q.Get("col_num_w")); v > 0 {
+		style.ColNumW = v
+	}
 	if v, _ := strconv.Atoi(q.Get("col_name_w")); v > 0 {
 		style.ColNameW = v
 	}
@@ -206,7 +212,9 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 		{"pad_x", "Pad X", fmt.Sprintf("%d", ds.PadX), 2, 20},
 		{"pad_right", "Pad Right", fmt.Sprintf("%d", ds.PadRight), 0, 30},
 		{"opacity", "Opacity", fmt.Sprintf("%d", ds.Opacity), 50, 255},
-		{"col_name_w", "Name Col W", "0", 0, 200},
+		{"col_pos_w", "Pos Col W", fmt.Sprintf("%d", ds.ColPosW), 16, 60},
+		{"col_num_w", "Num Col W", fmt.Sprintf("%d", ds.ColNumW), 24, 80},
+		{"col_name_w", "Name Col W", fmt.Sprintf("%d", ds.ColNameW), 24, 200},
 		{"col_gap_w", "Gap Col W", fmt.Sprintf("%d", ds.ColGapW), 24, 120},
 		{"flag_offset_x", "Flag X", "0", -200, 200},
 		{"flag_offset_y", "Flag Y", "0", -200, 200},

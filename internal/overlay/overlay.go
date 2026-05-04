@@ -109,8 +109,10 @@ type Style struct {
 	PadX         int `json:"pad_x"`          // left padding (default 8)
 	PadRight     int `json:"pad_right"`      // right padding after last column (default 0)
 	Opacity      int `json:"opacity"`        // row background opacity 0-255 (default 230)
-	ColNameW     int `json:"col_name_w"`     // name column width in pixels (0 = format default)
-	ColGapW      int `json:"col_gap_w"`      // gap column width in pixels (default 64)
+	ColPosW      int `json:"col_pos_w"`      // position column width in pixels (default 28)
+	ColNumW      int `json:"col_num_w"`      // number column width in pixels (default 40)
+	ColNameW     int `json:"col_name_w"`     // name column width in pixels (default 56)
+	ColGapW      int `json:"col_gap_w"`      // gap column width in pixels (default 55)
 
 	// Element position offsets (pixels, can be negative)
 	FlagOffsetX    int `json:"flag_offset_x"`     // flag box X offset from default
@@ -143,7 +145,9 @@ func DefaultStyle() Style {
 		PadX:         8,
 		PadRight:     0,
 		Opacity:      230,
-		ColNameW:     55,
+		ColPosW:      23,
+		ColNumW:      35,
+		ColNameW:     56,
 		ColGapW:      55,
 		FlagOffsetX:  5,
 	}
@@ -187,7 +191,9 @@ func (s Style) resolved() resolvedStyle {
 		padX:         orInt(s.PadX, d.PadX),
 		padRight:     s.PadRight, // 0 is valid default
 		opacity:      orInt(s.Opacity, d.Opacity),
-		colNameW:     s.ColNameW, // 0 means use format default
+		colPosW:      orInt(s.ColPosW, d.ColPosW),
+		colNumW:      orInt(s.ColNumW, d.ColNumW),
+		colNameW:     orInt(s.ColNameW, d.ColNameW),
 		colGapW:      orInt(s.ColGapW, d.ColGapW),
 		flagOffsetX:    s.FlagOffsetX,
 		flagOffsetY:    s.FlagOffsetY,
@@ -212,7 +218,7 @@ type resolvedStyle struct {
 	textColor, posColor, p1Color, numColor     color.RGBA
 	gapColor, bestLapColor, lapInfoColor       color.RGBA
 	rowHeight, headerHeight, padX, padRight, opacity int
-	colNameW, colGapW                                int
+	colPosW, colNumW, colNameW, colGapW              int
 	flagOffsetX, flagOffsetY                         int
 	lapInfoOffsetX, lapInfoOffsetY                   int
 	bestLapOffsetX, bestLapOffsetY                   int
@@ -844,15 +850,12 @@ func (o *Overlay) renderCondensedVariant(comps []Competitor, sessionName string,
 		bestLapH  = 20
 		gapH      = 4
 		charW     = 8
-		colPos    = 28
-		colNum    = 40
 		boxPadX   = 10
 	)
+	colPos := st.colPosW
+	colNum := st.colNumW
 	colGap := st.colGapW
-	colName := colNameW
-	if st.colNameW > 0 {
-		colName = st.colNameW
-	}
+	colName := st.colNameW
 	dataW := colPos + colNum + colName + padX + st.padRight
 	if showGap {
 		dataW += colGap
