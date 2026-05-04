@@ -224,17 +224,41 @@
 
             const sessionURL = res.headers.get('Location');
 
+            function reconnect() {
+                if (players[name]?.pc) players[name].pc.close();
+                if (players[name]?.stallTimer) clearInterval(players[name].stallTimer);
+                delete players[name];
+                const statusDot = document.getElementById(`status-${name}`);
+                if (statusDot) statusDot.classList.remove('ready');
+                setTimeout(() => startPreview(name), 2000);
+            }
+
             pc.onconnectionstatechange = () => {
                 if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-                    if (players[name]?.pc) players[name].pc.close();
-                    delete players[name];
-                    const statusDot = document.getElementById(`status-${name}`);
-                    if (statusDot) statusDot.classList.remove('ready');
-                    setTimeout(() => startPreview(name), 2000);
+                    reconnect();
                 }
             };
 
-            players[name] = { pc, sessionURL };
+            // Detect stalled video (publisher reconnected but WebRTC session got no new frames)
+            let lastBytes = 0;
+            let stallCount = 0;
+            const stallTimer = setInterval(async () => {
+                if (!players[name] || players[name].pc !== pc) { clearInterval(stallTimer); return; }
+                try {
+                    const stats = await pc.getStats();
+                    let currentBytes = 0;
+                    stats.forEach(s => { if (s.type === 'inbound-rtp' && s.kind === 'video') currentBytes = s.bytesReceived || 0; });
+                    if (currentBytes > 0 && currentBytes === lastBytes) {
+                        stallCount++;
+                        if (stallCount >= 3) { clearInterval(stallTimer); reconnect(); }
+                    } else {
+                        stallCount = 0;
+                    }
+                    lastBytes = currentBytes;
+                } catch { clearInterval(stallTimer); }
+            }, 3000);
+
+            players[name] = { pc, sessionURL, stallTimer };
             const statusDot = document.getElementById(`status-${name}`);
             if (statusDot) statusDot.classList.add('ready');
             video.play().catch(() => {});

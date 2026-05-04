@@ -1,0 +1,133 @@
+###############################################
+# MediaMTX local config — macOS development
+# Does NOT replace mediamtx.yml (AWS/production config)
+###############################################
+
+logLevel: info
+logDestinations: [stdout]
+
+readTimeout: 10s
+writeTimeout: 10s
+writeQueueSize: 1024
+udpMaxPayloadSize: 1472
+
+###############################################
+# Authentication — open for local dev
+
+authMethod: internal
+authInternalUsers:
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      - action: publish
+        path:
+      - action: read
+        path:
+      - action: playback
+        path:
+      - action: api
+      - action: metrics
+      - action: pprof
+
+###############################################
+# Control API — no TLS for local
+
+api: yes
+apiAddress: :9997
+apiEncryption: no
+apiAllowOrigin: "*"
+
+###############################################
+# Metrics / pprof — disabled locally
+
+metrics: no
+pprof: no
+
+###############################################
+# RTSP server
+
+rtsp: yes
+rtspTransports: [udp, tcp]
+rtspEncryption: "no"
+rtspAddress: :8554
+rtpAddress: :8000
+rtcpAddress: :8001
+rtspAuthMethods: [basic]
+# Must be 0 on macOS (setting buffer size not supported)
+rtspUDPReadBufferSize: 0
+
+###############################################
+# RTMP server
+
+rtmp: yes
+rtmpAddress: :1935
+rtmpEncryption: "no"
+
+###############################################
+# HLS server
+
+hls: yes
+hlsAddress: :8888
+hlsEncryption: no
+hlsAllowOrigin: "*"
+hlsAlwaysRemux: yes
+hlsVariant: lowLatency
+hlsSegmentCount: 10
+hlsSegmentDuration: 2s
+hlsPartDuration: 200ms
+hlsSegmentMaxSize: 50M
+
+###############################################
+# WebRTC server
+
+webrtc: yes
+webrtcAddress: :8889
+webrtcEncryption: no
+webrtcAllowOrigin: "*"
+webrtcLocalUDPAddress: :8189
+webrtcLocalTCPAddress: :8189
+# Gather IPs from local interfaces for WebRTC ICE
+webrtcIPsFromInterfaces: yes
+webrtcIPsFromInterfacesList: []
+webrtcAdditionalHosts: []
+webrtcICEServers2: []
+webrtcHandshakeTimeout: 10s
+webrtcTrackGatherTimeout: 2s
+webrtcSTUNGatherTimeout: 5s
+
+###############################################
+# SRT server
+
+srt: no
+
+###############################################
+# Path defaults
+
+pathDefaults:
+  source: publisher
+  sourceOnDemand: no
+  maxReaders: 0
+  overridePublisher: yes
+  record: no
+
+###############################################
+# Paths — camera streams published via RTMP
+
+paths:
+  cam3:
+    source: publisher
+
+  # Scene composition
+  live-output:
+  live-preview:
+
+  # Commentary audio
+  commentary-1:
+  commentary-2:
+  commentary-1-whip:
+    overridePublisher: yes
+  commentary-2-whip:
+    overridePublisher: yes
+
+  all_others:

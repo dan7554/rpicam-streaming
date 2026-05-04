@@ -69,6 +69,37 @@ wait_for_server() {
 
 # Stream loop with auto-retry
 retry_count=0
+WATCHDOG_INTERVAL="${WATCHDOG_INTERVAL:-10}"
+WATCHDOG_THRESHOLD="${WATCHDOG_THRESHOLD:-500000}"  # 500KB send buffer = stuck
+WATCHDOG_MAX_STRIKES="${WATCHDOG_MAX_STRIKES:-3}"   # 3 consecutive checks = kill
+
+# Watchdog: monitors RTMP send buffer, kills GStreamer if stuck
+start_watchdog() {
+    local gst_pid="$1"
+    local strikes=0
+    while kill -0 "$gst_pid" 2>/dev/null; do
+        sleep "$WATCHDOG_INTERVAL"
+        # Get send-Q for connections to RTMP port
+        local send_q
+        send_q=$(ss -tnp 2>/dev/null | grep ":${RTMP_PORT}" | grep -v "FIN\|CLOSE\|TIME" | awk '{print $3}' | sort -rn | head -1)
+        send_q="${send_q:-0}"
+
+        if [ "$send_q" -gt "$WATCHDOG_THRESHOLD" ]; then
+            strikes=$((strikes + 1))
+            log "WATCHDOG: send buffer ${send_q} bytes (strike $strikes/$WATCHDOG_MAX_STRIKES)"
+            if [ "$strikes" -ge "$WATCHDOG_MAX_STRIKES" ]; then
+                log "WATCHDOG: connection stuck, killing GStreamer (pid $gst_pid)"
+                kill "$gst_pid" 2>/dev/null
+                sleep 1
+                kill -9 "$gst_pid" 2>/dev/null
+                return
+            fi
+        else
+            strikes=0
+        fi
+    done
+}
+
 while true; do
     wait_for_camera
     wait_for_server
@@ -96,7 +127,7 @@ while true; do
             rtmpsink location="$rtmp_url" \
             alsasrc device="$AUDIO_DEVICE" buffer-time=200000 ! "audio/x-raw,rate=48000,channels=1" ! queue max-size-time=3000000000 ! \
             audioconvert ! avenc_aac ! aacparse ! mux. \
-            2>&1 || true
+            2>&1 &
     else
         # Video-only GStreamer pipeline
         gst-launch-1.0 -e \
@@ -104,8 +135,16 @@ while true; do
             videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast bitrate=${BITRATE} key-int-max="${GOP}" bframes=0 threads=4 ! \
             h264parse ! flvmux streamable=true ! \
             rtmpsink location="$rtmp_url" \
-            2>&1 || true
+            2>&1 &
     fi
+
+    GST_PID=$!
+    log "GStreamer started (pid $GST_PID), watchdog monitoring send buffer"
+    start_watchdog "$GST_PID" &
+    WATCHDOG_PID=$!
+    wait "$GST_PID" 2>/dev/null
+    kill "$WATCHDOG_PID" 2>/dev/null
+    wait "$WATCHDOG_PID" 2>/dev/null
 
     log "Stream exited (attempt $retry_count). Retrying in ${RETRY_DELAY}s..."
     sleep "$RETRY_DELAY"

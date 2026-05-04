@@ -34,11 +34,34 @@ echo "  Server:     $SERVER_IP:1935 (RTMP)"
 echo ""
 
 # 1. Check connectivity
-echo "[1/5] Checking SSH to Pi..."
+echo "[1/6] Checking SSH to Pi..."
 ssh -o ConnectTimeout=5 "$PI_HOST" "echo OK" || { echo "Cannot reach $PI_HOST"; exit 1; }
 
-# 2. Check camera
-echo "[2/5] Checking camera..."
+# 2. Tailscale — install if missing, ensure auto-start
+echo "[2/6] Checking Tailscale..."
+TAILSCALE_INSTALLED=$(ssh "$PI_HOST" "command -v tailscale &>/dev/null && echo yes || echo no")
+if [ "$TAILSCALE_INSTALLED" = "no" ]; then
+    echo "  Installing Tailscale..."
+    scp "$SCRIPT_DIR/setup-tailscale.sh" "$PI_HOST:/tmp/setup-tailscale.sh"
+    ssh "$PI_HOST" "sudo bash /tmp/setup-tailscale.sh"
+    echo ""
+    echo "  ⚠️  Tailscale needs authentication."
+    echo "  Running 'tailscale up --ssh' — follow the URL to authorize:"
+    echo ""
+    ssh -t "$PI_HOST" "sudo tailscale up --ssh --accept-routes"
+    echo ""
+    TS_IP=$(ssh "$PI_HOST" "tailscale ip -4 2>/dev/null || echo 'pending'")
+    echo "  Tailscale IP: $TS_IP"
+else
+    TS_STATUS=$(ssh "$PI_HOST" "systemctl is-active tailscaled 2>/dev/null || echo inactive")
+    TS_IP=$(ssh "$PI_HOST" "tailscale ip -4 2>/dev/null || echo 'unknown'")
+    echo "  Tailscale already installed: $TS_STATUS (IP: $TS_IP)"
+    # Ensure services are enabled
+    ssh "$PI_HOST" "sudo systemctl enable tailscaled 2>/dev/null"
+fi
+
+# 3. Check camera
+echo "[3/6] Checking camera..."
 cam_check=$(ssh "$PI_HOST" "rpicam-vid --list-cameras 2>&1")
 if echo "$cam_check" | grep -q "Available cameras"; then
     echo "  Camera found: $(echo "$cam_check" | grep '^[0-9]')"
@@ -48,8 +71,8 @@ else
     [[ "$yn" =~ ^[Yy]$ ]] || exit 1
 fi
 
-# 3. Copy files
-echo "[3/5] Deploying files..."
+# 4. Copy files
+echo "[4/6] Deploying files..."
 ssh "$PI_HOST" "sudo mkdir -p /opt/rpicam-stream"
 scp "$SCRIPT_DIR/rpicam-stream.sh" "$PI_HOST:/tmp/rpicam-stream.sh"
 scp "$SCRIPT_DIR/rpicam-stream.service" "$PI_HOST:/tmp/rpicam-stream.service"
@@ -62,16 +85,16 @@ ssh "$PI_HOST" "
     sudo systemctl daemon-reload
 "
 
-# 4. Enable and start
-echo "[4/5] Starting service..."
+# 5. Enable and start
+echo "[5/6] Starting service..."
 ssh "$PI_HOST" "
     sudo systemctl stop rpicam-stream 2>/dev/null || true
     sudo systemctl enable rpicam-stream
     sudo systemctl start rpicam-stream
 "
 
-# 5. Verify
-echo "[5/5] Verifying..."
+# 6. Verify
+echo "[6/6] Verifying..."
 sleep 5
 ssh "$PI_HOST" "
     echo '--- Service ---'

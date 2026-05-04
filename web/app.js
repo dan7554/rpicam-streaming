@@ -196,13 +196,33 @@ async function startWebRTC(name) {
         }
     };
 
-    players[name] = { pc, sessionURL, type: 'webrtc' };
+    // Detect stalled video (publisher reconnected but WebRTC session got no new frames)
+    let lastBytes = 0;
+    let stallCount = 0;
+    const stallTimer = setInterval(async () => {
+        if (!players[name] || players[name].pc !== pc) { clearInterval(stallTimer); return; }
+        try {
+            const stats = await pc.getStats();
+            let currentBytes = 0;
+            stats.forEach(s => { if (s.type === 'inbound-rtp' && s.kind === 'video') currentBytes = s.bytesReceived || 0; });
+            if (currentBytes > 0 && currentBytes === lastBytes) {
+                stallCount++;
+                if (stallCount >= 3) { clearInterval(stallTimer); cleanupWebRTC(name); setTimeout(() => startPreview(name), 2000); }
+            } else {
+                stallCount = 0;
+            }
+            lastBytes = currentBytes;
+        } catch { clearInterval(stallTimer); }
+    }, 3000);
+
+    players[name] = { pc, sessionURL, type: 'webrtc', stallTimer };
     video.play().catch(() => {});
 }
 
 function cleanupWebRTC(name) {
     const p = players[name];
     if (!p) return;
+    if (p.stallTimer) clearInterval(p.stallTimer);
     if (p.type === 'webrtc' && p.pc) {
         p.pc.close();
     }

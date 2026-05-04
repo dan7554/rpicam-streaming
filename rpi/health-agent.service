@@ -1,0 +1,16 @@
+[Unit]
+Description=Fleet Health Agent
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/health-agent.conf
+ExecStart=/usr/local/bin/health-agent.sh
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -2,12 +2,24 @@
 set -euo pipefail
 
 # Tailscale SSH connection helper
-# Lists your Tailscale devices and connects via SSH
+# Auto-discovers rpicam* devices from Tailscale and connects via SSH
 
-DEVICES=(
-  "rpicam2-1|100.80.96.23|pi"
-  "rpicam3|100.79.254.101|pi"
-)
+SSH_USER="${FLEET_SSH_USER:-dan7554}"
+
+# Discover online rpicam* devices from Tailscale
+discover_devices() {
+  local devices=()
+  while IFS=$'\t' read -r ip name status; do
+    devices+=("$name|$ip|$SSH_USER")
+  done < <(tailscale status 2>/dev/null | grep -i "rpicam" | awk '{print $1 "\t" $2 "\t" $6}')
+  if [ ${#devices[@]} -eq 0 ]; then
+    echo "No rpicam* devices found on Tailscale. Is Tailscale running?"
+    exit 1
+  fi
+  echo "${devices[@]}"
+}
+
+read -ra DEVICES <<< "$(discover_devices)"
 
 show_status() {
   echo "=== Tailscale Devices ==="

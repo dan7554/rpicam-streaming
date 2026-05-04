@@ -29,6 +29,7 @@ type Handler struct {
 	webrtcProxy  *httputil.ReverseProxy
 	overlay      *overlay.Overlay
 	uiCfg        *uiconfig.Store
+	fleet        *FleetStore
 	buildVersion string
 }
 
@@ -38,7 +39,7 @@ func (h *Handler) SetBuildVersion(v string) {
 
 func NewHandler(cfg *config.Config, sw *switcher.Switcher) *Handler {
 	log.Printf("[api] NewHandler: port=%s hlsAddr=%s webrtcAddr=%s overlayDir=%s", cfg.Port, cfg.HLSAddress, cfg.WebRTCAddress, cfg.OverlayDir)
-	h := &Handler{cfg: cfg, sw: sw, mux: http.NewServeMux()}
+	h := &Handler{cfg: cfg, sw: sw, mux: http.NewServeMux(), fleet: NewFleetStore()}
 
 	// Load persisted UI config
 	configPath := filepath.Join(cfg.OverlayDir, "..", "ui-config.json")
@@ -67,6 +68,7 @@ func NewHandler(cfg *config.Config, sw *switcher.Switcher) *Handler {
 	}
 
 	h.routes()
+	h.startMediaMTXWatchdog()
 	return h
 }
 
@@ -90,9 +92,18 @@ func (h *Handler) routes() {
 	h.mux.HandleFunc("POST /api/config", h.postConfig)
 	h.mux.HandleFunc("GET /api/version", h.getVersion)
 
+	// Fleet management
+	h.mux.HandleFunc("POST /api/fleet/heartbeat", h.fleetHeartbeat)
+	h.mux.HandleFunc("GET /api/fleet/status", h.fleetStatus)
+
 	// Serve viewer page at /viewer
 	h.mux.HandleFunc("GET /viewer", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "web/viewer.html")
+	})
+
+	// Serve fleet page at /fleet
+	h.mux.HandleFunc("GET /fleet", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "web/fleet.html")
 	})
 
 	// Serve web UI
