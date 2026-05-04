@@ -63,12 +63,18 @@ if ! curl -sf http://localhost:9997/v3/paths/list > /dev/null 2>&1; then
 fi
 echo "    MediaMTX ready (RTSP :8554, RTMP :1935, HLS :8888, API :9997)"
 
-# SSH reverse tunnel: rpicam3's localhost:1935 → Mac's localhost:1935
-echo "==> Starting SSH reverse tunnel to rpicam3..."
-ssh -R 1935:localhost:1935 -N -o ServerAliveInterval=30 -o ExitOnForwardFailure=yes rpicam3 &
+# SSH reverse tunnels: rpicam3's localhost → Mac's localhost
+# Required because managed Mac MDM firewall blocks incoming connections
+# on all interfaces except loopback. Direct LAN access (192.168.50.x) fails.
+# - 1935: RTMP ingest (GStreamer → MediaMTX)
+# - 8889: WHIP signaling (for future WebRTC direct publish)
+# - 8189: ICE/TCP (for future WebRTC media transport)
+echo "==> Starting SSH reverse tunnels to rpicam3..."
+ssh -R 1935:localhost:1935 -R 8889:localhost:8889 -R 8189:localhost:8189 \
+    -N -o ServerAliveInterval=30 -o ExitOnForwardFailure=yes rpicam3 &
 PIDS+=($!)
 sleep 2
-echo "    rpicam3 tunnel: Pi localhost:1935 → Mac localhost:1935"
+echo "    rpicam3 tunnels: Pi localhost:{1935,8889,8189} → Mac localhost"
 
 # Update rpicam3 to push to localhost (through the tunnel) and restart
 echo "==> Configuring rpicam3 stream..."

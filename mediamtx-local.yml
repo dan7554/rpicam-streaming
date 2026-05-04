@@ -91,9 +91,9 @@ webrtcLocalTCPAddress: :8189
 # Gather IPs from local interfaces for WebRTC ICE
 webrtcIPsFromInterfaces: yes
 webrtcIPsFromInterfacesList: []
-webrtcAdditionalHosts: []
+webrtcAdditionalHosts: [127.0.0.1]
 webrtcICEServers2: []
-webrtcHandshakeTimeout: 5s
+webrtcHandshakeTimeout: 10s
 webrtcTrackGatherTimeout: 1s
 webrtcSTUNGatherTimeout: 2s
 
