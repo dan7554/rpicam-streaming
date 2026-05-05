@@ -324,7 +324,7 @@ h2 {
 .flag-red { background: #e53935; }
 .flag-yellow { background: #f9a825; color: #000; }
 .flag-green { background: #43a047; }
-.flag-checkered { background: #333; background-image: repeating-conic-gradient(#333 0% 25%, #fff 0% 50%); background-size: 10px 10px; color: #000; text-shadow: 0 0 2px #fff; }
+.flag-checkered { background: #333; background-image: repeating-conic-gradient(#333 0% 25%, #fff 0% 50%); background-size: 10px 10px; color: #000; text-shadow: 0 0 2px #fff; min-width: 80px; }
 .flag-clear { background: #555; }
 
 .flag-status-text {
@@ -814,5 +814,181 @@ h2 {
         width: 100%;
         border-left: none;
         border-top: 1px solid #2a2a2a;
+    }
+}
+
+/* ==================== Mobile Responsive ==================== */
+@media (max-width: 600px) {
+    header {
+        padding: 10px 14px;
+    }
+
+    header h1 {
+        font-size: 16px;
+    }
+
+    main {
+        padding: 10px;
+    }
+
+    h2 {
+        font-size: 13px;
+        margin-bottom: 8px;
+    }
+
+    /* Camera grid: single column */
+    .grid {
+        grid-template-columns: 1fr;
+        gap: 10px;
+        margin-bottom: 16px;
+    }
+
+    /* Camera header links wrap */
+    #previews h2 {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .cam-toggle, .viewer-link {
+        margin-left: 0;
+    }
+
+    /* Section cards: reduce padding */
+    #youtube-controls,
+    #overlay-controls,
+    #commentary-section,
+    .ads-card {
+        padding: 12px;
+    }
+
+    /* Controls: stack vertically */
+    .controls {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
+    }
+
+    .controls input[type="text"],
+    .controls input[type="number"] {
+        min-width: unset;
+        width: 100%;
+        font-size: 16px; /* prevent iOS zoom on focus */
+    }
+
+    .btn-group {
+        flex-wrap: wrap;
+        width: 100%;
+    }
+
+    .btn-group button {
+        flex: 1;
+        min-width: 0;
+        padding: 10px 12px;
+    }
+
+    /* Overlay options: wrap on mobile */
+    .overlay-options {
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+
+    .overlay-options select {
+        min-width: unset;
+        width: 100%;
+    }
+
+    /* Flag controls: wrap */
+    .flag-controls {
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+
+    .flag-btn {
+        padding: 6px 10px;
+        font-size: 11px;
+    }
+
+    /* Ads table: hide Duration + Actions columns, compact */
+    .ads-table th:nth-child(3),
+    .ads-table td:nth-child(3) {
+        display: none;
+    }
+
+    .ads-table th,
+    .ads-table td {
+        padding: 6px 6px;
+        font-size: 12px;
+    }
+
+    .ads-table .ad-actions button {
+        padding: 4px 6px;
+        font-size: 10px;
+    }
+
+    .ads-controls {
+        width: 100%;
+    }
+
+    .ads-controls button {
+        flex: 1;
+    }
+
+    .ad-upload button {
+        font-size: 12px;
+        padding: 8px 12px;
+    }
+
+    /* Commentary slots: stack */
+    .commentary-slot {
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 8px;
+    }
+
+    .commentary-slot .slot-label {
+        min-width: unset;
+        width: 100%;
+        font-size: 13px;
+    }
+
+    .commentary-slot input[type="range"] {
+        width: 80px;
+    }
+
+    .commentary-master {
+        flex-wrap: wrap;
+    }
+
+    .commentary-master input[type="range"] {
+        width: 120px;
+    }
+
+    .commentary-mic-select select {
+        max-width: 100%;
+        width: 100%;
+    }
+
+    /* Output preview: full width */
+    .output-card video {
+        max-width: 100%;
+    }
+
+    /* Status bars */
+    #status-bar,
+    #overlay-status-bar {
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+
+    /* Ad playback bar */
+    #ad-playback-bar {
+        padding: 8px 10px;
+    }
+
+    /* Build version */
+    .build-version {
+        font-size: 9px;
     }
 }

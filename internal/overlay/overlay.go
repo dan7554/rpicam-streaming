@@ -260,6 +260,7 @@ type Overlay struct {
 	flagStatus    string
 	style         Style
 	useResultsAPI bool // true when using /sessions/{id} URL format
+	paused        bool // true during ad playback — suppress rendering
 	stopCh      chan struct{}
 	wg          sync.WaitGroup
 }
@@ -327,6 +328,22 @@ func (o *Overlay) Start() {
 		}
 	}()
 	log.Printf("[overlay] started: event=%s session=%s interval=%s maxRows=%d pngPath=%s", o.eventID, o.sessionID, o.interval, o.maxRows, o.pngPath)
+}
+
+// Pause suppresses overlay rendering (e.g. during ad playback).
+func (o *Overlay) Pause() {
+	o.mu.Lock()
+	o.paused = true
+	o.mu.Unlock()
+	log.Printf("[overlay] paused (ad playback)")
+}
+
+// Resume re-enables overlay rendering after ads finish.
+func (o *Overlay) Resume() {
+	o.mu.Lock()
+	o.paused = false
+	o.mu.Unlock()
+	log.Printf("[overlay] resumed")
 }
 
 // Stop halts polling.
@@ -552,6 +569,10 @@ func (o *Overlay) Competitors() []Competitor {
 // render draws the timing tower to a PNG file.
 func (o *Overlay) render() error {
 	o.mu.RLock()
+	if o.paused {
+		o.mu.RUnlock()
+		return nil // suppress rendering during ad playback
+	}
 	comps := o.competitors
 	sessionName := o.sessionName
 	if o.titleOverride != "" {

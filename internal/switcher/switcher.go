@@ -38,6 +38,12 @@ type Bridger interface {
 // BridgeFactory creates a Bridger on demand.
 type BridgeFactory func() Bridger
 
+// OverlayPauser can pause/resume overlay rendering during ad playback.
+type OverlayPauser interface {
+	Pause()
+	Resume()
+}
+
 // Switcher manages stream selection and optionally an FFmpeg process for
 // pushing to external RTMP destinations. In local mode (no external RTMP),
 // switching is instant — no FFmpeg needed. In RTMP mode, a bridge proxy
@@ -71,6 +77,8 @@ type Switcher struct {
 	adCurrentIdx int         // index of current ad in playlist
 	adTotal      int         // total ads in playlist
 	adCurrentName string     // name of currently playing ad
+
+	overlayPauser OverlayPauser // pause overlay during ads (optional)
 }
 
 // CommentaryConfig holds the state for browser-based commentary mixing.
@@ -91,7 +99,7 @@ type CommentarySlot struct {
 // overlays by simply writing a new PNG (or a transparent one to disable).
 func overlayVideoSrc(overlayPath string) string {
 	return fmt.Sprintf(
-		"multifilesrc location=%s loop=true start-index=0 stop-index=0 caps=image/png,framerate=(fraction)1/2 ! "+
+		"multifilesrc location=%s loop=true start-index=0 stop-index=0 caps=image/png,framerate=(fraction)5/1 ! "+
 			"pngdec ! videoconvert ! video/x-raw,format=RGBA ! queue name=overlay_img",
 		overlayPath)
 }
@@ -460,6 +468,13 @@ func (s *Switcher) SetOverlay(pngPath string) {
 	}
 }
 
+// SetOverlayPauser sets the overlay pauser for suppressing overlay during ads.
+func (s *Switcher) SetOverlayPauser(p OverlayPauser) {
+	s.mu.Lock()
+	s.overlayPauser = p
+	s.mu.Unlock()
+}
+
 // NewWithFactories creates a Switcher with custom factories (for testing).
 func NewWithFactories(rtspBase, mediaMTXAPI string, cf CmdFactory, bf BridgeFactory, cameras []string) *Switcher {
 	return &Switcher{
@@ -615,12 +630,25 @@ func (s *Switcher) PlayAds(adFiles []string, adNames []string) error {
 	previousCamera := s.activeStream
 	overlayPath := s.overlayPath
 	bridge := s.bridge
+	overlayPauser := s.overlayPauser
 	s.mu.Unlock()
 
 	const adSourceName = "ad-playback"
 
 	go func() {
 		log.Printf("[switcher] ad playback starting: %d ads (will restore cam %s)", len(adFiles), previousCamera)
+
+		// Pause overlay rendering for the entire ad playlist.
+		if overlayPauser != nil {
+			overlayPauser.Pause()
+		}
+		if overlayPath != "" {
+			writeTransparentPNG(overlayPath)
+			// Wait for the GStreamer pipeline to pick up the transparent PNG
+			// and flush any buffered overlay frames (5fps = 200ms per read,
+			// plus compositor/encoder latency).
+			time.Sleep(1500 * time.Millisecond)
+		}
 
 		for i, adFile := range adFiles {
 			select {
@@ -690,11 +718,6 @@ func (s *Switcher) PlayAds(adFiles []string, adNames []string) error {
 			log.Printf("[switcher] total ad setup time: %dms (this much of ad start is lost)", totalElapsed.Milliseconds())
 			bridge.Switch(adSourceName)
 
-			// Hide overlay now that we've switched to the ad
-			if overlayPath != "" {
-				writeTransparentPNG(overlayPath)
-			}
-
 			// Wait for ad to finish or stop signal
 			doneCh := make(chan error, 1)
 			go func() { doneCh <- cmd.Wait() }()
@@ -710,30 +733,30 @@ func (s *Switcher) PlayAds(adFiles []string, adNames []string) error {
 				cmd.Process.Kill()
 				<-doneCh
 				log.Printf("[switcher] ad %d killed (stop requested)", i+1)
-				// Switch back before cleanup
 				bridge.Switch(previousCamera)
 				time.Sleep(200 * time.Millisecond)
 				bridge.DisconnectSource(adSourceName)
 				goto done
 			}
 
-			// Switch back to camera between ads (or after last ad)
-			bridge.Switch(previousCamera)
-			time.Sleep(200 * time.Millisecond)
+			// Disconnect the finished ad source but DON'T switch back to camera
+			// between consecutive ads — keeps the last ad frame visible while
+			// the next ad connects (avoids camera flash).
 			bridge.DisconnectSource(adSourceName)
 
-			// Brief pause between ads
-			if i < len(adFiles)-1 {
-				time.Sleep(500 * time.Millisecond)
+			if i == len(adFiles)-1 {
+				// Last ad — switch back to camera.
+				bridge.Switch(previousCamera)
 			}
 		}
 
 	done:
 		log.Printf("[switcher] ad playback finished, restoring cam %s", previousCamera)
 
-		// Restore overlay
-		// The overlay poll loop is still running and will re-render the next PNG
-		// on its normal schedule. No action needed beyond letting it run.
+		// Resume overlay rendering — the next poll tick will re-render the overlay PNG.
+		if overlayPauser != nil {
+			overlayPauser.Resume()
+		}
 
 		s.mu.Lock()
 		s.adPlaying = false

@@ -96,17 +96,9 @@ async function init() {
     // Populate mic device selector
     populateMicDevices();
 
-    // YouTube stream key: server > localStorage
+    // YouTube stream key: populate datalist from history
     const youtubeKeyInput = document.getElementById('youtube-key');
-    const youtubeKey = serverCfg.youtube_key || localStorage.getItem('youtube-key') || '';
-    if (youtubeKey && youtubeKeyInput) {
-        youtubeKeyInput.value = youtubeKey;
-    }
-    if (youtubeKeyInput) {
-        youtubeKeyInput.addEventListener('input', () => {
-            localStorage.setItem('youtube-key', youtubeKeyInput.value.trim());
-        });
-    }
+    populateYoutubeKeyHistory();
 
     // Audio enabled: server > default (checked)
     if (serverCfg.audio_enabled !== undefined && serverCfg.audio_enabled !== null) {
@@ -341,9 +333,40 @@ let outputPlayer = null;
 let outputPreviewPaused = false;
 let outputPreviewStream = null;
 
+function populateYoutubeKeyHistory() {
+    const datalist = document.getElementById('youtube-key-history');
+    if (!datalist) return;
+    // Migrate old single-key storage to history array
+    const oldKey = localStorage.getItem('youtube-key');
+    if (oldKey) {
+        let keys = JSON.parse(localStorage.getItem('youtube-key-history') || '[]');
+        if (!keys.includes(oldKey)) keys.push(oldKey);
+        localStorage.setItem('youtube-key-history', JSON.stringify(keys));
+        localStorage.removeItem('youtube-key');
+    }
+    datalist.innerHTML = '';
+    const keys = JSON.parse(localStorage.getItem('youtube-key-history') || '[]');
+    keys.forEach(k => {
+        const opt = document.createElement('option');
+        opt.value = k;
+        datalist.appendChild(opt);
+    });
+}
+
+function saveYoutubeKeyHistory(key) {
+    if (!key) return;
+    let keys = JSON.parse(localStorage.getItem('youtube-key-history') || '[]');
+    keys = keys.filter(k => k !== key);
+    keys.unshift(key); // most recent first
+    if (keys.length > 20) keys = keys.slice(0, 20);
+    localStorage.setItem('youtube-key-history', JSON.stringify(keys));
+    populateYoutubeKeyHistory();
+}
+
 async function goLive() {
     const key = document.getElementById('youtube-key').value.trim();
     const audioEnabled = document.getElementById('audio-enabled').checked;
+    saveYoutubeKeyHistory(key);
 
     // Sync camera volume to server before starting pipeline
     const cameraVol = parseInt(document.getElementById('camera-vol').value) / 100;

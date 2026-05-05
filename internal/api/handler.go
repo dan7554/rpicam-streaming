@@ -118,6 +118,15 @@ func (h *Handler) routes() {
 	h.mux.HandleFunc("POST /api/fleet/heartbeat", h.fleetHeartbeat)
 	h.mux.HandleFunc("GET /api/fleet/status", h.fleetStatus)
 
+	// Debug tools
+	h.mux.HandleFunc("POST /api/debug/restart", h.debugRestart)
+	h.mux.HandleFunc("GET /api/debug/logs", h.debugLogs)
+
+	// Serve debug page at /debug
+	h.mux.HandleFunc("GET /debug", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "web/debug.html")
+	})
+
 	// Serve viewer page at /viewer
 	h.mux.HandleFunc("GET /viewer", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "web/viewer.html")
@@ -384,6 +393,9 @@ func (h *Handler) startOverlay(w http.ResponseWriter, r *http.Request) {
 	})
 	h.overlay.Start()
 
+	// Register overlay as pauser so ads can suppress rendering
+	h.sw.SetOverlayPauser(h.overlay)
+
 	// Tell the switcher to use the overlay
 	log.Printf("[api] startOverlay: calling SetOverlay(%s)", pngPath)
 	h.sw.SetOverlay(pngPath)
@@ -413,6 +425,7 @@ func (h *Handler) stopOverlay(w http.ResponseWriter, r *http.Request) {
 	}
 	h.overlay.Stop()
 	h.overlay = nil
+	h.sw.SetOverlayPauser(nil)
 	log.Printf("[api] stopOverlay: calling SetOverlay(\"\")")
 	h.sw.SetOverlay("")
 
@@ -765,4 +778,67 @@ func (h *Handler) postConfig(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) getVersion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"build": h.buildVersion})
+}
+
+func (h *Handler) debugRestart(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Service string `json:"service"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: %v", err)
+		return
+	}
+	log.Printf("[api] debugRestart: service=%s", req.Service)
+
+	switch req.Service {
+	case "mediamtx":
+		// Send response first — restarting mediamtx also restarts stream-server
+		// (systemd Requires= dependency), so we'd lose the connection.
+		writeJSON(w, http.StatusOK, map[string]string{"message": "mediamtx restarting"})
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		go func() {
+			time.Sleep(100 * time.Millisecond)
+			log.Printf("[api] debugRestart mediamtx: restarting via systemctl")
+			if err := exec.Command("sudo", "systemctl", "restart", "mediamtx").Run(); err != nil {
+				log.Printf("[api] debugRestart mediamtx FAILED: %v", err)
+			} else {
+				log.Printf("[api] debugRestart mediamtx SUCCESS")
+			}
+		}()
+	case "server":
+		writeJSON(w, http.StatusOK, map[string]string{"message": "server restarting"})
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		go func() {
+			time.Sleep(100 * time.Millisecond)
+			log.Printf("[api] debugRestart server: restarting via systemctl")
+			exec.Command("sudo", "systemctl", "restart", "stream-server").Run()
+		}()
+	default:
+		writeError(w, http.StatusBadRequest, "unknown service: %s", req.Service)
+	}
+}
+
+func (h *Handler) debugLogs(w http.ResponseWriter, r *http.Request) {
+	service := r.URL.Query().Get("service")
+	var unit string
+	switch service {
+	case "server":
+		unit = "stream-server"
+	case "mediamtx":
+		unit = "mediamtx"
+	default:
+		writeError(w, http.StatusBadRequest, "unknown service: %s", service)
+		return
+	}
+
+	out, err := exec.Command("journalctl", "-u", unit, "--no-pager", "-n", "100", "--output", "short-iso").Output()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "journalctl: %v", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"logs": string(out)})
 }
