@@ -585,7 +585,7 @@ async function startOutputWebRTC(stream) {
         if (event.receiver && event.receiver.jitterBufferTarget !== undefined) {
             event.receiver.jitterBufferTarget = 0;
         }
-        video.muted = false;
+        video.muted = true;
         video.play().catch(() => {});
     };
 
@@ -648,7 +648,7 @@ function startOutputHLS(stream) {
         hls.loadSource(url);
         hls.attachMedia(video);
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
-            video.muted = false;
+            video.muted = true;
             video.play().catch(() => {});
         });
         hls.on(Hls.Events.ERROR, (_, data) => {

@@ -116,7 +116,7 @@ func buildPipeline(overlayPath, rtspURL, rtmpURL, audioDevice, rtspBase string, 
 		return fmt.Sprintf(
 			"%s "+
 				"rtspsrc location=%s protocols=tcp latency=200 name=cam "+
-				"cam. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! avdec_h264 ! videoconvert ! video/x-raw,format=RGBA ! queue ! compositor name=mixer sink_1::xpos=20 sink_1::ypos=20 ! videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast key-int-max=30 bframes=0 bitrate=4000 ! h264parse ! tee name=enc_tee "+
+				"cam. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! avdec_h264 ! videoconvert ! video/x-raw,format=RGBA ! queue ! compositor name=mixer sink_1::xpos=20 sink_1::ypos=20 ! videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast key-int-max=30 bframes=0 bitrate=4000 ! video/x-h264,profile=constrained-baseline ! h264parse ! tee name=enc_tee "+
 				"overlay_img. ! mixer. "+
 				"osxaudiosrc device=%s name=mic "+
 				"mic. ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! audiorate ! tee name=at "+
@@ -131,7 +131,7 @@ func buildPipeline(overlayPath, rtspURL, rtmpURL, audioDevice, rtspBase string, 
 	return fmt.Sprintf(
 		"%s "+
 			"rtspsrc location=%s protocols=tcp latency=200 name=cam "+
-			"cam. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! avdec_h264 ! videoconvert ! video/x-raw,format=RGBA ! queue ! compositor name=mixer sink_1::xpos=20 sink_1::ypos=20 ! videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast key-int-max=30 bframes=0 bitrate=4000 ! h264parse ! tee name=enc_tee "+
+			"cam. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! avdec_h264 ! videoconvert ! video/x-raw,format=RGBA ! queue ! compositor name=mixer sink_1::xpos=20 sink_1::ypos=20 ! videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast key-int-max=30 bframes=0 bitrate=4000 ! video/x-h264,profile=constrained-baseline ! h264parse ! tee name=enc_tee "+
 			"overlay_img. ! mixer. "+
 			"%s "+
 			"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! audioconvert ! avenc_aac ! aacparse ! flvmux streamable=true name=rtmp_mux "+
