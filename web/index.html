@@ -66,7 +66,7 @@
                     <label for="overlay-max-rows">Rows:</label>
                     <input type="number" id="overlay-max-rows" min="3" max="30" value="25">
                     <label for="overlay-scale">Scale:</label>
-                    <input type="number" id="overlay-scale" min="1" max="4" value="1" style="width:50px">
+                    <input type="number" id="overlay-scale" min="0.5" max="4" step="0.1" value="1" style="width:50px">
                 </div>
                 <div class="btn-group">
                     <button id="btn-overlay-start" onclick="startOverlay()">Start Overlay</button>
@@ -86,6 +86,45 @@
             <div id="overlay-status-bar">
                 <span id="overlay-status-text">Off</span>
                 <span id="overlay-competitors"></span>
+            </div>
+        </section>
+
+        <!-- Logo Overlays -->
+        <section id="logo-section">
+            <h2>Logo Overlays</h2>
+            <div class="logo-grid">
+                <div class="logo-card" id="logo-top-right-card">
+                    <div class="logo-card-header">Top Right</div>
+                    <div class="logo-preview" id="logo-top-right-preview">
+                        <div class="logo-placeholder">No logo</div>
+                        <img id="logo-top-right-img" style="display:none">
+                    </div>
+                    <div class="logo-controls">
+                        <input type="file" id="logo-top-right-file" accept="image/png" style="display:none" onchange="uploadLogo('top-right')">
+                        <button onclick="document.getElementById('logo-top-right-file').click()">Upload</button>
+                        <button class="logo-remove-btn" id="logo-top-right-remove" onclick="removeLogo('top-right')" style="display:none">✕</button>
+                    </div>
+                    <div class="logo-settings">
+                        <label>Opacity: <input type="range" id="logo-top-right-opacity" min="0" max="100" value="90" oninput="updateLogoSettings('top-right')"> <span id="logo-top-right-opacity-val">90%</span></label>
+                        <label>Offset: <input type="number" id="logo-top-right-offset" min="0" max="500" value="20" onchange="updateLogoSettings('top-right')"> px</label>
+                    </div>
+                </div>
+                <div class="logo-card" id="logo-bot-right-card">
+                    <div class="logo-card-header">Bottom Right</div>
+                    <div class="logo-preview" id="logo-bot-right-preview">
+                        <div class="logo-placeholder">No logo</div>
+                        <img id="logo-bot-right-img" style="display:none">
+                    </div>
+                    <div class="logo-controls">
+                        <input type="file" id="logo-bot-right-file" accept="image/png" style="display:none" onchange="uploadLogo('bottom-right')">
+                        <button onclick="document.getElementById('logo-bot-right-file').click()">Upload</button>
+                        <button class="logo-remove-btn" id="logo-bot-right-remove" onclick="removeLogo('bottom-right')" style="display:none">✕</button>
+                    </div>
+                    <div class="logo-settings">
+                        <label>Opacity: <input type="range" id="logo-bot-right-opacity" min="0" max="100" value="90" oninput="updateLogoSettings('bottom-right')"> <span id="logo-bot-right-opacity-val">90%</span></label>
+                        <label>Offset: <input type="number" id="logo-bot-right-offset" min="0" max="500" value="20" onchange="updateLogoSettings('bottom-right')"> px</label>
+                    </div>
+                </div>
             </div>
         </section>
 
@@ -170,7 +209,7 @@
             </div>
         </section>
     </main>
-
-    <script src="app.js?v=8"></script>
+10
+    <script src="app.js?v=9"></script>
 </body>
 </html>

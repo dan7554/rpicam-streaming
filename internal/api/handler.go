@@ -2,8 +2,12 @@ package api
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"image"
+	_ "image/jpeg"
+	"image/png"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -22,6 +26,7 @@ import (
 	"github.com/dchristiani/media-mtx/internal/overlay"
 	"github.com/dchristiani/media-mtx/internal/switcher"
 	"github.com/dchristiani/media-mtx/internal/uiconfig"
+	xdraw "golang.org/x/image/draw"
 )
 
 type Handler struct {
@@ -51,6 +56,29 @@ func NewHandler(cfg *config.Config, sw *switcher.Switcher) *Handler {
 		configPath = "/tmp/ui-config.json"
 	}
 	h.uiCfg = uiconfig.NewStore(configPath)
+
+	// Apply persisted logo settings to switcher
+	uiCfgData := h.uiCfg.Get()
+	tr, br := sw.LogoStatus()
+	if uiCfgData.LogoTopRightOpacity != nil {
+		tr.Opacity = *uiCfgData.LogoTopRightOpacity
+	}
+	if uiCfgData.LogoTopRightOffset != nil {
+		tr.Offset = *uiCfgData.LogoTopRightOffset
+	}
+	if uiCfgData.LogoBotRightOpacity != nil {
+		br.Opacity = *uiCfgData.LogoBotRightOpacity
+	}
+	if uiCfgData.LogoBotRightOffset != nil {
+		br.Offset = *uiCfgData.LogoBotRightOffset
+	}
+	if uiCfgData.LogoTopRightScale != nil {
+		tr.Scale = *uiCfgData.LogoTopRightScale
+	}
+	if uiCfgData.LogoBotRightScale != nil {
+		br.Scale = *uiCfgData.LogoBotRightScale
+	}
+	sw.SetLogoConfig(tr, br)
 
 	hlsURL, _ := url.Parse("http://localhost" + cfg.HLSAddress)
 	h.hlsProxy = httputil.NewSingleHostReverseProxy(hlsURL)
@@ -113,6 +141,13 @@ func (h *Handler) routes() {
 	h.mux.HandleFunc("POST /api/ads/stop", h.adsStop)
 	h.mux.HandleFunc("GET /api/ads/playback", h.adsPlayback)
 	h.mux.HandleFunc("GET /api/ads/preview/{id}", h.adsPreview)
+
+	// Logos
+	h.mux.HandleFunc("POST /api/logo/upload", h.logoUpload)
+	h.mux.HandleFunc("DELETE /api/logo/{position}", h.logoDelete)
+	h.mux.HandleFunc("GET /api/logo/status", h.logoStatus)
+	h.mux.HandleFunc("POST /api/logo/settings", h.logoSettings)
+	h.mux.HandleFunc("GET /api/logo/preview/{position}", h.logoPreview)
 
 	// Fleet management
 	h.mux.HandleFunc("POST /api/fleet/heartbeat", h.fleetHeartbeat)
@@ -301,7 +336,7 @@ type overlayStartReq struct {
 	SessionID  string `json:"session_id"`  // optional — uses /active if empty
 	Format     string `json:"format"`      // "full", "condensed", "minimal" (default "full")
 	MaxRows    int    `json:"max_rows"`
-	Scale      int    `json:"scale"`       // render scale factor (default 1, use 2 for 1080p)
+	Scale      float64 `json:"scale"`       // render scale factor (default 1, use 2 for 1080p)
 	Title      string `json:"title"`       // custom title override (replaces SpeedHive session name)
 	FlagStatus string `json:"flag_status"` // flag status text, e.g. "Red Flag"
 }
@@ -441,14 +476,14 @@ func (h *Handler) updateOverlay(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Format  string `json:"format"`
 		MaxRows int    `json:"max_rows"`
-		Scale   int    `json:"scale"`
+		Scale   float64 `json:"scale"`
 		Title   string `json:"title"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON: %v", err)
 		return
 	}
-	log.Printf("[api] updateOverlay: format=%s maxRows=%d scale=%d title=%q", req.Format, req.MaxRows, req.Scale, req.Title)
+	log.Printf("[api] updateOverlay: format=%s maxRows=%d scale=%.1f title=%q", req.Format, req.MaxRows, req.Scale, req.Title)
 	h.overlay.Update(req.Format, req.MaxRows, req.Scale, req.Title)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
@@ -841,4 +876,377 @@ func (h *Handler) debugLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"logs": string(out)})
+}
+
+// --- Logo API ---
+
+// renderScaledLogo reads the original PNG, scales it by the given factor,
+// and writes the result to destPath. Scale of 1.0 copies as-is.
+func renderScaledLogo(origPath, destPath string, scale float64) error {
+	f, err := os.Open(origPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	srcImg, err := png.Decode(f)
+	if err != nil {
+		return err
+	}
+
+	bounds := srcImg.Bounds()
+	newW := int(float64(bounds.Dx()) * scale)
+	newH := int(float64(bounds.Dy()) * scale)
+	if newW < 1 {
+		newW = 1
+	}
+	if newH < 1 {
+		newH = 1
+	}
+
+	var outImg image.Image
+	if newW == bounds.Dx() && newH == bounds.Dy() {
+		outImg = srcImg
+	} else {
+		dst := image.NewRGBA(image.Rect(0, 0, newW, newH))
+		xdraw.BiLinear.Scale(dst, dst.Bounds(), srcImg, bounds, xdraw.Over, nil)
+		outImg = dst
+	}
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, outImg); err != nil {
+		return err
+	}
+
+	tmp := destPath + ".tmp"
+	if err := os.WriteFile(tmp, buf.Bytes(), 0644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, destPath); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+func (h *Handler) logoUpload(w http.ResponseWriter, r *http.Request) {
+	// 10MB max for logo images
+	r.ParseMultipartForm(10 << 20)
+	position := r.FormValue("position")
+	if position != "top-right" && position != "bottom-right" {
+		writeError(w, http.StatusBadRequest, "position must be 'top-right' or 'bottom-right'")
+		return
+	}
+
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "missing file: %v", err)
+		return
+	}
+	defer file.Close()
+
+	// Determine destination path
+	overlayDir := h.sw.OverlayDir()
+	var destPath, origPath string
+	if position == "top-right" {
+		destPath = filepath.Join(overlayDir, "logo-top-right.png")
+		origPath = filepath.Join(overlayDir, "logo-top-right-orig.png")
+	} else {
+		destPath = filepath.Join(overlayDir, "logo-bot-right.png")
+		origPath = filepath.Join(overlayDir, "logo-bot-right-orig.png")
+	}
+
+	// Read and decode image to validate it's a valid image
+	imgData, err := io.ReadAll(file)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "read file: %v", err)
+		return
+	}
+
+	// Decode, scale to max 300px, and re-encode as PNG
+	srcImg, _, err := image.Decode(bytes.NewReader(imgData))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid image: %v", err)
+		return
+	}
+	bounds := srcImg.Bounds()
+	srcW, srcH := bounds.Dx(), bounds.Dy()
+	const maxDim = 300
+	if srcW > maxDim || srcH > maxDim {
+		scale := float64(maxDim) / float64(srcW)
+		if srcH > srcW {
+			scale = float64(maxDim) / float64(srcH)
+		}
+		newW := int(float64(srcW) * scale)
+		newH := int(float64(srcH) * scale)
+		dst := image.NewRGBA(image.Rect(0, 0, newW, newH))
+		xdraw.BiLinear.Scale(dst, dst.Bounds(), srcImg, bounds, xdraw.Over, nil)
+		srcImg = dst
+		log.Printf("[api] logoUpload: scaled %dx%d → %dx%d", srcW, srcH, newW, newH)
+	}
+
+	// Encode base image (max 300px) to PNG — this is the "original"
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, srcImg); err != nil {
+		writeError(w, http.StatusInternalServerError, "encode png: %v", err)
+		return
+	}
+
+	// Write original atomically
+	os.MkdirAll(overlayDir, 0755)
+	tmp := origPath + ".tmp"
+	if err := os.WriteFile(tmp, buf.Bytes(), 0644); err != nil {
+		writeError(w, http.StatusInternalServerError, "write file: %v", err)
+		return
+	}
+	if err := os.Rename(tmp, origPath); err != nil {
+		os.Remove(tmp)
+		writeError(w, http.StatusInternalServerError, "rename: %v", err)
+		return
+	}
+
+	// Get current scale for this position
+	cfg := h.uiCfg.Get()
+	displayScale := 1.0
+	if position == "top-right" && cfg.LogoTopRightScale != nil {
+		displayScale = *cfg.LogoTopRightScale
+	} else if position == "bottom-right" && cfg.LogoBotRightScale != nil {
+		displayScale = *cfg.LogoBotRightScale
+	}
+	if displayScale <= 0 {
+		displayScale = 1.0
+	}
+
+	// Render scaled display copy
+	if err := renderScaledLogo(origPath, destPath, displayScale); err != nil {
+		writeError(w, http.StatusInternalServerError, "render scaled: %v", err)
+		return
+	}
+
+	// Enable the logo in config
+	tr, br := h.sw.LogoStatus()
+
+	if position == "top-right" {
+		enabled := true
+		cfg.LogoTopRightEnabled = &enabled
+		tr.Path = destPath
+		tr.Scale = displayScale
+	} else {
+		enabled := true
+		cfg.LogoBotRightEnabled = &enabled
+		br.Path = destPath
+		br.Scale = displayScale
+	}
+	h.uiCfg.Merge(cfg)
+	h.sw.SetLogoConfig(tr, br)
+
+	log.Printf("[api] logoUpload: %s → %s", position, destPath)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "uploaded", "position": position})
+}
+
+func (h *Handler) logoDelete(w http.ResponseWriter, r *http.Request) {
+	position := r.PathValue("position")
+	if position != "top-right" && position != "bottom-right" {
+		writeError(w, http.StatusBadRequest, "position must be 'top-right' or 'bottom-right'")
+		return
+	}
+
+	overlayDir := h.sw.OverlayDir()
+	var destPath string
+	if position == "top-right" {
+		destPath = filepath.Join(overlayDir, "logo-top-right.png")
+		os.Remove(filepath.Join(overlayDir, "logo-top-right-orig.png"))
+	} else {
+		destPath = filepath.Join(overlayDir, "logo-bot-right.png")
+		os.Remove(filepath.Join(overlayDir, "logo-bot-right-orig.png"))
+	}
+
+	// Write transparent PNG to disable (same pattern as overlay)
+	img := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	tmp := destPath + ".tmp"
+	f, err := os.Create(tmp)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "create: %v", err)
+		return
+	}
+	png.Encode(f, img)
+	f.Close()
+	os.Rename(tmp, destPath)
+
+	// Disable in config
+	cfg := h.uiCfg.Get()
+	tr, br := h.sw.LogoStatus()
+
+	if position == "top-right" {
+		enabled := false
+		cfg.LogoTopRightEnabled = &enabled
+	} else {
+		enabled := false
+		cfg.LogoBotRightEnabled = &enabled
+	}
+	h.uiCfg.Merge(cfg)
+	h.sw.SetLogoConfig(tr, br)
+
+	log.Printf("[api] logoDelete: %s → transparent", position)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "removed", "position": position})
+}
+
+func (h *Handler) logoStatus(w http.ResponseWriter, r *http.Request) {
+	cfg := h.uiCfg.Get()
+	tr, br := h.sw.LogoStatus()
+
+	// Check if real logos (not transparent 1x1) are present
+	trHasLogo := false
+	brHasLogo := false
+	if fi, err := os.Stat(tr.Path); err == nil && fi.Size() > 100 {
+		trHasLogo = true
+	}
+	if fi, err := os.Stat(br.Path); err == nil && fi.Size() > 100 {
+		brHasLogo = true
+	}
+
+	trEnabled := cfg.LogoTopRightEnabled != nil && *cfg.LogoTopRightEnabled
+	brEnabled := cfg.LogoBotRightEnabled != nil && *cfg.LogoBotRightEnabled
+
+	trOpacity := 0.9
+	if cfg.LogoTopRightOpacity != nil {
+		trOpacity = *cfg.LogoTopRightOpacity
+	}
+	trOffset := 20
+	if cfg.LogoTopRightOffset != nil {
+		trOffset = *cfg.LogoTopRightOffset
+	}
+
+	brOpacity := 0.9
+	if cfg.LogoBotRightOpacity != nil {
+		brOpacity = *cfg.LogoBotRightOpacity
+	}
+	brOffset := 20
+	if cfg.LogoBotRightOffset != nil {
+		brOffset = *cfg.LogoBotRightOffset
+	}
+
+	trScale := 1.0
+	if cfg.LogoTopRightScale != nil {
+		trScale = *cfg.LogoTopRightScale
+	}
+	brScale := 1.0
+	if cfg.LogoBotRightScale != nil {
+		brScale = *cfg.LogoBotRightScale
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"top_right": map[string]any{
+			"has_logo": trHasLogo,
+			"enabled":  trEnabled,
+			"opacity":  trOpacity,
+			"offset":   trOffset,
+			"scale":    trScale,
+		},
+		"bottom_right": map[string]any{
+			"has_logo": brHasLogo,
+			"enabled":  brEnabled,
+			"opacity":  brOpacity,
+			"offset":   brOffset,
+			"scale":    brScale,
+		},
+	})
+}
+
+func (h *Handler) logoSettings(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Position string   `json:"position"` // "top-right" or "bottom-right"
+		Opacity  *float64 `json:"opacity"`
+		Offset   *int     `json:"offset"`
+		Enabled  *bool    `json:"enabled"`
+		Scale    *float64 `json:"scale"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: %v", err)
+		return
+	}
+	if req.Position != "top-right" && req.Position != "bottom-right" {
+		writeError(w, http.StatusBadRequest, "position must be 'top-right' or 'bottom-right'")
+		return
+	}
+
+	cfg := h.uiCfg.Get()
+	tr, br := h.sw.LogoStatus()
+	overlayDir := h.sw.OverlayDir()
+
+	if req.Position == "top-right" {
+		if req.Opacity != nil {
+			cfg.LogoTopRightOpacity = req.Opacity
+			tr.Opacity = *req.Opacity
+		}
+		if req.Offset != nil {
+			cfg.LogoTopRightOffset = req.Offset
+			tr.Offset = *req.Offset
+		}
+		if req.Enabled != nil {
+			cfg.LogoTopRightEnabled = req.Enabled
+		}
+		if req.Scale != nil {
+			cfg.LogoTopRightScale = req.Scale
+			tr.Scale = *req.Scale
+			origPath := filepath.Join(overlayDir, "logo-top-right-orig.png")
+			destPath := filepath.Join(overlayDir, "logo-top-right.png")
+			if _, err := os.Stat(origPath); err == nil {
+				if err := renderScaledLogo(origPath, destPath, *req.Scale); err != nil {
+					log.Printf("[api] logoSettings: render scaled TR failed: %v", err)
+				}
+			}
+		}
+	} else {
+		if req.Opacity != nil {
+			cfg.LogoBotRightOpacity = req.Opacity
+			br.Opacity = *req.Opacity
+		}
+		if req.Offset != nil {
+			cfg.LogoBotRightOffset = req.Offset
+			br.Offset = *req.Offset
+		}
+		if req.Enabled != nil {
+			cfg.LogoBotRightEnabled = req.Enabled
+		}
+		if req.Scale != nil {
+			cfg.LogoBotRightScale = req.Scale
+			br.Scale = *req.Scale
+			origPath := filepath.Join(overlayDir, "logo-bot-right-orig.png")
+			destPath := filepath.Join(overlayDir, "logo-bot-right.png")
+			if _, err := os.Stat(origPath); err == nil {
+				if err := renderScaledLogo(origPath, destPath, *req.Scale); err != nil {
+					log.Printf("[api] logoSettings: render scaled BR failed: %v", err)
+				}
+			}
+		}
+	}
+
+	h.uiCfg.Merge(cfg)
+	h.sw.SetLogoConfig(tr, br)
+	h.sw.RestartIfLive()
+
+	log.Printf("[api] logoSettings: %s opacity=%v offset=%v enabled=%v scale=%v", req.Position, req.Opacity, req.Offset, req.Enabled, req.Scale)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+func (h *Handler) logoPreview(w http.ResponseWriter, r *http.Request) {
+	position := r.PathValue("position")
+	if position != "top-right" && position != "bottom-right" {
+		writeError(w, http.StatusBadRequest, "position must be 'top-right' or 'bottom-right'")
+		return
+	}
+
+	overlayDir := h.sw.OverlayDir()
+	var filename string
+	if position == "top-right" {
+		filename = "logo-top-right.png"
+	} else {
+		filename = "logo-bot-right.png"
+	}
+
+	path := filepath.Join(overlayDir, filename)
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "no-cache")
+	http.ServeFile(w, r, path)
 }

@@ -52,7 +52,7 @@ func (e *pipelineError) Error() string {
 // --- String-level pipeline validation tests (no GStreamer required) ---
 
 func TestDefaultPipelineCameraAudio_Elements(t *testing.T) {
-	p := buildPipeline("/tmp/overlay.png", "rtsp://cam:8554/stream", "rtmp://localhost:1935/live-output", "", "rtsp://localhost:8554", 1.0)
+	p := buildPipeline("/tmp/overlay.png", "rtsp://cam:8554/stream", "rtmp://localhost:1935/live-output", "", "rtsp://localhost:8554", 1.0, LogoConfig{}, LogoConfig{})
 	checks := []struct {
 		label    string
 		contains string
@@ -97,7 +97,7 @@ func TestDefaultPipelineCameraAudio_Elements(t *testing.T) {
 }
 
 func TestDefaultPipelineMicAudio_Elements(t *testing.T) {
-	p := buildPipeline("/tmp/overlay.png", "rtsp://cam:8554/stream", "rtmp://localhost:1935/live-output", "0", "rtsp://localhost:8554", 1.0)
+	p := buildPipeline("/tmp/overlay.png", "rtsp://cam:8554/stream", "rtmp://localhost:1935/live-output", "0", "rtsp://localhost:8554", 1.0, LogoConfig{}, LogoConfig{})
 	checks := []struct {
 		label    string
 		contains string
@@ -131,7 +131,7 @@ func TestDefaultPipelineMicAudio_Elements(t *testing.T) {
 func TestOverlayPipelineCameraAudio_Elements(t *testing.T) {
 	// With always-on compositor, the "overlay" test is identical to default
 	// but verifies the overlay path is correctly embedded.
-	p := buildPipeline("/tmp/overlay.png", "rtsp://cam:8554/stream", "rtmp://localhost:1935/live-output", "", "rtsp://localhost:8554", 1.0)
+	p := buildPipeline("/tmp/overlay.png", "rtsp://cam:8554/stream", "rtmp://localhost:1935/live-output", "", "rtsp://localhost:8554", 1.0, LogoConfig{}, LogoConfig{})
 	checks := []struct {
 		label    string
 		contains string
@@ -165,7 +165,7 @@ func TestOverlayPipelineCameraAudio_Elements(t *testing.T) {
 }
 
 func TestOverlayPipelineMicAudio_Elements(t *testing.T) {
-	p := buildPipeline("/tmp/overlay.png", "rtsp://cam:8554/stream", "rtmp://localhost:1935/live-output", "2", "rtsp://localhost:8554", 1.0)
+	p := buildPipeline("/tmp/overlay.png", "rtsp://cam:8554/stream", "rtmp://localhost:1935/live-output", "2", "rtsp://localhost:8554", 1.0, LogoConfig{}, LogoConfig{})
 	checks := []struct {
 		label    string
 		contains string
@@ -192,8 +192,8 @@ func TestOverlayPipelineMicAudio_Elements(t *testing.T) {
 
 func TestAllPipelines_AudioTeeBranches(t *testing.T) {
 	pipelines := map[string]string{
-		"default/camera":  buildPipeline("/tmp/o.png", "rtsp://x", "rtmp://x", "", "rtsp://localhost:8554", 1.0),
-		"default/mic":     buildPipeline("/tmp/o.png", "rtsp://x", "rtmp://x", "0", "rtsp://localhost:8554", 1.0),
+		"default/camera":  buildPipeline("/tmp/o.png", "rtsp://x", "rtmp://x", "", "rtsp://localhost:8554", 1.0, LogoConfig{}, LogoConfig{}),
+		"default/mic":     buildPipeline("/tmp/o.png", "rtsp://x", "rtmp://x", "0", "rtsp://localhost:8554", 1.0, LogoConfig{}, LogoConfig{}),
 	}
 	for name, p := range pipelines {
 		t.Run(name, func(t *testing.T) {
@@ -224,8 +224,8 @@ func TestAllPipelines_AudioTeeBranches(t *testing.T) {
 
 func TestAllPipelines_QueueBeforeSinks(t *testing.T) {
 	pipelines := map[string]string{
-		"default/camera":  buildPipeline("/tmp/o.png", "rtsp://x", "rtmp://x", "", "rtsp://localhost:8554", 1.0),
-		"default/mic":     buildPipeline("/tmp/o.png", "rtsp://x", "rtmp://x", "0", "rtsp://localhost:8554", 1.0),
+		"default/camera":  buildPipeline("/tmp/o.png", "rtsp://x", "rtmp://x", "", "rtsp://localhost:8554", 1.0, LogoConfig{}, LogoConfig{}),
+		"default/mic":     buildPipeline("/tmp/o.png", "rtsp://x", "rtmp://x", "0", "rtsp://localhost:8554", 1.0, LogoConfig{}, LogoConfig{}),
 	}
 	for name, p := range pipelines {
 		t.Run(name, func(t *testing.T) {
@@ -261,8 +261,8 @@ func TestAllPipelines_GStreamerParse(t *testing.T) {
 	// We use --gst-parse-launch which validates element names and properties
 	// but doesn't set the pipeline to PLAYING.
 	pipelines := map[string]string{
-		"default/camera":  buildPipeline("/tmp/o.png", "rtsp://fake:8554/s", "rtmp://fake:1935/o", "", "rtsp://localhost:8554", 1.0),
-		"default/mic":     buildPipeline("/tmp/o.png", "rtsp://fake:8554/s", "rtmp://fake:1935/o", "0", "rtsp://localhost:8554", 1.0),
+		"default/camera":  buildPipeline("/tmp/o.png", "rtsp://fake:8554/s", "rtmp://fake:1935/o", "", "rtsp://localhost:8554", 1.0, LogoConfig{}, LogoConfig{}),
+		"default/mic":     buildPipeline("/tmp/o.png", "rtsp://fake:8554/s", "rtmp://fake:1935/o", "0", "rtsp://localhost:8554", 1.0, LogoConfig{}, LogoConfig{}),
 	}
 
 	for name, p := range pipelines {

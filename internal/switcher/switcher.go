@@ -62,6 +62,7 @@ type Switcher struct {
 	bridgeFactory   BridgeFactory
 	bridge          Bridger
 	overlayPath     string // path to overlay PNG, empty = no overlay
+	overlayDir      string // directory for overlay files
 	audioDevice     string // avfoundation audio device index, empty = anullsrc
 	restartCount    int    // consecutive restart count for backoff
 	restartBackoff  time.Duration
@@ -69,6 +70,10 @@ type Switcher struct {
 	silenceProcs    []*exec.Cmd        // silence → UDP (one per slot)
 	relayProcs      []*exec.Cmd        // UDP → commentary-N RTSP (always-on, one per slot)
 	whipBridgeProcs []*exec.Cmd        // commentary-N-whip RTSP → UDP (active when commentator connected)
+
+	// Logo overlays
+	logoTR LogoConfig
+	logoBR LogoConfig
 
 	// Ad playback
 	adPlaying    bool        // true while an ad playlist is running
@@ -94,6 +99,36 @@ type CommentarySlot struct {
 	Volume float64 // 0.0–1.0
 }
 
+// LogoConfig holds settings for a corner logo overlay.
+type LogoConfig struct {
+	Path    string  // path to logo PNG (may be transparent 1x1 = disabled)
+	Offset  int     // pixels from corner edge
+	Opacity float64 // 0.0–1.0
+	Scale   float64 // multiplier for display size, default 1.0
+}
+
+// logoPNGDimensions reads the dimensions of a PNG file.
+func logoPNGDimensions(path string) (int, int) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, 0
+	}
+	defer f.Close()
+	cfg, err := png.DecodeConfig(f)
+	if err != nil {
+		return 0, 0
+	}
+	return cfg.Width, cfg.Height
+}
+
+// logoVideoSrc returns a multifilesrc-based segment for a logo overlay.
+func logoVideoSrc(path, queueName string) string {
+	return fmt.Sprintf(
+		"multifilesrc location=%s loop=true start-index=0 stop-index=0 caps=image/png,framerate=(fraction)5/1 ! "+
+			"pngdec ! videoconvert ! video/x-raw,format=RGBA ! queue name=%s",
+		path, queueName)
+}
+
 // overlayVideoSrc returns the multifilesrc-based overlay segment that re-reads
 // the overlay PNG from disk. Combined with compositor, this allows hot-swapping
 // overlays by simply writing a new PNG (or a transparent one to disable).
@@ -108,16 +143,70 @@ func overlayVideoSrc(overlayPath string) string {
 // includes a compositor + multifilesrc overlay for zero-restart overlay toggling,
 // and an audiomixer blending camera audio + 2 commentary RTSP sources for
 // zero-restart commentary join/leave.
-func buildPipeline(overlayPath, rtspURL, rtmpURL, audioDevice, rtspBase string, cameraVol float64) string {
+func buildPipeline(overlayPath, rtspURL, rtmpURL, audioDevice, rtspBase string, cameraVol float64, logoTR, logoBR LogoConfig) string {
 	overlay := overlayVideoSrc(overlayPath)
+
+	// Build logo multifilesrc segments and compositor sink properties.
+	// Positions are calculated using actual logo dimensions if available,
+	// or maxLogoDim (300px) as fallback for transparent/disabled logos.
+	// This ensures the compositor is pre-positioned correctly so uploads
+	// only need multifilesrc to pick up the new PNG — no pipeline restart.
+	const maxLogoDim = 300
+	var logoSrcs, logoLinks, logoSinkProps string
+	if logoTR.Path != "" {
+		logoSrcs += " " + logoVideoSrc(logoTR.Path, "logo_tr")
+		logoLinks += " logo_tr. ! mixer. "
+		trW, _ := logoPNGDimensions(logoTR.Path)
+		if trW <= 1 {
+			// Disabled placeholder — pre-calculate using maxLogoDim * scale
+			s := logoTR.Scale
+			if s <= 0 {
+				s = 1.0
+			}
+			trW = int(float64(maxLogoDim) * s)
+		}
+		xpos := 1920 - trW - logoTR.Offset
+		ypos := logoTR.Offset
+		if xpos < 0 {
+			xpos = 0
+		}
+		if ypos < 0 {
+			ypos = 0
+		}
+		logoSinkProps += fmt.Sprintf(" sink_2::xpos=%d sink_2::ypos=%d sink_2::alpha=%.2f", xpos, ypos, logoTR.Opacity)
+	}
+	if logoBR.Path != "" {
+		logoSrcs += " " + logoVideoSrc(logoBR.Path, "logo_br")
+		logoLinks += " logo_br. ! mixer. "
+		brW, brH := logoPNGDimensions(logoBR.Path)
+		if brW <= 1 || brH <= 1 {
+			// Disabled placeholder — pre-calculate using maxLogoDim * scale
+			s := logoBR.Scale
+			if s <= 0 {
+				s = 1.0
+			}
+			brW = int(float64(maxLogoDim) * s)
+			brH = brW
+		}
+		xpos := 1920 - brW - logoBR.Offset
+		ypos := 1080 - brH - logoBR.Offset
+		if xpos < 0 {
+			xpos = 0
+		}
+		if ypos < 0 {
+			ypos = 0
+		}
+		logoSinkProps += fmt.Sprintf(" sink_3::xpos=%d sink_3::ypos=%d sink_3::alpha=%.2f", xpos, ypos, logoBR.Opacity)
+	}
+
 	audioMix := alwaysOnAudioMix(rtspBase, cameraVol)
 	if audioDevice != "" {
 		// Mac mic overrides camera audio — not mixed with commentary
 		return fmt.Sprintf(
-			"%s "+
+			"%s %s "+
 				"rtspsrc location=%s protocols=tcp latency=200 name=cam "+
-				"cam. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! avdec_h264 ! videoconvert ! video/x-raw,format=RGBA ! queue ! compositor name=mixer sink_1::xpos=20 sink_1::ypos=20 ! videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast key-int-max=30 bframes=0 bitrate=4000 ! video/x-h264,profile=constrained-baseline ! h264parse ! tee name=enc_tee "+
-				"overlay_img. ! mixer. "+
+				"cam. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! avdec_h264 ! videoconvert ! video/x-raw,format=RGBA ! queue ! compositor name=mixer sink_1::xpos=20 sink_1::ypos=20%s ! videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast key-int-max=30 bframes=0 bitrate=4000 ! video/x-h264,profile=constrained-baseline ! h264parse ! tee name=enc_tee "+
+				"overlay_img. ! mixer. %s"+
 				"osxaudiosrc device=%s name=mic "+
 				"mic. ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! audiorate ! tee name=at "+
 				"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! audioconvert ! avenc_aac ! aacparse ! flvmux streamable=true name=rtmp_mux "+
@@ -125,21 +214,21 @@ func buildPipeline(overlayPath, rtspURL, rtmpURL, audioDevice, rtspBase string, 
 				"rtmp_mux. ! rtmpsink location=%s "+
 			"enc_tee. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! rtspclientsink location=rtsp://localhost:8554/live-preview protocols=tcp name=preview "+
 			"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! audioconvert ! opusenc audio-type=restricted-lowdelay ! preview.",
-			overlay, rtspURL, audioDevice, rtmpURL)
+			overlay, logoSrcs, rtspURL, logoSinkProps, logoLinks, audioDevice, rtmpURL)
 	}
 	// Camera audio from RTSP stream, blended with commentary via audiomixer
 	return fmt.Sprintf(
-		"%s "+
+		"%s %s "+
 			"rtspsrc location=%s protocols=tcp latency=200 name=cam "+
-			"cam. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! avdec_h264 ! videoconvert ! video/x-raw,format=RGBA ! queue ! compositor name=mixer sink_1::xpos=20 sink_1::ypos=20 ! videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast key-int-max=30 bframes=0 bitrate=4000 ! video/x-h264,profile=constrained-baseline ! h264parse ! tee name=enc_tee "+
-			"overlay_img. ! mixer. "+
+			"cam. ! rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! avdec_h264 ! videoconvert ! video/x-raw,format=RGBA ! queue ! compositor name=mixer sink_1::xpos=20 sink_1::ypos=20%s ! videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast key-int-max=30 bframes=0 bitrate=4000 ! video/x-h264,profile=constrained-baseline ! h264parse ! tee name=enc_tee "+
+			"overlay_img. ! mixer. %s"+
 			"%s "+
 			"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! audioconvert ! avenc_aac ! aacparse ! flvmux streamable=true name=rtmp_mux "+
 			"enc_tee. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! rtmp_mux. "+
 			"rtmp_mux. ! rtmpsink location=%s "+
 		"enc_tee. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! rtspclientsink location=rtsp://localhost:8554/live-preview protocols=tcp name=preview "+
 		"at. ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! audioconvert ! opusenc audio-type=restricted-lowdelay ! preview.",
-		overlay, rtspURL, audioMix, rtmpURL)
+		overlay, logoSrcs, rtspURL, logoSinkProps, logoLinks, audioMix, rtmpURL)
 }
 
 // alwaysOnAudioMix returns the GStreamer segment for audiomixer that always
@@ -179,10 +268,10 @@ func writeTransparentPNG(path string) error {
 	return os.Rename(tmp, path)
 }
 
-func makeCmdFactory(overlayPath, rtspBase string, cameraVol float64) CmdFactory {
+func makeCmdFactory(overlayPath, rtspBase string, cameraVol float64, logoTR, logoBR LogoConfig) CmdFactory {
 	return func(rtspURL, rtmpURL, audioDevice string) *exec.Cmd {
-		log.Printf("[switcher] building GStreamer cmd: %s → %s + preview (overlay=%s audio=%q camVol=%.2f)", rtspURL, rtmpURL, overlayPath, audioDevice, cameraVol)
-		pipeline := buildPipeline(overlayPath, rtspURL, rtmpURL, audioDevice, rtspBase, cameraVol)
+		log.Printf("[switcher] building GStreamer cmd: %s → %s + preview (overlay=%s audio=%q camVol=%.2f logoTR=%s logoBR=%s)", rtspURL, rtmpURL, overlayPath, audioDevice, cameraVol, logoTR.Path, logoBR.Path)
+		pipeline := buildPipeline(overlayPath, rtspURL, rtmpURL, audioDevice, rtspBase, cameraVol, logoTR, logoBR)
 		log.Printf("[switcher] GStreamer pipeline: %s", pipeline)
 		args := append([]string{"-e"}, strings.Fields(pipeline)...)
 		return exec.Command("gst-launch-1.0", args...)
@@ -191,6 +280,8 @@ func makeCmdFactory(overlayPath, rtspBase string, cameraVol float64) CmdFactory 
 
 func New(rtspBase, mediaMTXAPI string, bf BridgeFactory, cameras []string, overlayDir string) *Switcher {
 	overlayPngPath := filepath.Join(overlayDir, "timing.png")
+	logoTRPath := filepath.Join(overlayDir, "logo-top-right.png")
+	logoBRPath := filepath.Join(overlayDir, "logo-bot-right.png")
 	log.Printf("[switcher] New: rtspBase=%s mediaMTXAPI=%s cameras=%v overlayPath=%s", rtspBase, mediaMTXAPI, cameras, overlayPngPath)
 
 	// Ensure transparent PNG exists so the always-on compositor has a valid file
@@ -198,12 +289,27 @@ func New(rtspBase, mediaMTXAPI string, bf BridgeFactory, cameras []string, overl
 		log.Printf("[switcher] WARNING: failed to write initial transparent PNG: %v", err)
 	}
 
+	// Ensure logo PNGs exist (transparent = disabled) unless a real logo was uploaded
+	for _, p := range []string{logoTRPath, logoBRPath} {
+		if _, err := os.Stat(p); os.IsNotExist(err) {
+			if err := writeTransparentPNG(p); err != nil {
+				log.Printf("[switcher] WARNING: failed to write initial logo PNG %s: %v", p, err)
+			}
+		}
+	}
+
 	cameraVol := 0.3
+	logoTR := LogoConfig{Path: logoTRPath, Offset: 20, Opacity: 0.9, Scale: 1.0}
+	logoBR := LogoConfig{Path: logoBRPath, Offset: 20, Opacity: 0.9, Scale: 1.0}
+
 	s := &Switcher{
 		rtspBase:      rtspBase,
 		mediaMTXAPI:   mediaMTXAPI,
 		overlayPath:   overlayPngPath,
-		cmdFactory:    makeCmdFactory(overlayPngPath, rtspBase, cameraVol),
+		logoTR:        logoTR,
+		logoBR:        logoBR,
+		overlayDir:    overlayDir,
+		cmdFactory:    makeCmdFactory(overlayPngPath, rtspBase, cameraVol, logoTR, logoBR),
 		bridgeFactory: bf,
 		cameras:       cameras,
 		silenceProcs:  make([]*exec.Cmd, 2),
@@ -475,6 +581,48 @@ func (s *Switcher) SetOverlayPauser(p OverlayPauser) {
 	s.mu.Unlock()
 }
 
+// SetLogoConfig updates the logo configs and rebuilds the cmdFactory.
+// The pipeline will use the new settings on next start or restart.
+func (s *Switcher) SetLogoConfig(tr, br LogoConfig) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.logoTR = tr
+	s.logoBR = br
+	s.cmdFactory = makeCmdFactory(s.overlayPath, s.rtspBase, s.commentary.CameraVolume, s.logoTR, s.logoBR)
+	log.Printf("[switcher] SetLogoConfig: TR=%s (offset=%d alpha=%.2f scale=%.2f) BR=%s (offset=%d alpha=%.2f scale=%.2f)",
+		tr.Path, tr.Offset, tr.Opacity, tr.Scale, br.Path, br.Offset, br.Opacity, br.Scale)
+}
+
+// LogoStatus returns the current logo configuration.
+func (s *Switcher) LogoStatus() (LogoConfig, LogoConfig) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.logoTR, s.logoBR
+}
+
+// OverlayDir returns the overlay directory path.
+func (s *Switcher) OverlayDir() string {
+	return s.overlayDir
+}
+
+// RebuildCmdFactory rebuilds the command factory with current settings.
+// Call this after changing settings that affect the pipeline (volume, logos, etc).
+func (s *Switcher) RebuildCmdFactory() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cmdFactory = makeCmdFactory(s.overlayPath, s.rtspBase, s.commentary.CameraVolume, s.logoTR, s.logoBR)
+}
+
+// RestartIfLive restarts the pipeline if currently live.
+func (s *Switcher) RestartIfLive() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.live {
+		log.Printf("[switcher] RestartIfLive: restarting pipeline with updated config")
+		s.restartPipeline()
+	}
+}
+
 // NewWithFactories creates a Switcher with custom factories (for testing).
 func NewWithFactories(rtspBase, mediaMTXAPI string, cf CmdFactory, bf BridgeFactory, cameras []string) *Switcher {
 	return &Switcher{
@@ -535,7 +683,7 @@ func (s *Switcher) StartLive(stream, rtmpDest string, localMode bool, audioDevic
 	log.Printf("[switcher] starting RTMP mode: bridge + FFmpeg")
 
 	// Rebuild cmdFactory with current camera volume (may have changed since init)
-	s.cmdFactory = makeCmdFactory(s.overlayPath, s.rtspBase, s.commentary.CameraVolume)
+	s.cmdFactory = makeCmdFactory(s.overlayPath, s.rtspBase, s.commentary.CameraVolume, s.logoTR, s.logoBR)
 
 	if s.bridgeFactory != nil {
 		log.Printf("[switcher] creating bridge proxy...")

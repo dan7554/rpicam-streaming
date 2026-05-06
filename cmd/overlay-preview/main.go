@@ -65,7 +65,7 @@ func handleRender(w http.ResponseWriter, r *http.Request) {
 	if maxRows == 0 {
 		maxRows = 20
 	}
-	scale, _ := strconv.Atoi(q.Get("scale"))
+	scale, _ := strconv.ParseFloat(q.Get("scale"), 64)
 	if scale < 1 {
 		scale = 1
 	}
@@ -156,7 +156,7 @@ func handleRender(w http.ResponseWriter, r *http.Request) {
 
 	data, err := overlay.RenderPreview(format, maxRows, scale, title, flag, mockCompetitors[:count], laps, lapsToGo, raceTime, style)
 	if err != nil {
-		log.Printf("[render] ERROR format=%s rows=%d scale=%d: %v", format, maxRows, scale, err)
+		log.Printf("[render] ERROR format=%s rows=%d scale=%.1f: %v", format, maxRows, scale, err)
 		http.Error(w, err.Error(), 500)
 		return
 	}
@@ -312,7 +312,7 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
     <label>Title <input type="text" name="title" value="` + htmlEsc(title) + `"></label>
     <div class="sep"></div>
     <label>Rows <input type="number" name="rows" min="3" max="30" value="` + rows + `"></label>
-    <label>Scale <input type="number" name="scale" min="1" max="4" value="` + scale + `"></label>
+    <label>Scale <input type="number" name="scale" min="0.5" max="4" step="0.1" value="` + scale + `"></label>
     <label>Competitors <input type="number" name="count" min="1" max="20" value="` + count + `"></label>
     <div class="sep"></div>
     <label>Laps <input type="number" name="laps" min="0" max="999" value="` + laps + `"></label>

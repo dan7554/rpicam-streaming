@@ -1,22 +1,16 @@
 [Unit]
-Description=RPiCam RTMP Stream to MediaMTX
+Description=RPiCam Camera Stream to MediaMTX
 After=network-online.target
 Wants=network-online.target
-StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 User=dan7554
 Group=video
-EnvironmentFile=-/etc/rpicam-stream.conf
+EnvironmentFile=/etc/rpicam-stream.conf
 ExecStart=/opt/rpicam-stream/rpicam-stream.sh
 Restart=always
 RestartSec=10
-KillMode=mixed
-KillSignal=SIGTERM
-TimeoutStopSec=30
-
-# Logging
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=rpicam-stream

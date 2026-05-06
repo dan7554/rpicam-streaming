@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # RPiCam Camera Stream Script
-# Streams the Pi camera to a MediaMTX server via RTMP
+# Streams the Pi camera to a MediaMTX server via SRT (low-latency UDP)
+# Falls back to RTMP if SRT is unavailable
 # Designed to run as a systemd service on boot
 #
-# The RTMP server is reached via Tailscale (set MEDIAMTX_HOST to the
-# Tailscale IP of the Mac running MediaMTX).
-# Requires: tailscale serve --bg --tcp 1935 tcp://localhost:1935 on the Mac.
+# Hardware encoding (rpicam-vid GPU H264) is auto-enabled on Pi Zero 2W
+# where x264 software encode is too heavy. Pi 5 uses x264 (plenty of CPU).
 
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1"
@@ -15,15 +15,18 @@ log() {
 # --- Configuration (override with env vars or /etc/rpicam-stream.conf) ---
 [ -f /etc/rpicam-stream.conf ] && . /etc/rpicam-stream.conf
 
-RTMP_HOST="${MEDIAMTX_HOST:-192.168.50.208}"
+MEDIAMTX_HOST="${MEDIAMTX_HOST:-192.168.50.208}"
+SRT_PORT="${SRT_PORT:-8890}"
 RTMP_PORT="${MEDIAMTX_RTMP_PORT:-1935}"
+PROTOCOL="${PROTOCOL:-srt}"  # srt or rtmp
 RETRY_DELAY="${RETRY_DELAY:-5}"
-WIDTH="${WIDTH:-1280}"
-HEIGHT="${HEIGHT:-720}"
+WIDTH="${WIDTH:-1920}"
+HEIGHT="${HEIGHT:-1080}"
 FPS="${FPS:-30}"
-GOP="${GOP:-8}"
 AUDIO_DEVICE="${AUDIO_DEVICE:-hw:2,0}"
-BITRATE="${BITRATE:-3000}"
+BITRATE="${BITRATE:-5500}"
+SRT_LATENCY="${SRT_LATENCY:-200}"  # SRT latency in ms (lower = less latency, more risk)
+HW_ENCODE="${HW_ENCODE:-auto}"     # auto, yes, or no — use rpicam-vid hardware H264 encoder
 
 # Stream name: rpicamN → camN, or use hostname as-is
 detect_stream_name() {
@@ -37,14 +40,39 @@ detect_stream_name() {
 }
 STREAM_NAME="${STREAM_NAME:-$(detect_stream_name)}"
 
+# Detect Pi model once at startup
+PI_MODEL=$(cat /proc/device-tree/model 2>/dev/null || echo "")
+IS_ZERO_2W=false
+[[ "$PI_MODEL" == *"Zero 2"* ]] && IS_ZERO_2W=true
+
+# Pi Zero 2W: camera driver needs extra time to initialize on boot.
+# Without this delay, rpicam-vid starts before unicam is ready, causing
+# "Failed to start media pipeline: -22" spam and a wedged SRT connection.
+# Also, rpicam-vid --list-cameras is unreliable on Zero 2W (reports
+# "No cameras available" even when the camera works fine).
+if $IS_ZERO_2W; then
+    log "Pi Zero 2W detected — waiting 30s for camera subsystem to settle"
+    sleep 30
+fi
+
 # --- Main ---
 log "Camera stream service starting"
-log "  Stream: $STREAM_NAME → rtmp://$RTMP_HOST:$RTMP_PORT/$STREAM_NAME"
-log "  Resolution: ${WIDTH}x${HEIGHT}@${FPS}fps"
+log "  Model: $PI_MODEL"
+log "  Protocol: $PROTOCOL"
+log "  Stream: $STREAM_NAME → ${MEDIAMTX_HOST}"
+log "  Resolution: ${WIDTH}x${HEIGHT}@${FPS}fps @ ${BITRATE}kbps"
 log "  Audio device: ${AUDIO_DEVICE:-none}"
 
 # Wait for camera hardware
+# On Pi Zero 2W, rpicam-vid --list-cameras is unreliable (the camera is
+# locked by the unicam driver during init and reports "No cameras available"
+# even when it works). So on Zero 2W we skip this check and rely on the
+# boot delay + pipeline retry loop instead.
 wait_for_camera() {
+    if $IS_ZERO_2W; then
+        log "Pi Zero 2W — skipping camera detection (unreliable), relying on boot delay"
+        return 0
+    fi
     local attempts=0
     while ! rpicam-vid --list-cameras 2>&1 | grep -q "Available cameras"; do
         attempts=$((attempts + 1))
@@ -58,13 +86,24 @@ wait_for_camera() {
     log "Camera detected"
 }
 
-# Wait for RTMP port (tunnel must be up first)
+# Wait for server reachability
 wait_for_server() {
-    while ! timeout 3 bash -c "</dev/tcp/$RTMP_HOST/$RTMP_PORT" 2>/dev/null; do
-        log "Waiting for RTMP tunnel at $RTMP_HOST:$RTMP_PORT..."
-        sleep "$RETRY_DELAY"
-    done
-    log "RTMP server reachable"
+    if [ "$PROTOCOL" = "srt" ]; then
+        # For SRT (UDP), check host reachability via RTMP TCP port
+        # (ping may be blocked by security groups)
+        while ! timeout 3 bash -c "</dev/tcp/$MEDIAMTX_HOST/$RTMP_PORT" 2>/dev/null; do
+            log "Waiting for host $MEDIAMTX_HOST (checking port $RTMP_PORT)..."
+            sleep "$RETRY_DELAY"
+        done
+        log "Host $MEDIAMTX_HOST reachable (SRT/UDP)"
+    else
+        # For RTMP (TCP), check port
+        while ! timeout 3 bash -c "</dev/tcp/$MEDIAMTX_HOST/$RTMP_PORT" 2>/dev/null; do
+            log "Waiting for RTMP at $MEDIAMTX_HOST:$RTMP_PORT..."
+            sleep "$RETRY_DELAY"
+        done
+        log "RTMP server reachable"
+    fi
 }
 
 # Stream loop with auto-retry
@@ -73,29 +112,71 @@ WATCHDOG_INTERVAL="${WATCHDOG_INTERVAL:-10}"
 WATCHDOG_THRESHOLD="${WATCHDOG_THRESHOLD:-500000}"  # 500KB send buffer = stuck
 WATCHDOG_MAX_STRIKES="${WATCHDOG_MAX_STRIKES:-3}"   # 3 consecutive checks = kill
 
-# Watchdog: monitors RTMP send buffer, kills GStreamer if stuck
+# Watchdog: monitors connection health, kills GStreamer if stuck
 start_watchdog() {
     local gst_pid="$1"
     local strikes=0
+    local closewait_strikes=0
+    local no_conn_strikes=0
     while kill -0 "$gst_pid" 2>/dev/null; do
         sleep "$WATCHDOG_INTERVAL"
-        # Get send-Q for connections to RTMP port
-        local send_q
-        send_q=$(ss -tnp 2>/dev/null | grep ":${RTMP_PORT}" | grep -v "FIN\|CLOSE\|TIME" | awk '{print $3}' | sort -rn | head -1)
-        send_q="${send_q:-0}"
 
-        if [ "$send_q" -gt "$WATCHDOG_THRESHOLD" ]; then
-            strikes=$((strikes + 1))
-            log "WATCHDOG: send buffer ${send_q} bytes (strike $strikes/$WATCHDOG_MAX_STRIKES)"
-            if [ "$strikes" -ge "$WATCHDOG_MAX_STRIKES" ]; then
-                log "WATCHDOG: connection stuck, killing GStreamer (pid $gst_pid)"
-                kill "$gst_pid" 2>/dev/null
-                sleep 1
-                kill -9 "$gst_pid" 2>/dev/null
-                return
+        if [ "$PROTOCOL" = "srt" ]; then
+            # For SRT: check if the process is still running and producing output
+            # SRT is UDP so no TCP state to check — monitor process CPU instead
+            local cpu
+            cpu=$(ps -o %cpu= -p "$gst_pid" 2>/dev/null | tr -d ' ')
+            cpu="${cpu:-0}"
+            # If CPU drops to near 0 for multiple checks, pipeline is stalled
+            if [ "$(echo "$cpu < 1" | bc 2>/dev/null || echo 0)" = "1" ]; then
+                no_conn_strikes=$((no_conn_strikes + 1))
+                log "WATCHDOG: SRT pipeline CPU ${cpu}% (strike $no_conn_strikes/3)"
+                if [ "$no_conn_strikes" -ge 3 ]; then
+                    log "WATCHDOG: SRT pipeline stalled, killing GStreamer (pid $gst_pid)"
+                    kill "$gst_pid" 2>/dev/null
+                    sleep 1
+                    kill -9 "$gst_pid" 2>/dev/null
+                    return
+                fi
+            else
+                no_conn_strikes=0
             fi
         else
-            strikes=0
+            # For RTMP: check for CLOSE-WAIT (server disconnected)
+            local close_wait
+            close_wait=$(ss -tnp 2>/dev/null | grep ":${RTMP_PORT}" | grep -c "CLOSE-WAIT" || true)
+            if [ "${close_wait:-0}" -gt 0 ]; then
+                closewait_strikes=$((closewait_strikes + 1))
+                log "WATCHDOG: CLOSE-WAIT detected (strike $closewait_strikes/2)"
+                if [ "$closewait_strikes" -ge 2 ]; then
+                    log "WATCHDOG: server gone (CLOSE-WAIT), killing GStreamer (pid $gst_pid)"
+                    kill "$gst_pid" 2>/dev/null
+                    sleep 1
+                    kill -9 "$gst_pid" 2>/dev/null
+                    return
+                fi
+            else
+                closewait_strikes=0
+            fi
+
+            # Check for stuck send buffer
+            local send_q
+            send_q=$(ss -tnp 2>/dev/null | grep ":${RTMP_PORT}" | grep -v "FIN\|CLOSE\|TIME" | awk '{print $3}' | sort -rn | head -1)
+            send_q="${send_q:-0}"
+
+            if [ "$send_q" -gt "$WATCHDOG_THRESHOLD" ]; then
+                strikes=$((strikes + 1))
+                log "WATCHDOG: send buffer ${send_q} bytes (strike $strikes/$WATCHDOG_MAX_STRIKES)"
+                if [ "$strikes" -ge "$WATCHDOG_MAX_STRIKES" ]; then
+                    log "WATCHDOG: connection stuck, killing GStreamer (pid $gst_pid)"
+                    kill "$gst_pid" 2>/dev/null
+                    sleep 1
+                    kill -9 "$gst_pid" 2>/dev/null
+                    return
+                fi
+            else
+                strikes=0
+            fi
         fi
     done
 }
@@ -105,8 +186,20 @@ while true; do
     wait_for_server
 
     retry_count=$((retry_count + 1))
-    rtmp_url="rtmp://$RTMP_HOST:$RTMP_PORT/$STREAM_NAME"
-    log "Starting stream (attempt $retry_count) → $rtmp_url"
+    log "Starting stream (attempt $retry_count) via $PROTOCOL"
+
+    # Determine if hardware encoding should be used
+    # Auto mode: only on Pi Zero 2W (too weak for x264 software encode)
+    # RPi 5 has plenty of CPU for x264 — no hw encoder on BCM2712 anyway
+    use_hw=false
+    if [ "$HW_ENCODE" = "yes" ]; then
+        use_hw=true
+    elif [ "$HW_ENCODE" = "auto" ]; then
+        if $IS_ZERO_2W && command -v rpicam-vid >/dev/null 2>&1; then
+            use_hw=true
+            log "Pi Zero 2W detected — using hardware H264 encoder"
+        fi
+    fi
 
     # Check if audio device is available
     has_audio=false
@@ -117,29 +210,103 @@ while true; do
         log "No audio device — streaming video only"
     fi
 
-    if $has_audio; then
-        # Single GStreamer pipeline: shared clock keeps A/V in sync.
-        # libcamerasrc + alsasrc → flvmux → rtmpsink
-        gst-launch-1.0 -e \
-            libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! queue ! \
-            videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast bitrate=${BITRATE} key-int-max="${GOP}" bframes=0 threads=4 ! \
-            h264parse ! flvmux name=mux streamable=true ! \
-            rtmpsink location="$rtmp_url" \
-            alsasrc device="$AUDIO_DEVICE" buffer-time=200000 ! "audio/x-raw,rate=48000,channels=1" ! queue max-size-time=3000000000 ! \
-            audioconvert ! avenc_aac ! aacparse ! mux. \
-            2>&1 &
+    if $use_hw; then
+        # Hardware encode: rpicam-vid does H264 encoding on the GPU,
+        # GStreamer only handles muxing and transport (minimal CPU)
+        if $has_audio; then
+            if [ "$PROTOCOL" = "srt" ]; then
+                rpicam-vid --width "$WIDTH" --height "$HEIGHT" --framerate "$FPS" \
+                    --bitrate "$((BITRATE * 1000))" --inline --codec h264 -t 0 -o - 2>/dev/null | \
+                gst-launch-1.0 -e \
+                    fdsrc ! h264parse ! mpegtsmux name=mux latency=3000000000 ! \
+                    srtsink uri="srt://${MEDIAMTX_HOST}:${SRT_PORT}?streamid=publish:${STREAM_NAME}&pkt_size=1316" latency=${SRT_LATENCY} \
+                    alsasrc device="$AUDIO_DEVICE" buffer-time=200000 ! "audio/x-raw,rate=48000,channels=1" ! \
+                    queue max-size-buffers=1 max-size-time=500000000 leaky=downstream ! \
+                    audioconvert ! opusenc bitrate=128000 frame-size=20 ! opusparse ! mux. \
+                    2>&1 &
+            else
+                rpicam-vid --width "$WIDTH" --height "$HEIGHT" --framerate "$FPS" \
+                    --bitrate "$((BITRATE * 1000))" --inline --codec h264 -t 0 -o - 2>/dev/null | \
+                gst-launch-1.0 -e \
+                    fdsrc ! h264parse ! flvmux name=mux streamable=true ! \
+                    rtmpsink location="rtmp://${MEDIAMTX_HOST}:${RTMP_PORT}/${STREAM_NAME}" \
+                    alsasrc device="$AUDIO_DEVICE" buffer-time=200000 ! "audio/x-raw,rate=48000,channels=1" ! \
+                    queue max-size-buffers=1 max-size-time=500000000 leaky=downstream ! \
+                    audioconvert ! avenc_aac ! aacparse ! mux. \
+                    2>&1 &
+            fi
+        else
+            if [ "$PROTOCOL" = "srt" ]; then
+                rpicam-vid --width "$WIDTH" --height "$HEIGHT" --framerate "$FPS" \
+                    --bitrate "$((BITRATE * 1000))" --inline --codec h264 -t 0 -o - 2>/dev/null | \
+                gst-launch-1.0 -e \
+                    fdsrc ! h264parse ! mpegtsmux ! \
+                    srtsink uri="srt://${MEDIAMTX_HOST}:${SRT_PORT}?streamid=publish:${STREAM_NAME}&pkt_size=1316" latency=${SRT_LATENCY} \
+                    2>&1 &
+            else
+                rpicam-vid --width "$WIDTH" --height "$HEIGHT" --framerate "$FPS" \
+                    --bitrate "$((BITRATE * 1000))" --inline --codec h264 -t 0 -o - 2>/dev/null | \
+                gst-launch-1.0 -e \
+                    fdsrc ! h264parse ! flvmux streamable=true ! \
+                    rtmpsink location="rtmp://${MEDIAMTX_HOST}:${RTMP_PORT}/${STREAM_NAME}" \
+                    2>&1 &
+            fi
+        fi
+    elif $has_audio; then
+        if [ "$PROTOCOL" = "srt" ]; then
+            # SRT with audio: MPEG-TS mux with Opus audio
+            # Opus is used because WebRTC (the browser viewer) only supports Opus, not AAC.
+            # mpegtsmux latency=3s ensures it waits for data on ALL pads before
+            # writing the first PMT. Without this, audio arrives before x264enc
+            # produces its first frame, so the PMT only lists audio and MediaMTX
+            # (which only reads the first PMT) misses the video track entirely.
+            gst-launch-1.0 -e \
+                libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
+                queue max-size-buffers=1 leaky=downstream ! \
+                videoconvert ! x264enc tune=zerolatency speed-preset=faster bitrate=${BITRATE} key-int-max=30 bframes=0 threads=4 ! \
+                h264parse ! mpegtsmux name=mux latency=3000000000 ! \
+                srtsink uri="srt://${MEDIAMTX_HOST}:${SRT_PORT}?streamid=publish:${STREAM_NAME}&pkt_size=1316" latency=${SRT_LATENCY} \
+                alsasrc device="$AUDIO_DEVICE" buffer-time=200000 ! "audio/x-raw,rate=48000,channels=1" ! \
+                queue max-size-buffers=1 max-size-time=500000000 leaky=downstream ! \
+                audioconvert ! opusenc bitrate=128000 frame-size=20 ! opusparse ! mux. \
+                2>&1 &
+        else
+            # RTMP with audio
+            gst-launch-1.0 -e \
+                libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
+                queue max-size-buffers=1 leaky=downstream ! \
+                videoconvert ! x264enc tune=zerolatency speed-preset=faster bitrate=${BITRATE} key-int-max=30 bframes=0 threads=4 ! \
+                h264parse ! flvmux name=mux streamable=true ! \
+                rtmpsink location="rtmp://${MEDIAMTX_HOST}:${RTMP_PORT}/${STREAM_NAME}" \
+                alsasrc device="$AUDIO_DEVICE" buffer-time=200000 ! "audio/x-raw,rate=48000,channels=1" ! \
+                queue max-size-buffers=1 max-size-time=500000000 leaky=downstream ! \
+                audioconvert ! avenc_aac ! aacparse ! mux. \
+                2>&1 &
+        fi
     else
-        # Video-only GStreamer pipeline
-        gst-launch-1.0 -e \
-            libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! queue ! \
-            videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast bitrate=${BITRATE} key-int-max="${GOP}" bframes=0 threads=4 ! \
-            h264parse ! flvmux streamable=true ! \
-            rtmpsink location="$rtmp_url" \
-            2>&1 &
+        if [ "$PROTOCOL" = "srt" ]; then
+            # SRT video-only
+            gst-launch-1.0 -e \
+                libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
+                queue max-size-buffers=1 leaky=downstream ! \
+                videoconvert ! x264enc tune=zerolatency speed-preset=faster bitrate=${BITRATE} key-int-max=30 bframes=0 threads=4 ! \
+                h264parse ! mpegtsmux ! \
+                srtsink uri="srt://${MEDIAMTX_HOST}:${SRT_PORT}?streamid=publish:${STREAM_NAME}&pkt_size=1316" latency=${SRT_LATENCY} \
+                2>&1 &
+        else
+            # RTMP video-only
+            gst-launch-1.0 -e \
+                libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
+                queue max-size-buffers=1 leaky=downstream ! \
+                videoconvert ! x264enc tune=zerolatency speed-preset=faster bitrate=${BITRATE} key-int-max=30 bframes=0 threads=4 ! \
+                h264parse ! flvmux streamable=true ! \
+                rtmpsink location="rtmp://${MEDIAMTX_HOST}:${RTMP_PORT}/${STREAM_NAME}" \
+                2>&1 &
+        fi
     fi
 
     GST_PID=$!
-    log "GStreamer started (pid $GST_PID), watchdog monitoring send buffer"
+    log "GStreamer started (pid $GST_PID), watchdog monitoring ($PROTOCOL)"
     start_watchdog "$GST_PID" &
     WATCHDOG_PID=$!
     wait "$GST_PID" 2>/dev/null

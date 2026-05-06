@@ -254,7 +254,7 @@ type Overlay struct {
 	raceTime    string
 	format      string
 	maxRows     int
-	scale       int
+	scale       float64
 	interval    time.Duration
 	titleOverride string
 	flagStatus    string
@@ -272,7 +272,7 @@ type Config struct {
 	PNGPath    string // where to write the overlay PNG
 	Format     string // "full", "condensed", "minimal" (default "full")
 	MaxRows    int    // max competitors to show (default 10)
-	Scale      int    // render scale factor (default 1, use 2 for 1080p)
+	Scale      float64 // render scale factor (default 1, use 2 for 1080p)
 	Interval   time.Duration
 	Title      string // custom title override (replaces SpeedHive session name)
 	FlagStatus string // flag status text, e.g. "Red Flag" (empty = no flag shown)
@@ -366,7 +366,7 @@ func (o *Overlay) SetFlagStatus(status string) {
 }
 
 // Update changes overlay settings without restarting the poll loop.
-func (o *Overlay) Update(format string, maxRows, scale int, title string) {
+func (o *Overlay) Update(format string, maxRows int, scale float64, title string) {
 	o.mu.Lock()
 	if format != "" {
 		o.format = format
@@ -379,7 +379,7 @@ func (o *Overlay) Update(format string, maxRows, scale int, title string) {
 	}
 	o.titleOverride = title
 	o.mu.Unlock()
-	log.Printf("[overlay] Update: format=%s maxRows=%d scale=%d title=%q", format, maxRows, scale, title)
+	log.Printf("[overlay] Update: format=%s maxRows=%d scale=%.1f title=%q", format, maxRows, scale, title)
 	if err := o.render(); err != nil {
 		log.Printf("[overlay] Update re-render error: %v", err)
 	}
@@ -1163,15 +1163,15 @@ func (o *Overlay) writePNG(img *image.RGBA) error {
 	return os.Rename(tmp, o.pngPath)
 }
 
-// scaleUp performs nearest-neighbor upscaling by the given factor.
-func scaleUp(src *image.RGBA, factor int) *image.RGBA {
+// scaleUp performs upscaling by the given factor using nearest-neighbor.
+func scaleUp(src *image.RGBA, factor float64) *image.RGBA {
 	b := src.Bounds()
-	w, h := b.Dx()*factor, b.Dy()*factor
+	w, h := int(float64(b.Dx())*factor), int(float64(b.Dy())*factor)
 	dst := image.NewRGBA(image.Rect(0, 0, w, h))
 	for y := 0; y < h; y++ {
-		sy := y / factor
+		sy := int(float64(y) / factor)
 		for x := 0; x < w; x++ {
-			sx := x / factor
+			sx := int(float64(x) / factor)
 			dst.SetRGBA(x, y, src.RGBAAt(sx+b.Min.X, sy+b.Min.Y))
 		}
 	}
@@ -1207,7 +1207,7 @@ func flagColor(status string) color.RGBA {
 
 // RenderPreview renders an overlay with the given parameters and returns PNG bytes.
 // This is for dev preview only — it does not write to disk or poll any API.
-func RenderPreview(format string, maxRows, scale int, title, flag string, comps []Competitor, laps, lapsToGo int, raceTime string, style ...Style) ([]byte, error) {
+func RenderPreview(format string, maxRows int, scale float64, title, flag string, comps []Competitor, laps, lapsToGo int, raceTime string, style ...Style) ([]byte, error) {
 	f, err := os.CreateTemp("", "overlay-preview-*.png")
 	if err != nil {
 		return nil, err

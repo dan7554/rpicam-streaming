@@ -516,6 +516,136 @@ h2 {
     text-decoration: underline;
 }
 
+/* Logo Overlays */
+#logo-section {
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 16px;
+    margin-top: 16px;
+}
+
+.logo-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.logo-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    background: #1a1a2e;
+    border-radius: 6px;
+}
+
+.logo-card-header {
+    font-size: 13px;
+    font-weight: 600;
+    color: #ccc;
+    min-width: 100px;
+}
+
+.logo-preview {
+    width: 80px;
+    height: 48px;
+    background: #000;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.logo-preview img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+}
+
+.logo-placeholder {
+    color: #333;
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.logo-controls {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.logo-controls button {
+    padding: 4px 12px;
+    border: 2px dashed #444;
+    border-radius: 6px;
+    background: transparent;
+    color: #aaa;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.logo-controls button:hover {
+    border-color: #e53935;
+    color: #e0e0e0;
+    background: rgba(229, 57, 53, 0.08);
+}
+
+.logo-remove-btn {
+    border: 1px solid #333 !important;
+    border-style: solid !important;
+    padding: 3px 8px !important;
+    font-size: 11px !important;
+}
+
+.logo-remove-btn:hover {
+    background: rgba(244, 67, 54, 0.15) !important;
+    border-color: #e53935 !important;
+    color: #ef5350 !important;
+}
+
+.logo-settings {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-left: auto;
+}
+
+.logo-settings label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85em;
+    color: #aaa;
+    white-space: nowrap;
+}
+
+.logo-settings input[type="range"] {
+    width: 100px;
+    flex-shrink: 0;
+}
+
+.logo-settings input[type="number"] {
+    width: 55px;
+    background: #222;
+    color: #fff;
+    border: 1px solid #444;
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 12px;
+}
+
+.logo-settings span {
+    min-width: 30px;
+    font-size: 0.8em;
+    color: #888;
+}
+
 /* Ads */
 .ads-card {
     margin-top: 16px;
@@ -985,6 +1115,28 @@ h2 {
     /* Ad playback bar */
     #ad-playback-bar {
         padding: 8px 10px;
+    }
+
+    /* Logo cards: stack on mobile */
+    .logo-card {
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .logo-card-header {
+        min-width: unset;
+        width: 100%;
+    }
+
+    .logo-settings {
+        margin-left: 0;
+        width: 100%;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .logo-settings input[type="range"] {
+        width: 80px;
     }
 
     /* Build version */

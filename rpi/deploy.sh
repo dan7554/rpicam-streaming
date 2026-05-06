@@ -4,13 +4,11 @@ set -euo pipefail
 # Deploy RPiCam streaming to a Raspberry Pi
 # Usage: ./deploy.sh <pi-host> [mediamtx-ip]
 #   pi-host:     SSH target for the Pi (e.g. rpicam3)
-#   mediamtx-ip: IP of the MediaMTX server (default: auto-detect Tailscale IP)
+#   mediamtx-ip: IP of the MediaMTX server (default: EC2 public IP)
 #
-# On boot the Pi will push its camera as RTMP to the MediaMTX server.
+# On boot the Pi will push its camera as SRT to the MediaMTX server.
 # Stream name is auto-detected from hostname: rpicam3 → cam3
-#
-# Requires on the Mac:
-#   tailscale serve --bg --tcp 1935 tcp://localhost:1935
+# Hardware encoding auto-enabled on Pi Zero 2W, x264 on Pi 5.
 
 PI_HOST="${1:?Usage: $0 <pi-host> [mediamtx-ip]}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -80,7 +78,7 @@ ssh "$PI_HOST" "
     sudo mv /tmp/rpicam-stream.sh /opt/rpicam-stream/rpicam-stream.sh
     sudo chmod +x /opt/rpicam-stream/rpicam-stream.sh
     sudo mv /tmp/rpicam-stream.service /etc/systemd/system/rpicam-stream.service
-    echo 'MEDIAMTX_HOST=$SERVER_IP' | sudo tee /etc/rpicam-stream.conf > /dev/null
+    echo \"MEDIAMTX_HOST=$SERVER_IP\" | sudo tee /etc/rpicam-stream.conf > /dev/null
     echo 'PROTOCOL=srt' | sudo tee -a /etc/rpicam-stream.conf > /dev/null
     echo 'AUDIO_DEVICE=hw:2,0' | sudo tee -a /etc/rpicam-stream.conf > /dev/null
     echo 'WIDTH=1920' | sudo tee -a /etc/rpicam-stream.conf > /dev/null

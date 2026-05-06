@@ -15,8 +15,18 @@ type UIConfig struct {
 	OverlayURL    string  `json:"overlay_url,omitempty"`
 	OverlayFormat string  `json:"overlay_format,omitempty"`
 	OverlayRows   int     `json:"overlay_max_rows,omitempty"`
-	OverlayScale  int     `json:"overlay_scale,omitempty"`
+	OverlayScale  float64 `json:"overlay_scale,omitempty"`
 	CameraVolume  *int    `json:"camera_volume,omitempty"` // 0-100
+
+	// Logo overlays
+	LogoTopRightEnabled *bool    `json:"logo_top_right_enabled,omitempty"`
+	LogoTopRightOpacity *float64 `json:"logo_top_right_opacity,omitempty"` // 0.0-1.0
+	LogoTopRightOffset  *int     `json:"logo_top_right_offset,omitempty"`  // pixels from corner
+	LogoBotRightEnabled *bool    `json:"logo_bot_right_enabled,omitempty"`
+	LogoBotRightOpacity *float64 `json:"logo_bot_right_opacity,omitempty"` // 0.0-1.0
+	LogoBotRightOffset  *int     `json:"logo_bot_right_offset,omitempty"`  // pixels from corner
+	LogoTopRightScale   *float64 `json:"logo_top_right_scale,omitempty"`   // multiplier, default 1.0
+	LogoBotRightScale   *float64 `json:"logo_bot_right_scale,omitempty"`   // multiplier, default 1.0
 }
 
 // Store manages UIConfig persistence to a JSON file.
@@ -71,6 +81,30 @@ func (s *Store) Merge(patch UIConfig) {
 	if patch.CameraVolume != nil {
 		s.cfg.CameraVolume = patch.CameraVolume
 	}
+	if patch.LogoTopRightEnabled != nil {
+		s.cfg.LogoTopRightEnabled = patch.LogoTopRightEnabled
+	}
+	if patch.LogoTopRightOpacity != nil {
+		s.cfg.LogoTopRightOpacity = patch.LogoTopRightOpacity
+	}
+	if patch.LogoTopRightOffset != nil {
+		s.cfg.LogoTopRightOffset = patch.LogoTopRightOffset
+	}
+	if patch.LogoBotRightEnabled != nil {
+		s.cfg.LogoBotRightEnabled = patch.LogoBotRightEnabled
+	}
+	if patch.LogoBotRightOpacity != nil {
+		s.cfg.LogoBotRightOpacity = patch.LogoBotRightOpacity
+	}
+	if patch.LogoBotRightOffset != nil {
+		s.cfg.LogoBotRightOffset = patch.LogoBotRightOffset
+	}
+	if patch.LogoTopRightScale != nil {
+		s.cfg.LogoTopRightScale = patch.LogoTopRightScale
+	}
+	if patch.LogoBotRightScale != nil {
+		s.cfg.LogoBotRightScale = patch.LogoBotRightScale
+	}
 
 	s.save()
 }
@@ -84,7 +118,7 @@ func (s *Store) SetYouTubeKey(key string) {
 }
 
 // SetOverlay saves overlay parameters.
-func (s *Store) SetOverlay(url, format string, rows, scale int) {
+func (s *Store) SetOverlay(url, format string, rows int, scale float64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cfg.OverlayURL = url

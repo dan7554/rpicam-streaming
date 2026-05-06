@@ -1,20 +1,27 @@
 # Media-MTX: Multi-Camera Live Streaming Platform
 
-A Go-based streaming system combining **MediaMTX**, **GStreamer**, and a custom RTSP switching proxy for live broadcast to YouTube — with zero-gap camera switching, timing overlays, and browser-based commentary mixing.
+A Go-based streaming system combining **MediaMTX**, **GStreamer**, and a custom RTSP switching proxy for live broadcast to YouTube — with zero-gap camera switching, timing overlays, logo overlays, ad breaks, and browser-based commentary mixing.
 
 ## Features
 
 - **Zero-gap camera switching** — RTSP proxy bridge with keyframe sync and RTP timestamp rewriting
 - **GStreamer pipelines** — video encoding, audio mixing, and overlay composition
 - **Browser-based commentary** — WHIP publish from the web UI, mixed via GStreamer audiomixer
-- **Race timing overlays** — MYLAPS/SpeedHive live timing rendered as a PNG timing tower
-- **Flag status indicators** — Red, Yellow, Green, and Checkered (checker pattern) flag overlay
+- **Race timing overlays** — MYLAPS/SpeedHive live timing rendered as a PNG timing tower with 6 format options
+- **Logo overlays** — Upload PNG logos to top-right and bottom-right corners with per-logo opacity, offset, and scale
+- **Ad break system** — Upload videos, auto-transcode, and play ad breaks mid-stream
+- **Flag status indicators** — Red, Yellow, Green, and Checkered flag overlay
 - **Custom overlay title** — Override the SpeedHive session name with a custom title
+- **Overlay styling** — Full custom styling: colors, sizing, column widths, element positioning, opacity
 - **SpeedHive Results API** — Supports both live timing and `/sessions/{id}` result URLs
+- **Fleet management** — Remote monitoring of Pi cameras with CPU temp, uptime, and Starlink stats
 - **Multi-camera viewer** — Dedicated `/viewer` page with full-screen camera grid and click-to-switch
 - **Kick commentator** — Remove commentators from slots via the admin UI
 - **Multi-destination output** — YouTube RTMP, local RTMP, WebRTC preview
-- **Low-latency preview** — WebRTC with HLS fallback
+- **Low-latency preview** — WebRTC with HLS fallback, live output preview
+- **Debug tools** — Remote service restart, log viewer
+- **MediaMTX watchdog** — Auto-detects and restarts stuck WebRTC sessions
+- **Persistent UI config** — Settings survive restarts and are shared across browser sessions
 - **AWS deployment** — Terraform infrastructure-as-code (ALB, NLB, EC2)
 
 ## Architecture
@@ -50,9 +57,10 @@ A Go-based streaming system combining **MediaMTX**, **GStreamer**, and a custom 
 │  │ Bridge   │  │ Overlay   │  │ Comment. │                  │
 │  │ Video    │→ │ Compositor│→ │ Audio    │→ flvmux → RTMP   │
 │  │ + Audio  │  │ (PNG)     │  │ Mixer    │    ↓             │
-│  └──────────┘  └───────────┘  └──────────┘  YouTube         │
-│                                                             │
+│  └──────────┘  │ + Logos   │  └──────────┘  YouTube         │
+│                └───────────┘                                │
 │  Also outputs → RTSP live-preview (WebRTC to browser)       │
+│  Ad breaks → swap video source to transcoded ad files       │
 └─────────────────────────────────────────────────────────────┘
            │
            ▼
@@ -62,10 +70,14 @@ A Go-based streaming system combining **MediaMTX**, **GStreamer**, and a custom 
 │  • One-click camera switching                               │
 │  • Go Live / Stop controls with YouTube key                 │
 │  • MYLAPS overlay controls (format, scale, rows, title)     │
+│  • Logo overlays (upload, opacity, offset per corner)       │
+│  • Ad break system (upload, transcode, multi-select play)   │
 │  • Flag controls (Red, Yellow, Green, Checkered, Clear)     │
 │  • Commentary: 2 slots with per-mic + camera volume + kick  │
-│  • Live output preview                                      │
+│  • Live output preview (WebRTC, pause/resume)               │
 │  • /viewer — full-screen multi-camera grid                  │
+│  • /fleet — Pi camera fleet monitoring + Starlink stats     │
+│  • /debug — service restart + log viewer                    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -84,30 +96,50 @@ A Go-based streaming system combining **MediaMTX**, **GStreamer**, and a custom 
 4. `audiomixer` blends camera audio + commentary audio with independent volume controls
 5. Mixed audio is encoded to AAC and muxed into the RTMP output
 
+### Timing Overlay Formats
+
+| Format | Description |
+|--------|-------------|
+| `full` | Position, car number, full name, laps, gap |
+| `condensed` | Position, car number, "J. Doe", gap (narrow tower) |
+| `condensed-nogap` | Same as condensed without gap column |
+| `short` | Position, car number, 3-letter last name, gap |
+| `short-nogap` | Same as short without gap column |
+| `minimal` | Position, car number, gap (ultra-compact) |
+
+Scale can be set to any decimal value (e.g. 1.5, 2.0) to control overlay size on the 1920×1080 output.
+
 ## Directory Structure
 
 ```
 media-mtx/
-├── cmd/server/main.go           # Entry point
+├── cmd/
+│   ├── server/main.go           # Entry point
+│   └── overlay-preview/main.go  # Overlay preview/design server
 ├── internal/
+│   ├── ads/ads.go               # Ad break manager (upload, transcode, playback)
 │   ├── api/handler.go           # HTTP API + reverse proxies (HLS, WebRTC)
 │   ├── bridge/bridge.go         # RTSP switching proxy with timestamp rewriting
 │   ├── config/config.go         # Environment-based configuration
 │   ├── overlay/overlay.go       # MYLAPS timing tower renderer (PNG)
-│   └── switcher/
-│       ├── switcher.go          # Pipeline lifecycle, camera switching
-│       └── commentary.go        # Commentary-aware GStreamer pipelines
+│   ├── switcher/
+│   │   ├── switcher.go          # Pipeline lifecycle, camera switching, logos
+│   │   └── pipeline_test.go     # Pipeline unit tests
+│   └── uiconfig/uiconfig.go    # Persistent UI config store
 ├── web/
-│   ├── index.html               # UI: cameras, controls, overlay, commentary
+│   ├── index.html               # UI: cameras, controls, overlay, logos, ads, commentary
 │   ├── app.js                   # WebRTC/HLS playback, API calls, WHIP publish
-│   └── style.css                # Dark theme
+│   ├── style.css                # Dark theme
+│   ├── viewer.html              # Full-screen multi-camera viewer
+│   └── fleet.html               # Pi camera fleet dashboard
 ├── deploy/
 │   ├── mediamtx-aws.yml         # MediaMTX production config
 │   ├── systemd/                 # systemd units for EC2
 │   └── terraform/               # Full AWS infrastructure (VPC, EC2, ALB, NLB, ACM)
 ├── rpi/
-│   ├── rpicam-stream.sh         # Pi camera streaming script
+│   ├── rpicam-stream.sh         # Pi camera streaming script (RTMP + SRT)
 │   ├── rpicam-stream.service    # systemd unit
+│   ├── deploy.sh                # Deploy script for Pi cameras
 │   └── cellular/                # 5G modem setup scripts
 ├── scripts/
 │   ├── start.sh                 # Start all services
@@ -159,6 +191,8 @@ make clean    # Remove build artifacts
 | `PORT` | `8080` | HTTP server port |
 | `MEDIAMTX_API` | `http://localhost:9997` | MediaMTX API URL |
 | `MEDIAMTX_RTSP` | `rtsp://localhost:8554` | MediaMTX RTSP URL |
+| `MEDIAMTX_HLS` | `:8888` | MediaMTX HLS proxy address |
+| `MEDIAMTX_WEBRTC` | `:8889` | MediaMTX WebRTC proxy address |
 | `RTMP_OUTPUT` | `rtmp://localhost:1935/live-output` | Default RTMP output |
 | `BRIDGE_ADDR` | `:8555` | Bridge proxy listen address |
 | `CAMERAS` | `cam2,cam3` | Comma-separated camera names |
@@ -174,17 +208,43 @@ make clean    # Remove build artifacts
 | `POST` | `/api/switch` | Switch camera (`{"stream": "cam3"}`) |
 | `POST` | `/api/live/start` | Start streaming (`{"stream", "youtube_key", "audio"}`) |
 | `POST` | `/api/live/stop` | Stop streaming |
-| `POST` | `/api/overlay/start` | Start timing overlay (`{"event_id", "format", "scale", "title"}`) |
+| `GET/POST` | `/api/config` | Read/write persistent UI config |
+| | | |
+| `POST` | `/api/overlay/start` | Start timing overlay (`{"url", "format", "scale", "title"}`) |
 | `POST` | `/api/overlay/stop` | Stop overlay |
+| `POST` | `/api/overlay/update` | Hot-update format, scale, rows, title without restart |
 | `GET` | `/api/overlay/status` | Overlay active status + competitor count |
-| `POST` | `/api/overlay/flag` | Set flag status (`{"status": "red"}`) or clear (`{"status": ""}`) |
+| `POST` | `/api/overlay/flag` | Set flag status (`{"status": "red"}`) or clear |
+| | | |
+| `POST` | `/api/logo/upload` | Upload logo PNG (`multipart: file, position`) |
+| `DELETE` | `/api/logo/{position}` | Remove logo (`top-right` or `bottom-right`) |
+| `GET` | `/api/logo/status` | Logo state (has_logo, enabled, opacity, offset, scale) |
+| `POST` | `/api/logo/settings` | Update opacity, offset, scale, enabled per logo |
+| `GET` | `/api/logo/preview/{position}` | Serve current logo image |
+| | | |
+| `POST` | `/api/ads/upload` | Upload ad video (auto-transcoded) |
+| `GET` | `/api/ads` | List ads with status and duration |
+| `DELETE` | `/api/ads/{id}` | Delete an ad |
+| `POST` | `/api/ads/play` | Play selected ads |
+| `POST` | `/api/ads/stop` | Stop ad break |
+| `GET` | `/api/ads/playback` | Current ad playback state |
+| | | |
 | `GET` | `/api/commentary/status` | Commentary config (enabled, volumes, slots) |
 | `POST` | `/api/commentary/update` | Set commentary enabled + camera volume |
 | `POST` | `/api/commentary/slot` | Update commentator slot (active, volume) |
 | `POST` | `/api/commentary/kick` | Kick a commentator from their slot |
+| | | |
+| `POST` | `/api/fleet/heartbeat` | Pi camera heartbeat (temp, uptime, Starlink) |
+| `GET` | `/api/fleet/status` | Fleet dashboard data |
+| | | |
+| `POST` | `/api/debug/restart` | Restart MediaMTX or stream server |
+| `GET` | `/api/debug/logs` | Fetch recent service logs |
 | `GET` | `/api/audio/devices` | List macOS audio devices |
 | `GET` | `/api/version` | Build version info |
+| | | |
 | `GET` | `/viewer` | Full-screen multi-camera viewer page |
+| `GET` | `/fleet` | Pi camera fleet dashboard |
+| `GET` | `/debug` | Debug tools page |
 
 ## AWS Deployment
 
@@ -230,7 +290,7 @@ ssh -i ~/.ssh/racetrack-streaming.pem ubuntu@<ELASTIC_IP>
 
 ## Raspberry Pi Camera Setup
 
-Each Pi runs `rpicam-stream.sh` as a systemd service, pushing H.264+AAC over RTMP:
+Each Pi runs `rpicam-stream.sh` as a systemd service, pushing H.264+Opus over RTMP (or SRT for lower latency):
 
 ```bash
 # On the Pi

@@ -61,6 +61,9 @@ async function init() {
     pollAds();
     setInterval(pollAdPlayback, 2000);
 
+    // Poll logo status
+    pollLogoStatus();
+
     // Load server-side config, fall back to localStorage
     let serverCfg = {};
     try {
@@ -716,7 +719,7 @@ async function startOverlay() {
 
     const format = document.getElementById('overlay-format').value;
     const maxRows = parseInt(document.getElementById('overlay-max-rows').value, 10) || 0;
-    const scale = parseInt(document.getElementById('overlay-scale').value, 10) || 1;
+    const scale = parseFloat(document.getElementById('overlay-scale').value) || 1;
     localStorage.setItem('overlay-scale', scale);
 
     const title = document.getElementById('overlay-title').value.trim();
@@ -765,7 +768,7 @@ async function stopOverlay() {
 async function updateOverlay() {
     const format = document.getElementById('overlay-format').value;
     const maxRows = parseInt(document.getElementById('overlay-max-rows').value, 10) || 0;
-    const scale = parseInt(document.getElementById('overlay-scale').value, 10) || 1;
+    const scale = parseFloat(document.getElementById('overlay-scale').value) || 1;
     const title = document.getElementById('overlay-title').value.trim();
     try {
         const res = await fetch(`${API_BASE}/api/overlay/update`, {
@@ -1099,6 +1102,106 @@ async function setFlag(flagStatus) {
     } catch (err) {
         console.error('Set flag failed:', err);
     }
+}
+
+// --- Logos ---
+
+async function uploadLogo(position) {
+    const key = position === 'top-right' ? 'top-right' : 'bot-right';
+    const input = document.getElementById(`logo-${key}-file`);
+    if (!input.files.length) return;
+    const file = input.files[0];
+
+    const form = new FormData();
+    form.append('file', file);
+    form.append('position', position);
+
+    try {
+        const res = await fetch(`${API_BASE}/api/logo/upload`, { method: 'POST', body: form });
+        const data = await res.json();
+        if (res.ok) {
+            pollLogoStatus();
+        } else {
+            alert(data.error || 'Upload failed');
+        }
+    } catch (err) {
+        alert('Upload failed: ' + err.message);
+    }
+    input.value = '';
+}
+
+async function removeLogo(position) {
+    try {
+        const res = await fetch(`${API_BASE}/api/logo/${position}`, { method: 'DELETE' });
+        if (res.ok) {
+            pollLogoStatus();
+        }
+    } catch (err) {
+        alert('Remove failed: ' + err.message);
+    }
+}
+
+let logoSettingsTimeout = null;
+function updateLogoSettings(position) {
+    const key = position === 'top-right' ? 'top-right' : 'bot-right';
+    const opacitySlider = document.getElementById(`logo-${key}-opacity`);
+    const opacityVal = document.getElementById(`logo-${key}-opacity-val`);
+    const offsetInput = document.getElementById(`logo-${key}-offset`);
+
+    if (opacityVal) opacityVal.textContent = opacitySlider.value + '%';
+
+    clearTimeout(logoSettingsTimeout);
+    logoSettingsTimeout = setTimeout(async () => {
+        const opacity = parseInt(opacitySlider.value) / 100;
+        const offset = parseInt(offsetInput.value) || 20;
+        try {
+            await fetch(`${API_BASE}/api/logo/settings`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ position, opacity, offset }),
+            });
+        } catch (err) {
+            console.error('Logo settings update failed:', err);
+        }
+    }, 300);
+}
+
+async function pollLogoStatus() {
+    try {
+        const res = await fetch(`${API_BASE}/api/logo/status`);
+        const data = await res.json();
+        updateLogoUI('top-right', data.top_right);
+        updateLogoUI('bottom-right', data.bottom_right);
+    } catch {}
+}
+
+function updateLogoUI(position, info) {
+    const key = position === 'top-right' ? 'top-right' : 'bot-right';
+    const img = document.getElementById(`logo-${key}-img`);
+    const placeholder = document.querySelector(`#logo-${key}-preview .logo-placeholder`);
+    const removeBtn = document.getElementById(`logo-${key}-remove`);
+    const opacitySlider = document.getElementById(`logo-${key}-opacity`);
+    const opacityVal = document.getElementById(`logo-${key}-opacity-val`);
+    const offsetInput = document.getElementById(`logo-${key}-offset`);
+
+    if (info.has_logo) {
+        if (img) {
+            img.src = `${API_BASE}/api/logo/preview/${position}?t=${Date.now()}`;
+            img.style.display = 'block';
+        }
+        if (placeholder) placeholder.style.display = 'none';
+        if (removeBtn) removeBtn.style.display = '';
+    } else {
+        if (img) img.style.display = 'none';
+        if (placeholder) placeholder.style.display = '';
+        if (removeBtn) removeBtn.style.display = 'none';
+    }
+
+    if (opacitySlider) {
+        opacitySlider.value = Math.round(info.opacity * 100);
+        if (opacityVal) opacityVal.textContent = opacitySlider.value + '%';
+    }
+    if (offsetInput) offsetInput.value = info.offset;
 }
 
 // --- Ads ---
