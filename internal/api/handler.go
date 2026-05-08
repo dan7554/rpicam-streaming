@@ -1070,12 +1070,21 @@ systemctl disable rpicam-stream 2>/dev/null || true
 systemctl stop health-agent 2>/dev/null || true
 systemctl disable health-agent 2>/dev/null || true
 for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo powersave > "$cpu" 2>/dev/null || true; done
+MIN=$(cat /sys/devices/system/cpu/cpufreq/policy0/scaling_min_freq 2>/dev/null || echo 600000)
+echo $MIN > /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq 2>/dev/null || true
+echo 0 > /sys/devices/system/cpu/cpu1/online 2>/dev/null || true
+echo 0 > /sys/devices/system/cpu/cpu2/online 2>/dev/null || true
+echo 0 > /sys/devices/system/cpu/cpu3/online 2>/dev/null || true
 echo none > /sys/class/leds/ACT/trigger 2>/dev/null || true
 echo 0 > /sys/class/leds/ACT/brightness 2>/dev/null || true
-echo "sleep mode active"
+echo "deep sleep active - 1 core @ min freq"
 `
 		case "stream":
 			remoteCmd = `
+echo 1 > /sys/devices/system/cpu/cpu1/online 2>/dev/null || true
+echo 1 > /sys/devices/system/cpu/cpu2/online 2>/dev/null || true
+echo 1 > /sys/devices/system/cpu/cpu3/online 2>/dev/null || true
+echo 2400000 > /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq 2>/dev/null || true
 for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo ondemand > "$cpu" 2>/dev/null || echo schedutil > "$cpu" 2>/dev/null || true; done
 systemctl enable health-agent 2>/dev/null || true
 systemctl start health-agent 2>/dev/null || true

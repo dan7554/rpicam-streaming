@@ -98,7 +98,7 @@ fi
 
 # Remote script for sleep mode
 SLEEP_SCRIPT='
-echo "=== Entering sleep mode ==="
+echo "=== Entering DEEP sleep mode ==="
 
 # Stop streaming service
 echo "Stopping streaming service..."
@@ -138,6 +138,17 @@ for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
     echo powersave > "$cpu" 2>/dev/null || true
 done
 
+# DEEP SLEEP: Cap max frequency to minimum (Pi 5 min is 1500MHz)
+echo "Capping CPU to minimum frequency..."
+MIN_FREQ=$(cat /sys/devices/system/cpu/cpufreq/policy0/scaling_min_freq 2>/dev/null || echo 600000)
+echo $MIN_FREQ > /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq 2>/dev/null || true
+
+# DEEP SLEEP: Disable 3 of 4 CPU cores
+echo "Disabling CPU cores 1-3..."
+echo 0 > /sys/devices/system/cpu/cpu1/online 2>/dev/null || true
+echo 0 > /sys/devices/system/cpu/cpu2/online 2>/dev/null || true
+echo 0 > /sys/devices/system/cpu/cpu3/online 2>/dev/null || true
+
 # Fan will slow automatically as temp drops in powersave mode
 
 # Disable LEDs
@@ -147,7 +158,8 @@ echo 0 > /sys/class/leds/ACT/brightness 2>/dev/null || true
 echo none > /sys/class/leds/PWR/trigger 2>/dev/null || true
 echo 0 > /sys/class/leds/PWR/brightness 2>/dev/null || true
 
-echo "=== Sleep mode active ==="
+echo "=== DEEP sleep mode active ==="
+echo "Running on 1 core @ 600MHz max"
 echo "WiFi and Tailscale remain active"
 '
 
@@ -156,6 +168,16 @@ STREAM_SCRIPT='
 echo "=== Entering stream mode ==="
 
 MACHINE=$(cat /proc/device-tree/model 2>/dev/null || echo "unknown")
+
+# Re-enable all CPU cores first
+echo "Re-enabling CPU cores..."
+echo 1 > /sys/devices/system/cpu/cpu1/online 2>/dev/null || true
+echo 1 > /sys/devices/system/cpu/cpu2/online 2>/dev/null || true
+echo 1 > /sys/devices/system/cpu/cpu3/online 2>/dev/null || true
+
+# Remove max frequency cap (restore to 2.4GHz for Pi 5)
+echo "Removing CPU frequency cap..."
+echo 2400000 > /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq 2>/dev/null || true
 
 # Re-enable USB hub (Pi 5 only)
 if [[ "$MACHINE" == *"Pi 5"* ]]; then
