@@ -51,8 +51,8 @@ IS_ZERO_2W=false
 # Also, rpicam-vid --list-cameras is unreliable on Zero 2W (reports
 # "No cameras available" even when the camera works fine).
 if $IS_ZERO_2W; then
-    log "Pi Zero 2W detected — waiting 30s for camera subsystem to settle"
-    sleep 30
+    log "Pi Zero 2W detected — waiting 10s for camera drivers to load"
+    sleep 10
 fi
 
 # --- Main ---
@@ -195,9 +195,9 @@ while true; do
     if [ "$HW_ENCODE" = "yes" ]; then
         use_hw=true
     elif [ "$HW_ENCODE" = "auto" ]; then
-        if $IS_ZERO_2W && command -v rpicam-vid >/dev/null 2>&1; then
+        if $IS_ZERO_2W && gst-inspect-1.0 v4l2h264enc >/dev/null 2>&1; then
             use_hw=true
-            log "Pi Zero 2W detected — using hardware H264 encoder"
+            log "Pi Zero 2W detected — using v4l2h264enc hardware H264 encoder"
         fi
     fi
 
@@ -211,24 +211,30 @@ while true; do
     fi
 
     if $use_hw; then
-        # Hardware encode: rpicam-vid does H264 encoding on the GPU,
-        # GStreamer only handles muxing and transport (minimal CPU)
+        # Hardware encode: v4l2h264enc uses the VideoCore GPU H264 encoder
+        # via V4L2 M2M — all within GStreamer for proper timestamps & muxing.
+        # repeat_sequence_header=1 = inline SPS/PPS (needed for mid-stream joins)
+        # h264_profile: 0=Baseline, 2=Main, 4=High
+        V4L2_CONTROLS="controls,video_bitrate=$((BITRATE * 1000)),repeat_sequence_header=1,h264_profile=4"
         if $has_audio; then
             if [ "$PROTOCOL" = "srt" ]; then
-                rpicam-vid --width "$WIDTH" --height "$HEIGHT" --framerate "$FPS" \
-                    --bitrate "$((BITRATE * 1000))" --inline --codec h264 -t 0 -o - 2>/dev/null | \
                 gst-launch-1.0 -e \
-                    fdsrc ! h264parse ! mpegtsmux name=mux latency=3000000000 ! \
+                    libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
+                    v4l2h264enc extra-controls="$V4L2_CONTROLS" ! "video/x-h264,level=(string)4" ! \
+                    h264parse ! queue max-size-buffers=1 leaky=downstream ! \
+                    mpegtsmux name=mux alignment=7 ! \
+                    queue max-size-bytes=2000000 max-size-time=0 max-size-buffers=0 ! \
                     srtsink uri="srt://${MEDIAMTX_HOST}:${SRT_PORT}?streamid=publish:${STREAM_NAME}&pkt_size=1316" latency=${SRT_LATENCY} \
                     alsasrc device="$AUDIO_DEVICE" buffer-time=200000 ! "audio/x-raw,rate=48000,channels=1" ! \
                     queue max-size-buffers=1 max-size-time=500000000 leaky=downstream ! \
                     audioconvert ! opusenc bitrate=128000 frame-size=20 ! opusparse ! mux. \
                     2>&1 &
             else
-                rpicam-vid --width "$WIDTH" --height "$HEIGHT" --framerate "$FPS" \
-                    --bitrate "$((BITRATE * 1000))" --inline --codec h264 -t 0 -o - 2>/dev/null | \
                 gst-launch-1.0 -e \
-                    fdsrc ! h264parse ! flvmux name=mux streamable=true ! \
+                    libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
+                    v4l2h264enc extra-controls="$V4L2_CONTROLS" ! "video/x-h264,level=(string)4" ! \
+                    h264parse ! queue max-size-buffers=1 leaky=downstream ! \
+                    flvmux name=mux streamable=true ! \
                     rtmpsink location="rtmp://${MEDIAMTX_HOST}:${RTMP_PORT}/${STREAM_NAME}" \
                     alsasrc device="$AUDIO_DEVICE" buffer-time=200000 ! "audio/x-raw,rate=48000,channels=1" ! \
                     queue max-size-buffers=1 max-size-time=500000000 leaky=downstream ! \
@@ -237,17 +243,18 @@ while true; do
             fi
         else
             if [ "$PROTOCOL" = "srt" ]; then
-                rpicam-vid --width "$WIDTH" --height "$HEIGHT" --framerate "$FPS" \
-                    --bitrate "$((BITRATE * 1000))" --inline --codec h264 -t 0 -o - 2>/dev/null | \
                 gst-launch-1.0 -e \
-                    fdsrc ! h264parse ! mpegtsmux ! \
+                    libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
+                    v4l2h264enc extra-controls="$V4L2_CONTROLS" ! "video/x-h264,level=(string)4" ! \
+                    h264parse ! queue max-size-buffers=1 leaky=downstream ! mpegtsmux alignment=7 ! \
+                    queue max-size-bytes=2000000 max-size-time=0 max-size-buffers=0 ! \
                     srtsink uri="srt://${MEDIAMTX_HOST}:${SRT_PORT}?streamid=publish:${STREAM_NAME}&pkt_size=1316" latency=${SRT_LATENCY} \
                     2>&1 &
             else
-                rpicam-vid --width "$WIDTH" --height "$HEIGHT" --framerate "$FPS" \
-                    --bitrate "$((BITRATE * 1000))" --inline --codec h264 -t 0 -o - 2>/dev/null | \
                 gst-launch-1.0 -e \
-                    fdsrc ! h264parse ! flvmux streamable=true ! \
+                    libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
+                    v4l2h264enc extra-controls="$V4L2_CONTROLS" ! "video/x-h264,level=(string)4" ! \
+                    h264parse ! queue max-size-buffers=1 leaky=downstream ! flvmux streamable=true ! \
                     rtmpsink location="rtmp://${MEDIAMTX_HOST}:${RTMP_PORT}/${STREAM_NAME}" \
                     2>&1 &
             fi

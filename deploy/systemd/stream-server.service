@@ -13,10 +13,12 @@ RestartSec=3
 LimitNOFILE=65536
 
 # Environment
-Environment=CAMERAS=cam2,cam3
+Environment=CAMERAS=cam1,cam3
 Environment=MEDIAMTX_API=http://localhost:9997
 Environment=MEDIAMTX_WEBRTC=:8889
 Environment=OVERLAY_DIR=/tmp/media-mtx-overlay
+Environment=CAMERA_USER=dan7554
+Environment=CAMERA_PASS=!Dan1007554
 
 # Logging
 StandardOutput=journal

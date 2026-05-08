@@ -118,23 +118,48 @@ func (b *Bridge) Start(cameras []string, active string) error {
 	}
 	log.Printf("[bridge] connection order (most medias first): %v", sorted)
 
+	connected := make([]string, 0, len(sorted))
+	firstConnected := true
 	for i, cam := range sorted {
-		log.Printf("[bridge] connecting camera %d/%d: %s (first=%v)", i+1, len(sorted), cam, i == 0)
-		if err := b.connectCamera(cam, i == 0); err != nil {
-			log.Printf("[bridge] camera %s connect FAILED: %v", cam, err)
-			b.Stop()
-			return fmt.Errorf("connect %s: %w", cam, err)
+		log.Printf("[bridge] connecting camera %d/%d: %s (first=%v)", i+1, len(sorted), cam, firstConnected)
+		if err := b.connectCamera(cam, firstConnected); err != nil {
+			// Don't fail startup if a camera path is missing/unpublished (for example 404).
+			// Keep going with the cameras that are available.
+			log.Printf("[bridge] camera %s connect FAILED (skipping): %v", cam, err)
+			continue
 		}
+		connected = append(connected, cam)
+		firstConnected = false
+	}
+
+	if len(connected) == 0 {
+		b.Stop()
+		return fmt.Errorf("no camera sources available")
+	}
+
+	activeAvailable := false
+	for _, cam := range connected {
+		if cam == active {
+			activeAvailable = true
+			break
+		}
+	}
+	if !activeAvailable {
+		fallback := connected[0]
+		log.Printf("[bridge] active camera %s unavailable, falling back to %s", active, fallback)
+		b.mu.Lock()
+		b.active = fallback
+		b.mu.Unlock()
 	}
 
 	// Start reconnect monitors for each camera
-	b.cameras = sorted
-	for i, cam := range sorted {
+	b.cameras = connected
+	for i, cam := range connected {
 		go b.monitorCamera(i, cam)
 	}
 
 	log.Printf("[bridge] started on rtsp://localhost%s/stream (%d cameras, active: %s)",
-		b.addr, len(cameras), active)
+		b.addr, len(connected), b.active)
 
 	return nil
 }

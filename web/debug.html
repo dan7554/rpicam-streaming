@@ -27,6 +27,21 @@
         .btn-danger { background: #e53935; color: white; }
         .btn-danger:hover { background: #c62828; }
         .btn-danger:disabled { background: #555; color: #888; cursor: not-allowed; }
+        .btn-sleep { background: #7c4dff; color: white; }
+        .btn-sleep:hover { background: #651fff; }
+        .btn-stream { background: #4caf50; color: white; }
+        .btn-stream:hover { background: #43a047; }
+        .btn-secondary { background: #555; color: #ddd; }
+        .btn-secondary:hover { background: #666; }
+        .btn-secondary:disabled { background: #333; color: #666; cursor: not-allowed; }
+        .btn-sm { min-width: auto !important; padding: 6px 12px !important; font-size: 11px !important; }
+        .camera-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 12px; }
+        .camera-card { background: #222; border: 1px solid #333; border-radius: 6px; padding: 12px; }
+        .camera-card h3 { font-size: 14px; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+        .camera-card h3 .ip { font-size: 11px; color: #888; font-weight: normal; }
+        .camera-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+        .camera-btns-secondary { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; padding-top: 6px; border-top: 1px solid #333; }
+        .camera-status { font-size: 11px; margin-top: 8px; color: #888; min-height: 16px; padding: 4px 0; border-radius: 4px; transition: background 0.3s ease; }
         .log-box { background: #111; border: 1px solid #333; border-radius: 4px; padding: 12px; margin-top: 12px; font-family: monospace; font-size: 12px; color: #aaa; max-height: 300px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
         .status-msg { font-size: 12px; margin-left: 8px; }
         .status-msg.ok { color: #4caf50; }
@@ -47,6 +62,20 @@
         <a href="/">← Back to Dashboard</a>
     </header>
     <main>
+        <section class="card" id="tailscale-section">
+            <h2>Tailscale Status</h2>
+            <div id="tailscale-status">
+                <p style="color:#888;font-size:12px;">Checking Tailscale...</p>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>Camera Controls</h2>
+            <div id="camera-controls" class="camera-grid">
+                <p style="color:#888;font-size:12px;">Loading cameras...</p>
+            </div>
+        </section>
+
         <section class="card">
             <h2>Service Controls</h2>
             <div class="action-row">
@@ -78,6 +107,225 @@
     </main>
     <script>
         const API_BASE = window.location.origin;
+
+        // Check Tailscale status
+        async function loadTailscaleStatus() {
+            const container = document.getElementById('tailscale-status');
+            try {
+                const res = await fetch(`${API_BASE}/api/debug/tailscale`);
+                const data = await res.json();
+                
+                if (!data.installed) {
+                    container.innerHTML = `
+                        <p style="color:#e53935;font-size:13px;">⚠️ Tailscale not installed</p>
+                        <p style="color:#888;font-size:12px;">Camera controls require Tailscale on the server.</p>
+                    `;
+                    return;
+                }
+                
+                if (data.status === 'Running') {
+                    let peersHtml = '';
+                    if (data.peers && data.peers.length > 0) {
+                        const camPeers = data.peers.filter(p => 
+                            p.hostname.toLowerCase().includes('cam') || 
+                            p.hostname.toLowerCase().includes('rpi')
+                        );
+                        if (camPeers.length > 0) {
+                            peersHtml = '<div style="margin-top:8px;font-size:12px;color:#888;">' +
+                                camPeers.map(p => 
+                                    `<span style="color:${p.online ? '#4caf50' : '#888'}">● ${p.hostname}</span> (${p.ip})`
+                                ).join(' &nbsp;|&nbsp; ') +
+                                '</div>';
+                        }
+                    }
+                    container.innerHTML = `
+                        <p style="color:#4caf50;font-size:13px;">✓ Connected as <strong>${data.hostname}</strong> (${data.ip})</p>
+                        ${peersHtml}
+                    `;
+                } else if (data.status === 'NeedsLogin' || data.status === 'NoState') {
+                    container.innerHTML = `
+                        <p style="color:#ff9800;font-size:13px;">⚠️ Tailscale not authenticated</p>
+                        <button class="btn-restart" onclick="tailscaleUp()" style="margin-top:8px;">Connect Tailscale</button>
+                        <div id="tailscale-auth" style="margin-top:8px;"></div>
+                    `;
+                } else {
+                    container.innerHTML = `
+                        <p style="color:#888;font-size:13px;">Status: ${data.status}</p>
+                        <p style="color:#888;font-size:12px;">${data.message || ''}</p>
+                        <button class="btn-restart" onclick="tailscaleUp()" style="margin-top:8px;">Connect Tailscale</button>
+                        <div id="tailscale-auth" style="margin-top:8px;"></div>
+                    `;
+                }
+            } catch (e) {
+                container.innerHTML = `<p style="color:#e53935;font-size:12px;">Error: ${e.message}</p>`;
+            }
+        }
+
+        async function tailscaleUp() {
+            const authDiv = document.getElementById('tailscale-auth');
+            if (authDiv) {
+                authDiv.innerHTML = '<p style="color:#ff9800;font-size:12px;">Starting Tailscale...</p>';
+            }
+            
+            try {
+                const res = await fetch(`${API_BASE}/api/debug/tailscale/up`, { method: 'POST' });
+                const data = await res.json();
+                
+                if (data.auth_url) {
+                    if (authDiv) {
+                        authDiv.innerHTML = `
+                            <p style="color:#ff9800;font-size:13px;margin-bottom:8px;">🔑 Authentication required:</p>
+                            <a href="${data.auth_url}" target="_blank" style="color:#4caf50;font-size:14px;word-break:break-all;">${data.auth_url}</a>
+                            <p style="color:#888;font-size:11px;margin-top:8px;">Click the link above, then refresh this page after authenticating.</p>
+                        `;
+                    }
+                } else if (data.status === 'connected') {
+                    loadTailscaleStatus(); // Refresh status
+                } else {
+                    if (authDiv) {
+                        authDiv.innerHTML = `<p style="color:#e53935;font-size:12px;">${data.message || 'Failed'}</p>`;
+                    }
+                }
+            } catch (e) {
+                if (authDiv) {
+                    authDiv.innerHTML = `<p style="color:#e53935;font-size:12px;">Error: ${e.message}</p>`;
+                }
+            }
+        }
+
+        // Load camera list and render controls
+        async function loadCameras() {
+            const container = document.getElementById('camera-controls');
+            try {
+                const res = await fetch(`${API_BASE}/api/camera/list`);
+                const data = await res.json();
+                if (!data.cameras || data.cameras.length === 0) {
+                    container.innerHTML = '<p style="color:#888;font-size:12px;">No cameras configured</p>';
+                    return;
+                }
+                
+                // Sort cameras by name
+                data.cameras.sort((a, b) => a.name.localeCompare(b.name));
+                
+                let html = '';
+                for (const cam of data.cameras) {
+                    const isOffline = cam.ip === 'offline';
+                    const statusClass = isOffline ? 'style="opacity:0.5"' : '';
+                    const ipDisplay = isOffline ? '<span style="color:#e53935">offline</span>' : cam.ip;
+                    html += `
+                        <div class="camera-card" ${statusClass}>
+                            <h3>${cam.name} <span class="ip">${ipDisplay}</span></h3>
+                            <div class="camera-btns">
+                                <button class="btn-sleep btn-sm" onclick="cameraAction('${cam.name}', 'sleep')" ${isOffline ? 'disabled' : ''}>Sleep</button>
+                                <button class="btn-stream btn-sm" onclick="cameraAction('${cam.name}', 'stream')" ${isOffline ? 'disabled' : ''}>Stream</button>
+                                <button class="btn-restart btn-sm" onclick="cameraAction('${cam.name}', 'restart')" ${isOffline ? 'disabled' : ''}>Restart</button>
+                                <button class="btn-danger btn-sm" onclick="cameraAction('${cam.name}', 'reboot')" ${isOffline ? 'disabled' : ''}>Reboot</button>
+                            </div>
+                            <div class="camera-btns-secondary">
+                                <button class="btn-secondary btn-sm" onclick="cameraAction('${cam.name}', 'reboot-cli')" ${isOffline ? 'disabled' : ''}>Reboot → CLI</button>
+                                <button class="btn-secondary btn-sm" onclick="cameraAction('${cam.name}', 'reboot-gui')" ${isOffline ? 'disabled' : ''}>Reboot → GUI</button>
+                            </div>
+                            <div class="camera-status" id="status-${cam.name}"></div>
+                        </div>
+                    `;
+                }
+                
+                // Add "All Cameras" card
+                html += `
+                    <div class="camera-card" style="border-color:#555;">
+                        <h3>All Cameras</h3>
+                        <div class="camera-btns">
+                            <button class="btn-sleep btn-sm" onclick="cameraAction('all', 'sleep')">Sleep All</button>
+                            <button class="btn-stream btn-sm" onclick="cameraAction('all', 'stream')">Stream All</button>
+                            <button class="btn-restart btn-sm" onclick="cameraAction('all', 'restart')">Restart All</button>
+                        </div>
+                        <div class="camera-btns-secondary">
+                            <button class="btn-secondary btn-sm" onclick="cameraAction('all', 'reboot-cli')">All → CLI</button>
+                            <button class="btn-secondary btn-sm" onclick="cameraAction('all', 'reboot-gui')">All → GUI</button>
+                        </div>
+                        <div class="camera-status" id="status-all"></div>
+                    </div>
+                `;
+                
+                container.innerHTML = html;
+            } catch (e) {
+                container.innerHTML = `<p style="color:#e53935;font-size:12px;">Error: ${e.message}</p>`;
+            }
+        }
+
+        async function cameraAction(camera, action) {
+            const statusEl = document.getElementById('status-' + camera);
+            statusEl.innerHTML = `<span style="color:#ff9800;">⏳ ${action}ing...</span>`;
+            
+            try {
+                const res = await fetch(`${API_BASE}/api/camera/control`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ camera, action }),
+                });
+                const data = await res.json();
+                
+                if (res.ok && data.results) {
+                    // Check for Tailscale auth required
+                    let authUrls = [];
+                    let successMsgs = [];
+                    let errorMsgs = [];
+                    
+                    for (const [cam, msg] of Object.entries(data.results)) {
+                        if (msg.startsWith('AUTH_REQUIRED:')) {
+                            const url = msg.replace('AUTH_REQUIRED:', '');
+                            authUrls.push({ cam, url });
+                        } else if (msg.includes('active') || msg.includes('restarted') || msg.includes('success') || msg.includes('rebooting')) {
+                            successMsgs.push({ cam, msg });
+                        } else if (msg.includes('error') || msg.includes('failed') || msg.includes('offline')) {
+                            errorMsgs.push({ cam, msg });
+                        } else {
+                            successMsgs.push({ cam, msg }); // Assume success for other messages
+                        }
+                    }
+                    
+                    if (authUrls.length > 0) {
+                        // Show auth links
+                        const authHtml = authUrls.map(({ cam, url }) => 
+                            `<strong>${cam}:</strong> <a href="${url}" target="_blank" style="color:#ff9800;">Authenticate Tailscale SSH ↗</a>`
+                        ).join('<br>');
+                        statusEl.innerHTML = authHtml;
+                        return; // Don't auto-clear auth messages
+                    }
+                    
+                    // Build result HTML with icons
+                    let html = '';
+                    for (const { cam, msg } of successMsgs) {
+                        html += `<span style="color:#4caf50;">✓ ${cam}: ${msg}</span> `;
+                    }
+                    for (const { cam, msg } of errorMsgs) {
+                        html += `<span style="color:#e53935;">✗ ${cam}: ${msg}</span> `;
+                    }
+                    statusEl.innerHTML = html.trim() || 'Done';
+                    
+                    // Flash effect for success
+                    if (errorMsgs.length === 0 && successMsgs.length > 0) {
+                        statusEl.style.background = 'rgba(76, 175, 80, 0.2)';
+                        setTimeout(() => statusEl.style.background = '', 1000);
+                    }
+                } else {
+                    statusEl.innerHTML = `<span style="color:#e53935;">✗ ${data.error || 'Failed'}</span>`;
+                }
+            } catch (e) {
+                statusEl.innerHTML = `<span style="color:#e53935;">✗ Error: ${e.message}</span>`;
+            }
+            
+            // Clear status after 15 seconds (unless it's an auth link)
+            setTimeout(() => {
+                if (statusEl.innerHTML && !statusEl.innerHTML.includes('Authenticate')) {
+                    statusEl.innerHTML = '';
+                }
+            }, 15000);
+        }
+
+        // Initialize
+        loadTailscaleStatus();
+        loadCameras();
 
         async function restartService(service) {
             const statusEl = document.getElementById('status-' + service);

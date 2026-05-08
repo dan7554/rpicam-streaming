@@ -156,6 +156,10 @@ func (h *Handler) routes() {
 	// Debug tools
 	h.mux.HandleFunc("POST /api/debug/restart", h.debugRestart)
 	h.mux.HandleFunc("GET /api/debug/logs", h.debugLogs)
+	h.mux.HandleFunc("GET /api/debug/tailscale", h.debugTailscale)
+	h.mux.HandleFunc("POST /api/debug/tailscale/up", h.debugTailscaleUp)
+	h.mux.HandleFunc("POST /api/camera/control", h.cameraControl)
+	h.mux.HandleFunc("GET /api/camera/list", h.cameraList)
 
 	// Serve debug page at /debug
 	h.mux.HandleFunc("GET /debug", func(w http.ResponseWriter, r *http.Request) {
@@ -876,6 +880,261 @@ func (h *Handler) debugLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"logs": string(out)})
+}
+
+func (h *Handler) debugTailscale(w http.ResponseWriter, r *http.Request) {
+	// Check if tailscale is installed
+	_, err := exec.LookPath("tailscale")
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"installed": false,
+			"status":    "not_installed",
+			"message":   "Tailscale is not installed on this server",
+		})
+		return
+	}
+
+	// Get tailscale status
+	out, err := exec.Command("tailscale", "status", "--json").Output()
+	if err != nil {
+		// Tailscale might need authentication
+		statusOut, _ := exec.Command("tailscale", "status").CombinedOutput()
+		statusStr := string(statusOut)
+		
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"installed": true,
+			"status":    "error",
+			"message":   statusStr,
+		})
+		return
+	}
+
+	// Parse the JSON status
+	var status struct {
+		BackendState string `json:"BackendState"`
+		Self         struct {
+			HostName     string   `json:"HostName"`
+			TailscaleIPs []string `json:"TailscaleIPs"`
+		} `json:"Self"`
+		Peer map[string]struct {
+			HostName     string   `json:"HostName"`
+			TailscaleIPs []string `json:"TailscaleIPs"`
+			Online       bool     `json:"Online"`
+		} `json:"Peer"`
+	}
+	
+	if err := json.Unmarshal(out, &status); err != nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"installed": true,
+			"status":    "error",
+			"message":   "Failed to parse tailscale status: " + err.Error(),
+		})
+		return
+	}
+
+	// Build peer list
+	peers := make([]map[string]interface{}, 0)
+	for _, peer := range status.Peer {
+		ip := ""
+		if len(peer.TailscaleIPs) > 0 {
+			ip = peer.TailscaleIPs[0]
+		}
+		peers = append(peers, map[string]interface{}{
+			"hostname": peer.HostName,
+			"ip":       ip,
+			"online":   peer.Online,
+		})
+	}
+
+	selfIP := ""
+	if len(status.Self.TailscaleIPs) > 0 {
+		selfIP = status.Self.TailscaleIPs[0]
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"installed":    true,
+		"status":       status.BackendState,
+		"hostname":     status.Self.HostName,
+		"ip":           selfIP,
+		"peers":        peers,
+		"peer_count":   len(peers),
+	})
+}
+
+func (h *Handler) debugTailscaleUp(w http.ResponseWriter, r *http.Request) {
+	// Run tailscale up with --ssh to get auth URL
+	cmd := exec.Command("sudo", "tailscale", "up", "--ssh", "--timeout=5s")
+	out, err := cmd.CombinedOutput()
+	outStr := string(out)
+	
+	// Look for auth URL
+	authURLRegex := regexp.MustCompile(`https://login\.tailscale\.com/[^\s]+`)
+	if match := authURLRegex.FindString(outStr); match != "" {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"status":   "auth_required",
+			"auth_url": match,
+			"message":  "Please visit the URL to authenticate",
+		})
+		return
+	}
+
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"status":  "error",
+			"message": outStr,
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":  "connected",
+		"message": "Tailscale connected successfully",
+	})
+}
+
+// --- Camera Control API ---
+
+func (h *Handler) cameraList(w http.ResponseWriter, r *http.Request) {
+	// Query Tailscale for camera IPs
+	cameraHosts := config.GetAllCameraIPs(h.cfg.Cameras)
+	
+	cameras := make([]map[string]string, 0)
+	for _, name := range h.cfg.Cameras {
+		ip := cameraHosts[name]
+		if ip == "" {
+			ip = "offline"
+		}
+		cameras = append(cameras, map[string]string{
+			"name": name,
+			"ip":   ip,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"cameras": cameras})
+}
+
+func (h *Handler) cameraControl(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Camera string `json:"camera"` // cam1, cam3, or "all"
+		Action string `json:"action"` // sleep, stream, reboot, restart
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: %v", err)
+		return
+	}
+	log.Printf("[api] cameraControl: camera=%s action=%s", req.Camera, req.Action)
+
+	if h.cfg.CameraPass == "" {
+		writeError(w, http.StatusInternalServerError, "CAMERA_PASS not configured")
+		return
+	}
+
+	// Get current camera IPs from Tailscale
+	cameraHosts := config.GetAllCameraIPs(h.cfg.Cameras)
+
+	// Build list of cameras to control
+	var targets []string
+	if req.Camera == "all" {
+		targets = h.cfg.Cameras
+	} else {
+		// Check if camera is in configured list
+		found := false
+		for _, c := range h.cfg.Cameras {
+			if c == req.Camera {
+				found = true
+				break
+			}
+		}
+		if !found {
+			writeError(w, http.StatusBadRequest, "unknown camera: %s", req.Camera)
+			return
+		}
+		targets = []string{req.Camera}
+	}
+
+	// Execute action on each camera
+	results := make(map[string]string)
+	for _, cam := range targets {
+		ip := cameraHosts[cam]
+		if ip == "" {
+			results[cam] = "offline (not found in Tailscale)"
+			continue
+		}
+		
+		var remoteCmd string
+
+		switch req.Action {
+		case "sleep":
+			remoteCmd = `
+systemctl stop rpicam-stream 2>/dev/null || true
+systemctl disable rpicam-stream 2>/dev/null || true
+systemctl stop health-agent 2>/dev/null || true
+systemctl disable health-agent 2>/dev/null || true
+for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo powersave > "$cpu" 2>/dev/null || true; done
+echo none > /sys/class/leds/ACT/trigger 2>/dev/null || true
+echo 0 > /sys/class/leds/ACT/brightness 2>/dev/null || true
+echo "sleep mode active"
+`
+		case "stream":
+			remoteCmd = `
+for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo ondemand > "$cpu" 2>/dev/null || echo schedutil > "$cpu" 2>/dev/null || true; done
+systemctl enable health-agent 2>/dev/null || true
+systemctl start health-agent 2>/dev/null || true
+systemctl enable rpicam-stream 2>/dev/null || true
+systemctl start rpicam-stream
+sleep 2
+if systemctl is-active --quiet rpicam-stream; then echo "stream mode active"; else echo "stream failed to start"; fi
+`
+		case "reboot":
+			remoteCmd = `reboot`
+		case "reboot-cli":
+			remoteCmd = `
+systemctl set-default multi-user.target
+echo "Default set to CLI, rebooting..."
+reboot
+`
+		case "reboot-gui":
+			remoteCmd = `
+systemctl set-default graphical.target
+echo "Default set to GUI, rebooting..."
+reboot
+`
+		case "restart":
+			remoteCmd = `systemctl restart rpicam-stream && echo "stream restarted"`
+		default:
+			results[cam] = "unknown action: " + req.Action
+			continue
+		}
+
+		// Build SSH command with password via stdin
+		sshCmd := fmt.Sprintf("printf '%%s\\n' '%s' | sudo -S bash -c '%s'",
+			h.cfg.CameraPass, strings.ReplaceAll(remoteCmd, "'", "'\\''"))
+		
+		cmd := exec.Command("ssh", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=no",
+			fmt.Sprintf("%s@%s", h.cfg.CameraUser, ip), sshCmd)
+		
+		out, err := cmd.CombinedOutput()
+		outStr := string(out)
+		
+		// Check for Tailscale auth URL
+		if strings.Contains(outStr, "login.tailscale.com") {
+			// Extract the auth URL
+			authURLRegex := regexp.MustCompile(`https://login\.tailscale\.com/[^\s]+`)
+			if match := authURLRegex.FindString(outStr); match != "" {
+				results[cam] = fmt.Sprintf("AUTH_REQUIRED:%s", match)
+				continue
+			}
+		}
+		
+		if err != nil {
+			results[cam] = fmt.Sprintf("error: %v - %s", err, outStr)
+		} else {
+			// Extract last line as status
+			lines := strings.Split(strings.TrimSpace(outStr), "\n")
+			results[cam] = lines[len(lines)-1]
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{"results": results})
 }
 
 // --- Logo API ---
