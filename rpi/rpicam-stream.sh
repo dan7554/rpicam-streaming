@@ -18,7 +18,9 @@ log() {
 MEDIAMTX_HOST="${MEDIAMTX_HOST:-192.168.50.208}"
 SRT_PORT="${SRT_PORT:-8890}"
 RTMP_PORT="${MEDIAMTX_RTMP_PORT:-1935}"
-PROTOCOL="${PROTOCOL:-srt}"  # srt or rtmp
+# NOTE: Always use RTMP. SRT (UDP) causes corrupted frames and color artifacts
+# over WiFi due to packet loss. RTMP (TCP) retransmits lost packets reliably.
+PROTOCOL="${PROTOCOL:-rtmp}"
 RETRY_DELAY="${RETRY_DELAY:-5}"
 WIDTH="${WIDTH:-1920}"
 HEIGHT="${HEIGHT:-1080}"
@@ -270,7 +272,7 @@ while true; do
             gst-launch-1.0 -e \
                 libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
                 queue max-size-buffers=1 leaky=downstream ! \
-                videoconvert ! x264enc tune=zerolatency speed-preset=faster bitrate=${BITRATE} key-int-max=30 bframes=0 threads=4 ! \
+                videoconvert ! x264enc tune=zerolatency speed-preset=medium bitrate=${BITRATE} key-int-max=60 threads=4 ! \
                 h264parse ! mpegtsmux name=mux latency=3000000000 ! \
                 srtsink uri="srt://${MEDIAMTX_HOST}:${SRT_PORT}?streamid=publish:${STREAM_NAME}&pkt_size=1316" latency=${SRT_LATENCY} \
                 alsasrc device="$AUDIO_DEVICE" buffer-time=200000 ! "audio/x-raw,rate=48000,channels=1" ! \
@@ -282,7 +284,7 @@ while true; do
             gst-launch-1.0 -e \
                 libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
                 queue max-size-buffers=1 leaky=downstream ! \
-                videoconvert ! x264enc tune=zerolatency speed-preset=faster bitrate=${BITRATE} key-int-max=30 bframes=0 threads=4 ! \
+                videoconvert ! x264enc tune=zerolatency speed-preset=medium bitrate=${BITRATE} key-int-max=60 threads=4 ! \
                 h264parse ! flvmux name=mux streamable=true ! \
                 rtmpsink location="rtmp://${MEDIAMTX_HOST}:${RTMP_PORT}/${STREAM_NAME}" \
                 alsasrc device="$AUDIO_DEVICE" buffer-time=200000 ! "audio/x-raw,rate=48000,channels=1" ! \
@@ -296,7 +298,7 @@ while true; do
             gst-launch-1.0 -e \
                 libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
                 queue max-size-buffers=1 leaky=downstream ! \
-                videoconvert ! x264enc tune=zerolatency speed-preset=faster bitrate=${BITRATE} key-int-max=30 bframes=0 threads=4 ! \
+                videoconvert ! x264enc tune=zerolatency speed-preset=medium bitrate=${BITRATE} key-int-max=60 threads=4 ! \
                 h264parse ! mpegtsmux ! \
                 srtsink uri="srt://${MEDIAMTX_HOST}:${SRT_PORT}?streamid=publish:${STREAM_NAME}&pkt_size=1316" latency=${SRT_LATENCY} \
                 2>&1 &
@@ -305,7 +307,7 @@ while true; do
             gst-launch-1.0 -e \
                 libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
                 queue max-size-buffers=1 leaky=downstream ! \
-                videoconvert ! x264enc tune=zerolatency speed-preset=faster bitrate=${BITRATE} key-int-max=30 bframes=0 threads=4 ! \
+                videoconvert ! x264enc tune=zerolatency speed-preset=medium bitrate=${BITRATE} key-int-max=60 threads=4 ! \
                 h264parse ! flvmux streamable=true ! \
                 rtmpsink location="rtmp://${MEDIAMTX_HOST}:${RTMP_PORT}/${STREAM_NAME}" \
                 2>&1 &

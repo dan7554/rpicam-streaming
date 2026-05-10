@@ -42,6 +42,8 @@ async function init() {
     // Start WebRTC players (HLS fallback)
     const previewsEnabled = localStorage.getItem('cam-previews-enabled') !== 'false';
     document.getElementById('cam-previews-enabled').checked = previewsEnabled;
+    const hlsMode = localStorage.getItem('cam-hls-mode') === 'true';
+    document.getElementById('cam-hls-mode').checked = hlsMode;
     if (previewsEnabled) {
         STREAMS.forEach(startPreview);
     } else {
@@ -123,6 +125,11 @@ async function init() {
 }
 
 function startPreview(name) {
+    const hlsMode = localStorage.getItem('cam-hls-mode') === 'true';
+    if (hlsMode) {
+        startHLS(name);
+        return;
+    }
     startWebRTC(name).catch(() => {
         console.warn(`WebRTC failed for ${name}, falling back to HLS (will retry WebRTC in 10s)`);
         startHLS(name);
@@ -133,6 +140,7 @@ function startPreview(name) {
 
 function scheduleWebRTCRetry(name) {
     setTimeout(() => {
+        if (localStorage.getItem('cam-hls-mode') === 'true') return; // don't upgrade in HLS mode
         const p = players[name];
         if (p && p.type === 'webrtc') return; // already upgraded
         startWebRTC(name).then(() => {
@@ -247,11 +255,32 @@ function toggleCamPreviews() {
     } else {
         grid.style.display = 'none';
         STREAMS.forEach(name => {
-            cleanupWebRTC(name);
+            cleanupPlayer(name);
             const video = document.getElementById(`video-${name}`);
             if (video) video.srcObject = null;
         });
     }
+}
+
+function toggleHLSMode() {
+    const hlsMode = document.getElementById('cam-hls-mode').checked;
+    localStorage.setItem('cam-hls-mode', hlsMode);
+    // Restart all previews with new mode
+    STREAMS.forEach(name => {
+        cleanupPlayer(name);
+        const video = document.getElementById(`video-${name}`);
+        if (video) { video.srcObject = null; video.src = ''; }
+        startPreview(name);
+    });
+}
+
+function cleanupPlayer(name) {
+    const p = players[name];
+    if (!p) return;
+    if (p.stallTimer) clearInterval(p.stallTimer);
+    if (p.type === 'webrtc' && p.pc) p.pc.close();
+    if (p.type === 'hls' && p.hls) p.hls.destroy();
+    delete players[name];
 }
 
 function startHLS(name) {

@@ -14,8 +14,8 @@ rtsp: yes
 rtspAddress: 0.0.0.0:8554
 rtspTransports: [tcp]
 
-# HLS disabled (YouTube handles distribution)
-hls: no
+# HLS - high quality browser playback (passes through original H264 without re-encoding)
+hls: yes
 
 # RTMP - ingest from Pi cameras
 rtmp: yes
