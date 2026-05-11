@@ -1,6 +1,5 @@
 let STREAMS = [];
 let ALL_CAMERAS = [];
-const HLS_BASE = '/hls';
 const WEBRTC_BASE = '/webrtc';
 const API_BASE = '';
 
@@ -50,11 +49,9 @@ async function init() {
         grid.appendChild(card);
     });
 
-    // Start WebRTC players (HLS fallback)
+    // Start WebRTC players
     const previewsEnabled = localStorage.getItem('cam-previews-enabled') !== 'false';
     document.getElementById('cam-previews-enabled').checked = previewsEnabled;
-    const hlsMode = localStorage.getItem('cam-hls-mode') === 'true';
-    document.getElementById('cam-hls-mode').checked = hlsMode;
     if (previewsEnabled) {
         STREAMS.forEach(startPreview);
     } else {
@@ -134,38 +131,27 @@ async function init() {
     document.getElementById('overlay-format').addEventListener('change', function() {
         const rowsInput = document.getElementById('overlay-max-rows');
         switch (this.value) {
+            case 'full':      rowsInput.value = 10; break;
             case 'condensed': rowsInput.value = 20; break;
             case 'minimal':   rowsInput.value = 15; break;
-            default:          rowsInput.value = 10; break;
+            default:          rowsInput.value = 20; break;
         }
     });
 }
 
 function startPreview(name) {
-    const hlsMode = localStorage.getItem('cam-hls-mode') === 'true';
-    if (hlsMode) {
-        startHLS(name);
-        return;
-    }
     startWebRTC(name).catch(() => {
-        console.warn(`WebRTC failed for ${name}, falling back to HLS (will retry WebRTC in 10s)`);
-        startHLS(name);
-        // Retry WebRTC periodically — upgrade from HLS when stream becomes available
+        console.warn(`WebRTC failed for ${name}, retrying in 10s`);
         scheduleWebRTCRetry(name);
     });
 }
 
 function scheduleWebRTCRetry(name) {
     setTimeout(() => {
-        if (localStorage.getItem('cam-hls-mode') === 'true') return; // don't upgrade in HLS mode
         const p = players[name];
-        if (p && p.type === 'webrtc') return; // already upgraded
+        if (p && p.type === 'webrtc') return; // already connected
         startWebRTC(name).then(() => {
-            // WebRTC succeeded — tear down HLS
-            if (p && p.type === 'hls' && p.hls) {
-                p.hls.destroy();
-            }
-            console.log(`Upgraded ${name} from HLS to WebRTC`);
+            console.log(`WebRTC connected for ${name}`);
         }).catch(() => {
             scheduleWebRTCRetry(name); // keep trying
         });
@@ -279,56 +265,12 @@ function toggleCamPreviews() {
     }
 }
 
-function toggleHLSMode() {
-    const hlsMode = document.getElementById('cam-hls-mode').checked;
-    localStorage.setItem('cam-hls-mode', hlsMode);
-    // Restart all previews with new mode
-    STREAMS.forEach(name => {
-        cleanupPlayer(name);
-        const video = document.getElementById(`video-${name}`);
-        if (video) { video.srcObject = null; video.src = ''; }
-        startPreview(name);
-    });
-}
-
 function cleanupPlayer(name) {
     const p = players[name];
     if (!p) return;
     if (p.stallTimer) clearInterval(p.stallTimer);
     if (p.type === 'webrtc' && p.pc) p.pc.close();
-    if (p.type === 'hls' && p.hls) p.hls.destroy();
     delete players[name];
-}
-
-function startHLS(name) {
-    const video = document.getElementById(`video-${name}`);
-    const url = `${HLS_BASE}/${name}/index.m3u8`;
-
-    if (Hls.isSupported()) {
-        const hls = new Hls({
-            enableWorker: true,
-            lowLatencyMode: false,
-            liveSyncDurationCount: 2,
-            liveMaxLatencyDurationCount: 4,
-            maxBufferLength: 4,
-            backBufferLength: 0,
-        });
-        hls.loadSource(url);
-        hls.attachMedia(video);
-        hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
-        hls.on(Hls.Events.ERROR, (_, data) => {
-            if (data.fatal) {
-                setTimeout(() => {
-                    hls.loadSource(url);
-                    hls.attachMedia(video);
-                }, 3000);
-            }
-        });
-        players[name] = { hls, type: 'hls' };
-    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        video.src = url;
-        video.play().catch(() => {});
-    }
 }
 
 async function switchTo(stream) {
@@ -573,6 +515,12 @@ let currentOutputStream = null;
 
 let outputUserUnmuted = false;
 
+// Track when user unmutes the output preview via video controls
+document.addEventListener('DOMContentLoaded', () => {
+    const v = document.getElementById('video-output');
+    if (v) v.addEventListener('volumechange', () => { outputUserUnmuted = !v.muted; });
+});
+
 function showOutputPreview(stream) {
     const section = document.getElementById('output-section');
     outputPreviewStream = stream;
@@ -620,6 +568,7 @@ async function startOutputWebRTC(stream) {
 
     pc.ontrack = (event) => {
         console.log('[output] ontrack:', event.track.kind, event.track.readyState);
+        const wasMuted = video.muted;
         if (event.streams[0]) {
             video.srcObject = event.streams[0];
         } else {
@@ -634,7 +583,7 @@ async function startOutputWebRTC(stream) {
         if (event.receiver && event.receiver.jitterBufferTarget !== undefined) {
             event.receiver.jitterBufferTarget = 0;
         }
-        video.muted = true;
+        video.muted = wasMuted;
         video.play().catch(() => {});
     };
 
@@ -681,38 +630,6 @@ async function startOutputWebRTC(stream) {
     outputPlayer = { pc, type: 'webrtc' };
 }
 
-function startOutputHLS(stream) {
-    const video = document.getElementById('video-output');
-    const url = `${HLS_BASE}/${stream}/index.m3u8`;
-
-    if (Hls.isSupported()) {
-        const hls = new Hls({
-            enableWorker: true,
-            lowLatencyMode: false,
-            liveSyncDurationCount: 2,
-            liveMaxLatencyDurationCount: 4,
-            maxBufferLength: 4,
-            backBufferLength: 0,
-        });
-        hls.loadSource(url);
-        hls.attachMedia(video);
-        hls.on(Hls.Events.MANIFEST_PARSED, () => {
-            video.muted = true;
-            video.play().catch(() => {});
-        });
-        hls.on(Hls.Events.ERROR, (_, data) => {
-            if (data.fatal) {
-                if (outputPreviewPaused) return;
-                hls.destroy();
-                outputPlayer = null;
-                // Retry without resetting currentOutputStream (prevents poll race)
-                setTimeout(() => connectOutput(stream), 3000);
-            }
-        });
-        outputPlayer = { hls, type: 'hls' };
-    }
-}
-
 function hideOutputPreview() {
     const section = document.getElementById('output-section');
     const video = document.getElementById('video-output');
@@ -720,8 +637,6 @@ function hideOutputPreview() {
     if (outputPlayer) {
         if (outputPlayer.type === 'webrtc' && outputPlayer.pc) {
             outputPlayer.pc.close();
-        } else if (outputPlayer.type === 'hls' && outputPlayer.hls) {
-            outputPlayer.hls.destroy();
         }
         outputPlayer = null;
     }
@@ -750,6 +665,22 @@ function toggleOutputPreview() {
         resumeOutputPreview();
     } else {
         pauseOutputPreview();
+    }
+}
+
+function toggleOutputMute() {
+    const video = document.getElementById('video-output');
+    const btn = document.getElementById('btn-unmute-output');
+    if (video) {
+        video.muted = !video.muted;
+        console.log('[output] toggleMute: muted=' + video.muted, 'srcObject=' + !!video.srcObject, 'audioTracks=' + (video.srcObject ? video.srcObject.getAudioTracks().length : 0));
+        if (video.srcObject) {
+            video.srcObject.getAudioTracks().forEach(t => {
+                console.log('[output] audio track:', t.id, 'enabled=' + t.enabled, 'readyState=' + t.readyState, 'muted=' + t.muted);
+                t.enabled = true;
+            });
+        }
+        if (btn) btn.textContent = video.muted ? '🔇 Unmute' : '🔊 Mute';
     }
 }
 

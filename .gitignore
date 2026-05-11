@@ -3,3 +3,4 @@ server
 *.log
 .DS_Store
 overlay-preview
+server-linux

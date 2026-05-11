@@ -235,9 +235,9 @@ func buildPipeline(overlayPath, rtspURL, rtmpURL, audioDevice, rtspBase string, 
 // includes camera audio + 2 commentary RTSP sources. When no commentator is
 // connected, the silence publisher on that path provides silent Opus frames.
 func alwaysOnAudioMix(rtspBase string, cameraVol float64) string {
-	// Camera audio comes as Opus via RTSP (SRT cameras publish Opus over MPEG-TS)
+	// Camera audio comes as AAC (MPEG-4 Audio / MPEG4-GENERIC) via the RTSP bridge.
 	return fmt.Sprintf(
-		"cam. ! rtpopusdepay ! opusdec ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! volume name=camvol volume=%.2f ! audiomixer name=amix latency=200000000 "+
+		"cam. ! rtpmp4gdepay ! aacparse ! avdec_aac ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! volume name=camvol volume=%.2f ! audiomixer name=amix latency=200000000 "+
 			"rtspsrc location=%s/commentary-1 protocols=tcp latency=200 name=comm1 "+
 			"comm1. ! rtpopusdepay ! opusdec ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! queue max-size-buffers=0 max-size-time=3000000000 max-size-bytes=0 leaky=downstream ! amix. "+
 			"rtspsrc location=%s/commentary-2 protocols=tcp latency=200 name=comm2 "+
@@ -818,12 +818,12 @@ func (s *Switcher) PlayAds(adFiles []string, adNames []string) error {
 
 			log.Printf("[switcher] playing ad %d/%d: %s", i+1, len(adFiles), name)
 
-			// Publish ad to mediamtx as RTSP with H264+Opus (matching camera format)
+			// Publish ad to mediamtx as RTSP with H264+AAC (matching camera format)
 			args := []string{
 				"-re",
 				"-i", adFile,
 				"-c:v", "copy",
-				"-c:a", "libopus", "-b:a", "128k", "-ar", "48000", "-ac", "1",
+				"-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "1",
 				"-f", "rtsp", "-rtsp_transport", "tcp",
 				fmt.Sprintf("rtsp://localhost:8554/%s", adSourceName),
 			}
@@ -887,14 +887,13 @@ func (s *Switcher) PlayAds(adFiles []string, adNames []string) error {
 				goto done
 			}
 
-			// Disconnect the finished ad source but DON'T switch back to camera
-			// between consecutive ads — keeps the last ad frame visible while
-			// the next ad connects (avoids camera flash).
+			// Switch back to camera between ads so bridge resets keyframe gate
+			// and audio/video rebase for the next ad source.
+			bridge.Switch(previousCamera)
 			bridge.DisconnectSource(adSourceName)
 
 			if i == len(adFiles)-1 {
-				// Last ad — switch back to camera.
-				bridge.Switch(previousCamera)
+				// Last ad — already switched back to camera above.
 			}
 		}
 

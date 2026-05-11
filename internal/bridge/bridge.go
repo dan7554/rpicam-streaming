@@ -41,13 +41,13 @@ type Bridge struct {
 	videoSeqOffset   int32  // added to incoming video sequence numbers
 	pendingVideoRebase bool // true = next video keyframe needs offset recalculation
 
-	// Audio uses monotonic timestamp regeneration instead of offset-based
-	// rewriting. The Pi sends audio in burst pairs which cause GStreamer's
-	// jitter buffer to randomly produce artifacts on startup.
-	// We regenerate perfectly-spaced timestamps so downstream sees clean timing.
-	// Opus at 48kHz with 20ms frames = 960 samples per frame.
-	nextAudioTS  uint32 // next audio RTP timestamp to assign
-	nextAudioSeq uint16 // next audio RTP sequence number to assign
+	// Audio uses offset-based rewriting like video to maintain
+	// timestamp continuity across source switches.
+	lastAudioTS      uint32
+	lastAudioSeq     uint16
+	audioTSOffset    int64
+	audioSeqOffset   int32
+	pendingAudioRebase bool
 
 	// Per-source keyframe readiness signalling for zero-freeze switching.
 	keyframeCh map[string]chan struct{}
@@ -303,13 +303,15 @@ func (b *Bridge) connectCamera(name string, first bool) error {
 				b.lastVideoTS = pkt.Timestamp
 				b.lastVideoSeq = pkt.SequenceNumber
 			} else {
-				// Monotonic audio timestamp regeneration: assign perfectly-
-				// spaced timestamps (960 samples per Opus frame at 48kHz/20ms)
-				// instead of forwarding the Pi's jittery burst timestamps.
-				pkt.Timestamp = b.nextAudioTS
-				pkt.SequenceNumber = b.nextAudioSeq
-				b.nextAudioTS += 960 // 960 samples per Opus frame (20ms at 48kHz)
-				b.nextAudioSeq++
+				if b.pendingAudioRebase {
+					b.audioTSOffset = int64(b.lastAudioTS) - int64(pkt.Timestamp) + 1024
+					b.audioSeqOffset = int32(b.lastAudioSeq) - int32(pkt.SequenceNumber) + 1
+					b.pendingAudioRebase = false
+				}
+				pkt.Timestamp = uint32(int64(pkt.Timestamp) + b.audioTSOffset)
+				pkt.SequenceNumber = uint16(int32(pkt.SequenceNumber) + b.audioSeqOffset)
+				b.lastAudioTS = pkt.Timestamp
+				b.lastAudioSeq = pkt.SequenceNumber
 			}
 			b.mu.Unlock()
 			// Remap payload type if client/server differ
@@ -496,10 +498,15 @@ func (b *Bridge) reconnectCamera(idx int, name string) error {
 				b.lastVideoTS = pkt.Timestamp
 				b.lastVideoSeq = pkt.SequenceNumber
 			} else {
-				pkt.Timestamp = b.nextAudioTS
-				pkt.SequenceNumber = b.nextAudioSeq
-				b.nextAudioTS += 960
-				b.nextAudioSeq++
+				if b.pendingAudioRebase {
+					b.audioTSOffset = int64(b.lastAudioTS) - int64(pkt.Timestamp) + 1024
+					b.audioSeqOffset = int32(b.lastAudioSeq) - int32(pkt.SequenceNumber) + 1
+					b.pendingAudioRebase = false
+				}
+				pkt.Timestamp = uint32(int64(pkt.Timestamp) + b.audioTSOffset)
+				pkt.SequenceNumber = uint16(int32(pkt.SequenceNumber) + b.audioSeqOffset)
+				b.lastAudioTS = pkt.Timestamp
+				b.lastAudioSeq = pkt.SequenceNumber
 			}
 			b.mu.Unlock()
 			if newPT, ok := ptMap[pkt.PayloadType]; ok {
@@ -525,6 +532,7 @@ func (b *Bridge) reconnectCamera(idx int, name string) error {
 	if b.active == name {
 		b.needsKeyframe = true
 		b.pendingVideoRebase = true
+		b.pendingAudioRebase = true
 		b.switchTime = time.Now()
 		b.droppedVideoPkts = 0
 		log.Printf("[bridge] active camera %s reconnected, waiting for keyframe", name)
@@ -571,6 +579,7 @@ func (b *Bridge) Switch(camera string) {
 	b.active = camera
 	b.needsKeyframe = true
 	b.pendingVideoRebase = true
+	b.pendingAudioRebase = true
 	b.switchTime = time.Now()
 	b.droppedVideoPkts = 0
 	b.mu.Unlock()
@@ -587,6 +596,7 @@ func (b *Bridge) SwitchNoWait(camera string) {
 	b.active = camera
 	b.needsKeyframe = false
 	b.pendingVideoRebase = true
+	b.pendingAudioRebase = true
 	b.switchTime = time.Now()
 	b.droppedVideoPkts = 0
 	b.mu.Unlock()
@@ -729,14 +739,17 @@ func (b *Bridge) OnPlay(ctx *gortsplib.ServerHandlerOnPlayCtx) (*base.Response, 
 	b.mu.Lock()
 	b.needsKeyframe = true
 	b.pendingVideoRebase = false // no rebase needed — starting fresh
+	b.pendingAudioRebase = false
 	b.switchTime = time.Now()
 	b.droppedVideoPkts = 0
 	b.lastVideoTS = 0
 	b.lastVideoSeq = 0
 	b.videoTSOffset = 0
 	b.videoSeqOffset = 0
-	b.nextAudioTS = 0
-	b.nextAudioSeq = 0
+	b.lastAudioTS = 0
+	b.lastAudioSeq = 0
+	b.audioTSOffset = 0
+	b.audioSeqOffset = 0
 	b.mu.Unlock()
 	return &base.Response{StatusCode: base.StatusOK}, nil
 }

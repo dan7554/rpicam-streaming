@@ -280,10 +280,10 @@ type Config struct {
 
 func New(cfg Config) *Overlay {
 	if cfg.Format == "" {
-		cfg.Format = FormatFull
+		cfg.Format = FormatShort
 	}
 	if cfg.MaxRows == 0 {
-		cfg.MaxRows = 25
+		cfg.MaxRows = 20
 	}
 	if cfg.Interval == 0 {
 		cfg.Interval = 4 * time.Second
@@ -1146,8 +1146,9 @@ func fillRect(img *image.RGBA, x0, y0, w, h int, c color.RGBA) {
 
 func (o *Overlay) writePNG(img *image.RGBA) error {
 	out := img
-	if o.scale > 1 {
-		out = scaleUp(img, o.scale)
+	effectiveScale := o.scale * 1.75
+	if effectiveScale > 1 {
+		out = scaleUp(img, effectiveScale)
 	}
 	tmp := o.pngPath + ".tmp"
 	f, err := os.Create(tmp)
