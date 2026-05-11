@@ -121,6 +121,19 @@ h2 {
     color: white;
 }
 
+.ai-badge {
+    display: inline-block;
+    background: linear-gradient(135deg, #7c3aed, #2563eb);
+    color: white;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 3px;
+    margin-left: 6px;
+    vertical-align: middle;
+    letter-spacing: 0.5px;
+}
+
 /* YouTube Controls */
 #youtube-controls {
     background: #1a1a1a;
@@ -1143,4 +1156,103 @@ h2 {
     .build-version {
         font-size: 9px;
     }
+}
+
+/* === Camera Stream Quality === */
+#stream-quality-section {
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 16px;
+    margin-top: 16px;
+}
+
+.stream-quality-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.sq-camera-select {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.sq-camera-select select {
+    background: #0f0f0f;
+    color: #e0e0e0;
+    border: 1px solid #444;
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.sq-status {
+    font-size: 12px;
+    color: #888;
+}
+.sq-status.sq-ok { color: #4caf50; }
+.sq-status.sq-error { color: #f44336; }
+
+.sq-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+}
+
+.sq-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.sq-field label {
+    font-size: 11px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.sq-field select,
+.sq-field input {
+    background: #0f0f0f;
+    color: #e0e0e0;
+    border: 1px solid #444;
+    padding: 8px 10px;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.sq-field input:focus,
+.sq-field select:focus {
+    outline: none;
+    border-color: #e53935;
+}
+
+.sq-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.sq-actions button {
+    background: #333;
+    color: #e0e0e0;
+    border: none;
+    padding: 6px 16px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+.sq-actions button:hover {
+    background: #e53935;
+    color: white;
+}
+
+.sq-actions small {
+    color: #666;
+    font-size: 11px;
 }

@@ -18,15 +18,17 @@ log() {
 MEDIAMTX_HOST="${MEDIAMTX_HOST:-192.168.50.208}"
 SRT_PORT="${SRT_PORT:-8890}"
 RTMP_PORT="${MEDIAMTX_RTMP_PORT:-1935}"
-# NOTE: Always use RTMP. SRT (UDP) causes corrupted frames and color artifacts
-# over WiFi due to packet loss. RTMP (TCP) retransmits lost packets reliably.
-PROTOCOL="${PROTOCOL:-rtmp}"
+RTSP_PORT="${RTSP_PORT:-8554}"
+# NOTE: Use RTSP for WebRTC/WHEP audio (Opus). RTMP uses AAC which WebRTC can't play.
+# SRT (UDP) causes corrupted frames over WiFi. RTSP and RTMP are both TCP (reliable).
+PROTOCOL="${PROTOCOL:-rtsp}"
 RETRY_DELAY="${RETRY_DELAY:-5}"
 WIDTH="${WIDTH:-1920}"
 HEIGHT="${HEIGHT:-1080}"
 FPS="${FPS:-30}"
 AUDIO_DEVICE="${AUDIO_DEVICE:-hw:2,0}"
 BITRATE="${BITRATE:-5500}"
+SPEED_PRESET="${SPEED_PRESET:-medium}"  # x264 speed preset: ultrafast, superfast, veryfast, faster, fast, medium
 SRT_LATENCY="${SRT_LATENCY:-200}"  # SRT latency in ms (lower = less latency, more risk)
 HW_ENCODE="${HW_ENCODE:-auto}"     # auto, yes, or no — use rpicam-vid hardware H264 encoder
 
@@ -98,6 +100,12 @@ wait_for_server() {
             sleep "$RETRY_DELAY"
         done
         log "Host $MEDIAMTX_HOST reachable (SRT/UDP)"
+    elif [ "$PROTOCOL" = "rtsp" ]; then
+        while ! timeout 3 bash -c "</dev/tcp/$MEDIAMTX_HOST/$RTSP_PORT" 2>/dev/null; do
+            log "Waiting for RTSP at $MEDIAMTX_HOST:$RTSP_PORT..."
+            sleep "$RETRY_DELAY"
+        done
+        log "RTSP server reachable"
     else
         # For RTMP (TCP), check port
         while ! timeout 3 bash -c "</dev/tcp/$MEDIAMTX_HOST/$RTMP_PORT" 2>/dev/null; do
@@ -144,9 +152,11 @@ start_watchdog() {
                 no_conn_strikes=0
             fi
         else
-            # For RTMP: check for CLOSE-WAIT (server disconnected)
+            # For RTMP/RTSP (TCP): check for CLOSE-WAIT (server disconnected)
+            local watch_port="$RTMP_PORT"
+            [ "$PROTOCOL" = "rtsp" ] && watch_port="$RTSP_PORT"
             local close_wait
-            close_wait=$(ss -tnp 2>/dev/null | grep ":${RTMP_PORT}" | grep -c "CLOSE-WAIT" || true)
+            close_wait=$(ss -tnp 2>/dev/null | grep ":${watch_port}" | grep -c "CLOSE-WAIT" || true)
             if [ "${close_wait:-0}" -gt 0 ]; then
                 closewait_strikes=$((closewait_strikes + 1))
                 log "WATCHDOG: CLOSE-WAIT detected (strike $closewait_strikes/2)"
@@ -163,7 +173,7 @@ start_watchdog() {
 
             # Check for stuck send buffer
             local send_q
-            send_q=$(ss -tnp 2>/dev/null | grep ":${RTMP_PORT}" | grep -v "FIN\|CLOSE\|TIME" | awk '{print $3}' | sort -rn | head -1)
+            send_q=$(ss -tnp 2>/dev/null | grep ":${watch_port}" | grep -v "FIN\|CLOSE\|TIME" | awk '{print $3}' | sort -rn | head -1)
             send_q="${send_q:-0}"
 
             if [ "$send_q" -gt "$WATCHDOG_THRESHOLD" ]; then
@@ -272,19 +282,32 @@ while true; do
             gst-launch-1.0 -e \
                 libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
                 queue max-size-buffers=1 leaky=downstream ! \
-                videoconvert ! x264enc tune=zerolatency speed-preset=medium bitrate=${BITRATE} key-int-max=60 threads=4 ! \
+                videoconvert ! x264enc tune=zerolatency speed-preset=${SPEED_PRESET} bitrate=${BITRATE} key-int-max=60 threads=4 ! \
                 h264parse ! mpegtsmux name=mux latency=3000000000 ! \
                 srtsink uri="srt://${MEDIAMTX_HOST}:${SRT_PORT}?streamid=publish:${STREAM_NAME}&pkt_size=1316" latency=${SRT_LATENCY} \
                 alsasrc device="$AUDIO_DEVICE" buffer-time=200000 ! "audio/x-raw,rate=48000,channels=1" ! \
                 queue max-size-buffers=1 max-size-time=500000000 leaky=downstream ! \
                 audioconvert ! opusenc bitrate=128000 frame-size=20 ! opusparse ! mux. \
                 2>&1 &
-        else
-            # RTMP with audio
+        elif [ "$PROTOCOL" = "rtsp" ]; then
+            # RTSP with audio: rtspclientsink with Opus audio
+            # Opus is native to WebRTC/WHEP — no server-side transcoding needed.
+            # RTSP uses TCP (like RTMP) so it's reliable over WiFi.
             gst-launch-1.0 -e \
                 libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
                 queue max-size-buffers=1 leaky=downstream ! \
-                videoconvert ! x264enc tune=zerolatency speed-preset=medium bitrate=${BITRATE} key-int-max=60 threads=4 ! \
+                videoconvert ! x264enc tune=zerolatency speed-preset=${SPEED_PRESET} bitrate=${BITRATE} key-int-max=60 threads=4 ! \
+                h264parse ! rtspclientsink name=mux location="rtsp://${MEDIAMTX_HOST}:${RTSP_PORT}/${STREAM_NAME}" protocols=tcp latency=0 \
+                alsasrc device="$AUDIO_DEVICE" buffer-time=200000 ! "audio/x-raw,rate=48000,channels=1" ! \
+                queue max-size-buffers=1 max-size-time=500000000 leaky=downstream ! \
+                audioconvert ! opusenc bitrate=128000 frame-size=20 ! opusparse ! mux. \
+                2>&1 &
+        else
+            # RTMP with audio (AAC — works for HLS but NOT for WebRTC/WHEP)
+            gst-launch-1.0 -e \
+                libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
+                queue max-size-buffers=1 leaky=downstream ! \
+                videoconvert ! x264enc tune=zerolatency speed-preset=${SPEED_PRESET} bitrate=${BITRATE} key-int-max=60 threads=4 ! \
                 h264parse ! flvmux name=mux streamable=true ! \
                 rtmpsink location="rtmp://${MEDIAMTX_HOST}:${RTMP_PORT}/${STREAM_NAME}" \
                 alsasrc device="$AUDIO_DEVICE" buffer-time=200000 ! "audio/x-raw,rate=48000,channels=1" ! \
@@ -298,16 +321,24 @@ while true; do
             gst-launch-1.0 -e \
                 libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
                 queue max-size-buffers=1 leaky=downstream ! \
-                videoconvert ! x264enc tune=zerolatency speed-preset=medium bitrate=${BITRATE} key-int-max=60 threads=4 ! \
+                videoconvert ! x264enc tune=zerolatency speed-preset=${SPEED_PRESET} bitrate=${BITRATE} key-int-max=60 threads=4 ! \
                 h264parse ! mpegtsmux ! \
                 srtsink uri="srt://${MEDIAMTX_HOST}:${SRT_PORT}?streamid=publish:${STREAM_NAME}&pkt_size=1316" latency=${SRT_LATENCY} \
+                2>&1 &
+        elif [ "$PROTOCOL" = "rtsp" ]; then
+            # RTSP video-only
+            gst-launch-1.0 -e \
+                libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
+                queue max-size-buffers=1 leaky=downstream ! \
+                videoconvert ! x264enc tune=zerolatency speed-preset=${SPEED_PRESET} bitrate=${BITRATE} key-int-max=60 threads=4 ! \
+                h264parse ! rtspclientsink location="rtsp://${MEDIAMTX_HOST}:${RTSP_PORT}/${STREAM_NAME}" protocols=tcp latency=0 \
                 2>&1 &
         else
             # RTMP video-only
             gst-launch-1.0 -e \
                 libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
                 queue max-size-buffers=1 leaky=downstream ! \
-                videoconvert ! x264enc tune=zerolatency speed-preset=medium bitrate=${BITRATE} key-int-max=60 threads=4 ! \
+                videoconvert ! x264enc tune=zerolatency speed-preset=${SPEED_PRESET} bitrate=${BITRATE} key-int-max=60 threads=4 ! \
                 h264parse ! flvmux streamable=true ! \
                 rtmpsink location="rtmp://${MEDIAMTX_HOST}:${RTMP_PORT}/${STREAM_NAME}" \
                 2>&1 &

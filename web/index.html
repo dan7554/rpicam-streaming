@@ -199,6 +199,56 @@
             </div>
         </section>
 
+        <!-- Camera Stream Quality -->
+        <section id="stream-quality-section">
+            <h2>Camera Stream Quality</h2>
+            <div class="stream-quality-controls">
+                <div class="sq-camera-select">
+                    <label>Camera: <select id="sq-camera" onchange="loadCameraConfig()"></select></label>
+                    <span id="sq-status" class="sq-status"></span>
+                </div>
+                <div class="sq-grid" id="sq-grid">
+                    <div class="sq-field">
+                        <label>Resolution</label>
+                        <select id="sq-resolution">
+                            <option value="1920x1080">1920×1080 (16:9)</option>
+                            <option value="2028x1080">2028×1080 (native IMX477)</option>
+                            <option value="1640x1232">1640×1232 (4:3)</option>
+                            <option value="1280x720">1280×720 (720p)</option>
+                        </select>
+                    </div>
+                    <div class="sq-field">
+                        <label>FPS</label>
+                        <select id="sq-fps">
+                            <option value="24">24</option>
+                            <option value="30">30</option>
+                            <option value="48">48</option>
+                            <option value="60">60</option>
+                        </select>
+                    </div>
+                    <div class="sq-field">
+                        <label>Bitrate (kbps)</label>
+                        <input type="number" id="sq-bitrate" min="1000" max="50000" step="500" value="12000">
+                    </div>
+                    <div class="sq-field">
+                        <label>Encoder Preset</label>
+                        <select id="sq-preset">
+                            <option value="ultrafast">ultrafast</option>
+                            <option value="superfast">superfast</option>
+                            <option value="veryfast">veryfast</option>
+                            <option value="faster">faster</option>
+                            <option value="fast">fast</option>
+                            <option value="medium">medium</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="sq-actions">
+                    <button onclick="applyCameraConfig()">Apply &amp; Restart Stream</button>
+                    <small>Applies to the Pi and restarts the camera stream service</small>
+                </div>
+            </div>
+        </section>
+
         <!-- Live Output Preview -->
         <section id="output-section" class="hidden">
             <h2>Live Output Preview</h2>
@@ -210,7 +260,7 @@
             </div>
         </section>
     </main>
-10
-    <script src="app.js?v=9"></script>
+
+    <script src="app.js?v=10"></script>
 </body>
 </html>

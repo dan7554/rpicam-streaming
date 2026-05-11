@@ -1,7 +1,14 @@
 let STREAMS = [];
+let ALL_CAMERAS = [];
 const HLS_BASE = '/hls';
 const WEBRTC_BASE = '/webrtc';
 const API_BASE = '';
+
+// Camera streams use -opus paths for WebRTC (AAC→Opus transcode)
+function whepPath(name) {
+    if (/^cam\d+$/.test(name)) return name + '-opus';
+    return name;
+}
 
 const players = {};
 
@@ -19,9 +26,11 @@ async function init() {
     try {
         const res = await fetch(`${API_BASE}/api/streams`);
         const data = await res.json();
-        STREAMS = (data.items || []).map(i => i.name);
+        ALL_CAMERAS = (data.items || []).map(i => i.name);
+        STREAMS = (data.items || []).filter(i => i.ready).map(i => i.name);
     } catch {
-        STREAMS = ['cam2', 'cam3']; // fallback
+        ALL_CAMERAS = ['cam2', 'cam3'];
+        STREAMS = ALL_CAMERAS;
     }
 
     const grid = document.getElementById('camera-grid');
@@ -29,10 +38,12 @@ async function init() {
         const card = document.createElement('div');
         card.className = 'cam-card';
         card.id = `card-${name}`;
+        const isUpscaled = name.endsWith('-4k');
+        const label = isUpscaled ? `${name.replace('-4k','').toUpperCase()} <span class="ai-badge">AI SHARP</span>` : name.toUpperCase();
         card.innerHTML = `
             <video id="video-${name}" muted autoplay playsinline></video>
             <div class="label">
-                <span>${name.toUpperCase()}</span>
+                <span>${label}</span>
                 <button onclick="switchTo('${name}')">Switch</button>
             </div>
         `;
@@ -54,6 +65,9 @@ async function init() {
     setInterval(pollStatus, 2000);
     pollStatus();
 
+    // Poll camera availability (show/hide cameras that come online/offline)
+    setInterval(refreshCameraGrid, 5000);
+
     // Poll overlay status
     setInterval(pollOverlayStatus, 3000);
     pollOverlayStatus();
@@ -65,6 +79,9 @@ async function init() {
 
     // Poll logo status
     pollLogoStatus();
+
+    // Init stream quality config
+    initStreamQuality();
 
     // Load server-side config, fall back to localStorage
     let serverCfg = {};
@@ -189,7 +206,7 @@ async function startWebRTC(name) {
         setTimeout(resolve, 500);
     });
 
-    const res = await fetch(`${WEBRTC_BASE}/${name}/whep`, {
+    const res = await fetch(`${WEBRTC_BASE}/${whepPath(name)}/whep`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/sdp' },
         body: pc.localDescription.sdp,
@@ -637,7 +654,7 @@ async function startOutputWebRTC(stream) {
         setTimeout(resolve, 500);
     });
 
-    const res = await fetch(`${WEBRTC_BASE}/${stream}/whep`, {
+    const res = await fetch(`${WEBRTC_BASE}/${whepPath(stream)}/whep`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/sdp' },
         body: pc.localDescription.sdp,
@@ -1407,4 +1424,186 @@ async function pollAdPlayback() {
             adWasPlaying = false;
         }
     } catch {}
+}
+
+// === Camera Availability Refresh ===
+
+async function refreshCameraGrid() {
+    try {
+        const res = await fetch(`${API_BASE}/api/streams`);
+        const data = await res.json();
+        const nowReady = (data.items || []).filter(i => i.ready).map(i => i.name);
+        const grid = document.getElementById('camera-grid');
+        const previewsEnabled = localStorage.getItem('cam-previews-enabled') !== 'false';
+
+        // Add newly online cameras
+        for (const name of nowReady) {
+            if (!STREAMS.includes(name) && !document.getElementById(`card-${name}`)) {
+                const card = document.createElement('div');
+                card.className = 'cam-card';
+                card.id = `card-${name}`;
+                const isUpscaled = name.endsWith('-4k');
+                const label = isUpscaled ? `${name.replace('-4k','').toUpperCase()} <span class="ai-badge">AI SHARP</span>` : name.toUpperCase();
+                card.innerHTML = `
+                    <video id="video-${name}" muted autoplay playsinline></video>
+                    <div class="label">
+                        <span>${label}</span>
+                        <button onclick="switchTo('${name}')">Switch</button>
+                    </div>
+                `;
+                grid.appendChild(card);
+                STREAMS.push(name);
+                if (previewsEnabled) startPreview(name);
+            }
+        }
+
+        // Hide offline cameras (don't remove — just hide)
+        for (const name of STREAMS) {
+            const card = document.getElementById(`card-${name}`);
+            if (card) {
+                card.style.display = nowReady.includes(name) ? '' : 'none';
+            }
+        }
+    } catch {}
+}
+
+// === Camera Stream Quality Config ===
+
+async function initStreamQuality() {
+    const select = document.getElementById('sq-camera');
+    if (!select) return;
+    select.innerHTML = '';
+    // Add 'All Cameras' option
+    const allOpt = document.createElement('option');
+    allOpt.value = 'all';
+    allOpt.textContent = 'ALL CAMERAS';
+    select.appendChild(allOpt);
+    for (const name of ALL_CAMERAS) {
+        if (name.endsWith('-4k')) continue; // skip upscaled streams
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name.toUpperCase();
+        select.appendChild(opt);
+    }
+    if (select.options.length > 0) {
+        loadCameraConfig();
+    }
+}
+
+async function loadCameraConfig() {
+    const camera = document.getElementById('sq-camera').value;
+    const status = document.getElementById('sq-status');
+    if (!camera) return;
+    if (camera === 'all') {
+        status.textContent = 'Set values and apply to all cameras';
+        status.className = 'sq-status';
+        return;
+    }
+    status.textContent = 'Loading...';
+    status.className = 'sq-status';
+    try {
+        const res = await fetch(`${API_BASE}/api/camera/stream-config?camera=${camera}`);
+        if (!res.ok) {
+            const err = await res.json();
+            if (err.error === 'tailscale_auth_required') {
+                status.textContent = 'Auth required';
+                status.className = 'sq-status sq-error';
+                if (err.auth_url && confirm('Tailscale SSH session expired. Open auth URL?')) {
+                    window.open(err.auth_url, '_blank');
+                }
+                return;
+            }
+            status.textContent = err.error || 'Error';
+            status.className = 'sq-status sq-error';
+            return;
+        }
+        const data = await res.json();
+        const cfg = data.config;
+
+        // Populate fields
+        const resSelect = document.getElementById('sq-resolution');
+        const resVal = `${cfg.WIDTH || '2028'}x${cfg.HEIGHT || '1080'}`;
+        // Set value or add custom option
+        if ([...resSelect.options].some(o => o.value === resVal)) {
+            resSelect.value = resVal;
+        } else {
+            const opt = document.createElement('option');
+            opt.value = resVal;
+            opt.textContent = `${cfg.WIDTH}×${cfg.HEIGHT} (custom)`;
+            resSelect.appendChild(opt);
+            resSelect.value = resVal;
+        }
+
+        document.getElementById('sq-fps').value = cfg.FPS || '30';
+        document.getElementById('sq-bitrate').value = cfg.BITRATE || '12000';
+        document.getElementById('sq-preset').value = cfg.SPEED_PRESET || 'superfast';
+
+        status.textContent = 'Loaded';
+        status.className = 'sq-status sq-ok';
+        setTimeout(() => { status.textContent = ''; }, 2000);
+    } catch (e) {
+        status.textContent = 'Offline';
+        status.className = 'sq-status sq-error';
+    }
+}
+
+async function applyCameraConfig() {
+    const camera = document.getElementById('sq-camera').value;
+    const status = document.getElementById('sq-status');
+    if (!camera) return;
+
+    const [width, height] = document.getElementById('sq-resolution').value.split('x');
+    const cfg = {
+        WIDTH: width,
+        HEIGHT: height,
+        FPS: document.getElementById('sq-fps').value,
+        BITRATE: document.getElementById('sq-bitrate').value,
+        SPEED_PRESET: document.getElementById('sq-preset').value,
+        PROTOCOL: 'rtmp',
+        MEDIAMTX_HOST: '100.23.149.218',
+    };
+
+    // Build list of cameras to apply to
+    const targets = camera === 'all'
+        ? ALL_CAMERAS.filter(n => !n.endsWith('-4k'))
+        : [camera];
+
+    status.textContent = `Applying to ${targets.length} camera(s)...`;
+    status.className = 'sq-status';
+
+    const results = [];
+    for (const cam of targets) {
+        try {
+            const res = await fetch(`${API_BASE}/api/camera/stream-config`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ camera: cam, config: cfg }),
+            });
+            if (!res.ok) {
+                const err = await res.json();
+                if (err.error === 'tailscale_auth_required') {
+                    if (err.auth_url && confirm(`${cam}: Tailscale SSH expired. Open auth URL?`)) {
+                        window.open(err.auth_url, '_blank');
+                    }
+                    results.push(`${cam}: auth required`);
+                    continue;
+                }
+                results.push(`${cam}: ${err.error || 'failed'}`);
+            } else {
+                results.push(`${cam}: ok`);
+            }
+        } catch (e) {
+            results.push(`${cam}: ${e.message}`);
+        }
+    }
+
+    const allOk = results.every(r => r.endsWith(': ok'));
+    if (allOk) {
+        status.textContent = `Applied ✓ (${targets.length} camera(s) restarting)`;
+        status.className = 'sq-status sq-ok';
+    } else {
+        status.textContent = results.join(', ');
+        status.className = 'sq-status sq-error';
+    }
+    setTimeout(() => { status.textContent = ''; }, 5000);
 }

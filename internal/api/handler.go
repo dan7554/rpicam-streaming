@@ -3,6 +3,7 @@ package api
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -160,6 +161,8 @@ func (h *Handler) routes() {
 	h.mux.HandleFunc("POST /api/debug/tailscale/up", h.debugTailscaleUp)
 	h.mux.HandleFunc("POST /api/camera/control", h.cameraControl)
 	h.mux.HandleFunc("GET /api/camera/list", h.cameraList)
+	h.mux.HandleFunc("GET /api/camera/stream-config", h.getCameraStreamConfig)
+	h.mux.HandleFunc("POST /api/camera/stream-config", h.postCameraStreamConfig)
 
 	// Serve debug page at /debug
 	h.mux.HandleFunc("GET /debug", func(w http.ResponseWriter, r *http.Request) {
@@ -1010,6 +1013,166 @@ func (h *Handler) cameraList(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"cameras": cameras})
+}
+
+// getCameraStreamConfig reads /etc/rpicam-stream.conf from a camera via SSH.
+func (h *Handler) getCameraStreamConfig(w http.ResponseWriter, r *http.Request) {
+	camera := r.URL.Query().Get("camera")
+	if camera == "" {
+		writeError(w, http.StatusBadRequest, "camera parameter required")
+		return
+	}
+
+	cameraHosts := config.GetAllCameraIPs(h.cfg.Cameras)
+	ip := cameraHosts[camera]
+	if ip == "" {
+		writeError(w, http.StatusNotFound, "camera %s offline", camera)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+		fmt.Sprintf("%s@%s", h.cfg.CameraUser, ip), "cat /etc/rpicam-stream.conf")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		outStr := string(out)
+		if strings.Contains(outStr, "login.tailscale.com") {
+			authURLRegex := regexp.MustCompile(`https://login\.tailscale\.com/[^\s]+`)
+			if match := authURLRegex.FindString(outStr); match != "" {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+					"error":    "tailscale_auth_required",
+					"auth_url": match,
+					"message":  "Tailscale SSH session expired. Open the auth URL to re-authenticate.",
+				})
+				return
+			}
+		}
+		writeError(w, http.StatusInternalServerError, "ssh failed: %v", err)
+		return
+	}
+
+	// Parse key=value pairs
+	cfgMap := make(map[string]string)
+	scanner := bufio.NewScanner(bytes.NewReader(out))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) == 2 {
+			cfgMap[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"camera": camera,
+		"config": cfgMap,
+	})
+}
+
+// postCameraStreamConfig writes /etc/rpicam-stream.conf on a camera via SSH and restarts the stream.
+func (h *Handler) postCameraStreamConfig(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Camera string            `json:"camera"`
+		Config map[string]string `json:"config"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: %v", err)
+		return
+	}
+	if req.Camera == "" || len(req.Config) == 0 {
+		writeError(w, http.StatusBadRequest, "camera and config required")
+		return
+	}
+
+	// Validate allowed keys
+	allowedKeys := map[string]bool{
+		"WIDTH": true, "HEIGHT": true, "FPS": true,
+		"BITRATE": true, "SPEED_PRESET": true, "PROTOCOL": true,
+		"MEDIAMTX_HOST": true, "AUDIO_DEVICE": true,
+	}
+	for key := range req.Config {
+		if !allowedKeys[key] {
+			writeError(w, http.StatusBadRequest, "invalid config key: %s", key)
+			return
+		}
+	}
+
+	cameraHosts := config.GetAllCameraIPs(h.cfg.Cameras)
+	ip := cameraHosts[req.Camera]
+	if ip == "" {
+		writeError(w, http.StatusNotFound, "camera %s offline", req.Camera)
+		return
+	}
+
+	// Read existing config first so we can merge (preserve AUDIO_DEVICE etc.)
+	readCtx, readCancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer readCancel()
+	readCmd := exec.CommandContext(readCtx, "ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+		fmt.Sprintf("%s@%s", h.cfg.CameraUser, ip), "cat /etc/rpicam-stream.conf")
+	existingOut, _ := readCmd.CombinedOutput()
+
+	// Parse existing config
+	existing := make(map[string]string)
+	existingScanner := bufio.NewScanner(bytes.NewReader(existingOut))
+	for existingScanner.Scan() {
+		line := strings.TrimSpace(existingScanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) == 2 {
+			existing[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+		}
+	}
+
+	// Merge: new values override existing
+	for key, val := range req.Config {
+		existing[key] = val
+	}
+
+	// Build merged config file content
+	var confLines []string
+	for key, val := range existing {
+		confLines = append(confLines, fmt.Sprintf("%s=%s", key, val))
+	}
+	confContent := strings.Join(confLines, "\n") + "\n"
+
+	// Write config and restart stream
+	remoteCmd := fmt.Sprintf(
+		"printf '%%s\\n' '%s' | sudo -S bash -c 'echo \"%s\" > /etc/rpicam-stream.conf && systemctl restart rpicam-stream && echo OK'",
+		h.cfg.CameraPass,
+		strings.ReplaceAll(confContent, "\"", "\\\""),
+	)
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "ssh", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=no",
+		fmt.Sprintf("%s@%s", h.cfg.CameraUser, ip), remoteCmd)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		outStr := string(out)
+		if strings.Contains(outStr, "login.tailscale.com") {
+			authURLRegex := regexp.MustCompile(`https://login\.tailscale\.com/[^\s]+`)
+			if match := authURLRegex.FindString(outStr); match != "" {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+					"error":    "tailscale_auth_required",
+					"auth_url": match,
+					"message":  "Tailscale SSH session expired. Open the auth URL to re-authenticate.",
+				})
+				return
+			}
+		}
+		writeError(w, http.StatusInternalServerError, "ssh failed: %v - %s", err, string(out))
+		return
+	}
+
+	log.Printf("[api] cameraStreamConfig: updated %s config: %v", req.Camera, req.Config)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "camera": req.Camera})
 }
 
 func (h *Handler) cameraControl(w http.ResponseWriter, r *http.Request) {
