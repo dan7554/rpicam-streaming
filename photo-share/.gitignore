@@ -1,0 +1,8 @@
+photoshare
+*.db
+data/
+terraform/terraform.tfvars
+terraform/.terraform/
+terraform/*.tfstate*
+client_secret_*.json
+cs

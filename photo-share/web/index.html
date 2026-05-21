@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trackside Photo</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏎️</text></svg>">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <a href="#" onclick="navigateTo(null); return false;" class="logo">
+            <span>Trackside Photo</span>
+        </a>
+        <nav id="nav-breadcrumb"></nav>
+        <div class="header-right">
+            <div id="user-area"></div>
+        </div>
+    </header>
+
+    <main>
+        <div id="content"></div>
+    </main>
+
+    <!-- Lightbox -->
+    <div id="lightbox" class="lightbox hidden" onclick="closeLightbox(event)">
+        <button class="lb-close" onclick="closeLightbox()">&times;</button>
+        <button class="lb-prev" onclick="prevPhoto(event)">&#10094;</button>
+        <button class="lb-next" onclick="nextPhoto(event)">&#10095;</button>
+        <div class="lb-content">
+            <img id="lb-image" src="" alt="">
+            <div id="lb-info" class="lb-info"></div>
+        </div>
+    </div>
+
+    <!-- Upload Modal -->
+    <div id="upload-modal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Upload Photos</h3>
+                <button onclick="closeUploadModal()">&times;</button>
+            </div>
+            <div id="drop-zone" class="drop-zone">
+                <p>Drag & drop photos here or click to browse</p>
+                <input type="file" id="file-input" multiple accept="image/*" onchange="handleFiles(this.files)">
+            </div>
+            <div id="upload-preview" class="upload-preview"></div>
+            <div id="upload-progress" class="hidden">
+                <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
+                <span id="progress-text">Uploading...</span>
+            </div>
+            <div class="modal-footer">
+                <button id="btn-upload" onclick="startUpload()" disabled>Upload</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Venmo / Buy me a coffee - floating widget -->
+    <div id="venmo-fab" class="venmo-fab hidden">
+        <div class="venmo-fab-title">☕ Buy me a coffee</div>
+        <div class="venmo-fab-content">
+            <img id="venmo-qr" src="" alt="Venmo QR Code">
+            <p>Scan to tip via Venmo</p>
+            <a id="venmo-link" href="#" target="_blank" class="venmo-btn">Open Venmo</a>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
