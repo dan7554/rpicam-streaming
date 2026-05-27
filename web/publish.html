@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Phone Camera</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📱</text></svg>">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; overflow: hidden; background: #111; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; }
+
+        #container {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+        }
+
+        #video-wrap {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+            background: #000;
+        }
+
+        #preview {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+            transform: scaleX(-1);
+            transition: transform 0.3s;
+        }
+        #preview.rear { transform: scaleX(1); }
+        #preview.landscape { transform: scaleX(-1) rotate(90deg); width: 100vh; height: 100vw; }
+        #preview.rear.landscape { transform: scaleX(1) rotate(90deg); width: 100vh; height: 100vw; }
+
+        #status-bar {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.7), transparent);
+            z-index: 10;
+        }
+
+        #status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        #status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #666;
+        }
+        #status-dot.connecting { background: #ffa726; animation: pulse 1s infinite; }
+        #status-dot.live { background: #e53935; animation: pulse 1.5s infinite; }
+        #status-dot.error { background: #e53935; animation: none; }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        #stats {
+            font-size: 11px;
+            color: #aaa;
+        }
+
+        #controls {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+            padding: 20px;
+            background: #1a1a1a;
+        }
+
+        .ctrl-btn {
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            border: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            cursor: pointer;
+            transition: background 0.2s, transform 0.1s;
+            background: #333;
+            color: #e0e0e0;
+        }
+        .ctrl-btn:active { transform: scale(0.9); }
+        .ctrl-btn.active { background: #e53935; color: #fff; }
+        .ctrl-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+        #btn-go-live {
+            width: 72px;
+            height: 72px;
+            font-size: 28px;
+            background: #e53935;
+            color: #fff;
+        }
+        #btn-go-live.live { background: #333; border: 3px solid #e53935; }
+
+        .ctrl-btn.muted { background: #e53935; }
+
+        /* Setup screen */
+        #setup {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            padding: 24px;
+            gap: 20px;
+        }
+
+        #setup h1 {
+            font-size: 24px;
+            font-weight: 700;
+        }
+
+        #setup p {
+            color: #999;
+            text-align: center;
+            max-width: 320px;
+        }
+
+        .setup-field {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            width: 100%;
+            max-width: 320px;
+        }
+
+        .setup-field label {
+            font-size: 13px;
+            font-weight: 600;
+            color: #aaa;
+        }
+
+        .setup-field input, .setup-field select {
+            padding: 12px 16px;
+            border-radius: 8px;
+            border: 1px solid #333;
+            background: #222;
+            color: #e0e0e0;
+            font-size: 16px;
+            outline: none;
+        }
+        .setup-field input:focus, .setup-field select:focus {
+            border-color: #e53935;
+        }
+
+        #btn-start {
+            margin-top: 12px;
+            padding: 14px 40px;
+            border-radius: 8px;
+            border: none;
+            background: #e53935;
+            color: #fff;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        #btn-start:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        #error-msg {
+            color: #e53935;
+            font-size: 13px;
+            text-align: center;
+            max-width: 320px;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <!-- Setup Screen -->
+        <div id="setup">
+            <h1>📱 Phone Camera</h1>
+            <p>Stream live video from your phone to the broadcast switcher</p>
+            <div class="setup-field">
+                <label>Stream Name</label>
+                <input type="text" id="stream-name" placeholder="phone-1" value="phone-1">
+            </div>
+            <div class="setup-field">
+                <label>Camera</label>
+                <select id="camera-select">
+                    <option value="environment">Back Camera</option>
+                    <option value="user">Front Camera</option>
+                </select>
+            </div>
+            <div class="setup-field">
+                <label>Quality</label>
+                <select id="quality-select">
+                    <option value="720">720p (recommended for cellular)</option>
+                    <option value="1080" selected>1080p</option>
+                </select>
+            </div>
+            <div class="setup-field">
+                <label>Orientation</label>
+                <select id="orientation-select">
+                    <option value="landscape" selected>Landscape (horizontal)</option>
+                    <option value="portrait">Portrait (vertical)</option>
+                </select>
+            </div>
+            <button id="btn-start" onclick="startPreview()">Start Camera</button>
+            <div id="error-msg"></div>
+        </div>
+
+        <!-- Live Screen (hidden until camera starts) -->
+        <div id="live-screen" style="display:none; height:100%; flex-direction:column;">
+            <div id="video-wrap">
+                <video id="preview" autoplay muted playsinline></video>
+                <div id="status-bar">
+                    <div id="status-indicator">
+                        <div id="status-dot"></div>
+                        <span id="status-text">Ready</span>
+                    </div>
+                    <div id="stats"></div>
+                </div>
+            </div>
+            <div id="controls">
+                <button class="ctrl-btn" id="btn-flip" onclick="flipCamera()" title="Flip Camera">🔄</button>
+                <button class="ctrl-btn" id="btn-orient" onclick="toggleOrientation()" title="Rotate">📐</button>
+                <button class="ctrl-btn" id="btn-mute" onclick="toggleMute()" title="Mute Audio">🎙️</button>
+                <button class="ctrl-btn" id="btn-go-live" onclick="toggleLive()">⏺</button>
+                <button class="ctrl-btn" id="btn-torch" onclick="toggleTorch()" title="Torch" style="display:none">🔦</button>
+                <button class="ctrl-btn" id="btn-stop" onclick="stopAll()" title="Stop">⏹️</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    let localStream = null;
+    let pc = null;
+    let whipSession = null;  // URL for DELETE to teardown
+    let isLive = false;
+    let isMuted = false;
+    let facingMode = 'environment';
+    let orientation = 'landscape'; // 'landscape' or 'portrait'
+    let statsInterval = null;
+
+    const baseURL = location.origin;
+
+    function setStatus(state, text) {
+        document.getElementById('status-dot').className = state;
+        document.getElementById('status-text').textContent = text;
+    }
+
+    function showError(msg) {
+        document.getElementById('error-msg').textContent = msg;
+    }
+
+    async function startPreview() {
+        showError('');
+        const name = document.getElementById('stream-name').value.trim();
+        if (!name) { showError('Stream name is required'); return; }
+        if (!/^[a-zA-Z0-9_-]+$/.test(name)) { showError('Name: letters, numbers, hyphens, underscores only'); return; }
+
+        const quality = document.getElementById('quality-select').value;
+        facingMode = document.getElementById('camera-select').value;
+        orientation = document.getElementById('orientation-select').value;
+
+        const constraints = {
+            video: {
+                facingMode: { ideal: facingMode },
+                width: { ideal: orientation === 'landscape' ? (quality === '1080' ? 1920 : 1280) : (quality === '1080' ? 1080 : 720) },
+                height: { ideal: orientation === 'landscape' ? (quality === '1080' ? 1080 : 720) : (quality === '1080' ? 1920 : 1280) },
+                frameRate: { ideal: 30 }
+            },
+            audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true
+            }
+        };
+
+        try {
+            localStream = await navigator.mediaDevices.getUserMedia(constraints);
+        } catch (e) {
+            if (e.name === 'NotAllowedError') {
+                showError('Camera permission denied. Please allow camera access.');
+            } else if (e.name === 'NotFoundError') {
+                showError('No camera found on this device.');
+            } else {
+                showError('Camera error: ' + e.message);
+            }
+            return;
+        }
+
+        const video = document.getElementById('preview');
+        video.srcObject = localStream;
+        if (facingMode === 'environment') video.classList.add('rear');
+        else video.classList.remove('rear');
+
+        // Switch to live screen
+        document.getElementById('setup').style.display = 'none';
+        const liveScreen = document.getElementById('live-screen');
+        liveScreen.style.display = 'flex';
+
+        // Check torch support
+        const track = localStream.getVideoTracks()[0];
+        if (track.getCapabilities && track.getCapabilities().torch) {
+            document.getElementById('btn-torch').style.display = '';
+        }
+
+        // Keep screen awake
+        if ('wakeLock' in navigator) {
+            try { await navigator.wakeLock.request('screen'); } catch(e) {}
+        }
+    }
+
+    async function toggleLive() {
+        if (isLive) {
+            await stopPublish();
+        } else {
+            await startPublish();
+        }
+    }
+
+    async function startPublish() {
+        if (!localStream) return;
+        const streamName = document.getElementById('stream-name').value.trim();
+
+        setStatus('connecting', 'Connecting...');
+
+        try {
+            pc = new RTCPeerConnection({
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+            });
+
+            // Add tracks with encoding parameters
+            const videoTrack = localStream.getVideoTracks()[0];
+            const audioTrack = localStream.getAudioTracks()[0];
+
+            if (videoTrack) {
+                const transceiver = pc.addTransceiver(videoTrack, { direction: 'sendonly' });
+                // Prefer H.264 — phones have hardware encoders for it (VP8 is software-only)
+                const caps = RTCRtpSender.getCapabilities && RTCRtpSender.getCapabilities('video');
+                if (caps) {
+                    const h264Codecs = caps.codecs.filter(c =>
+                        c.mimeType === 'video/H264' &&
+                        (!c.sdpFmtpLine || c.sdpFmtpLine.includes('42e01f') || c.sdpFmtpLine.includes('42001f'))
+                    );
+                    const otherCodecs = caps.codecs.filter(c => c.mimeType !== 'video/H264');
+                    if (h264Codecs.length > 0) {
+                        try { transceiver.setCodecPreferences([...h264Codecs, ...otherCodecs]); } catch(e) {}
+                    }
+                }
+                // Set encoding parameters — target bitrate and scalability
+                const quality = document.getElementById('quality-select').value;
+                const maxBitrate = quality === '1080' ? 4000000 : 2500000;
+                const params = transceiver.sender.getParameters();
+                if (!params.encodings || params.encodings.length === 0) {
+                    params.encodings = [{}];
+                }
+                params.encodings[0].maxBitrate = maxBitrate;
+                params.encodings[0].maxFramerate = 30;
+                // Prioritize maintaining resolution over framerate
+                if (params.degradationPreference !== undefined || true) {
+                    params.degradationPreference = 'maintain-resolution';
+                }
+                try { await transceiver.sender.setParameters(params); } catch(e) {
+                    console.log('setParameters skipped:', e.message);
+                }
+            }
+            if (audioTrack) {
+                pc.addTransceiver(audioTrack, { direction: 'sendonly' });
+            }
+
+            // Create offer
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+
+            // Wait for ICE gathering to complete (or timeout)
+            await new Promise((resolve) => {
+                if (pc.iceGatheringState === 'complete') { resolve(); return; }
+                const check = () => {
+                    if (pc.iceGatheringState === 'complete') {
+                        pc.removeEventListener('icegatheringstatechange', check);
+                        resolve();
+                    }
+                };
+                pc.addEventListener('icegatheringstatechange', check);
+                setTimeout(resolve, 3000); // 3s timeout
+            });
+
+            // WHIP POST
+            const whipURL = `${baseURL}/webrtc/${streamName}/whip`;
+            const resp = await fetch(whipURL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/sdp' },
+                body: pc.localDescription.sdp
+            });
+
+            if (!resp.ok) {
+                const text = await resp.text();
+                throw new Error(`WHIP failed (${resp.status}): ${text}`);
+            }
+
+            // Get session URL for teardown
+            const location = resp.headers.get('Location');
+            if (location) {
+                whipSession = location.startsWith('http') ? location : `${baseURL}/webrtc${location}`;
+            }
+
+            const answer = await resp.text();
+            await pc.setRemoteDescription({ type: 'answer', sdp: answer });
+
+            // Monitor connection state
+            pc.onconnectionstatechange = () => {
+                if (pc.connectionState === 'connected') {
+                    setStatus('live', 'LIVE — ' + streamName);
+                    isLive = true;
+                    document.getElementById('btn-go-live').classList.add('live');
+                    document.getElementById('btn-go-live').textContent = '⏸';
+                    startStats();
+                } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+                    setStatus('error', 'Disconnected');
+                    isLive = false;
+                    document.getElementById('btn-go-live').classList.remove('live');
+                    document.getElementById('btn-go-live').textContent = '⏺';
+                    stopStats();
+                    // Auto-reconnect after 2s
+                    setTimeout(() => {
+                        if (!isLive && localStream) startPublish();
+                    }, 2000);
+                }
+            };
+
+        } catch (e) {
+            setStatus('error', 'Error');
+            console.error('Publish error:', e);
+            alert('Failed to publish: ' + e.message);
+            if (pc) { pc.close(); pc = null; }
+        }
+    }
+
+    async function stopPublish() {
+        isLive = false;
+        stopStats();
+        document.getElementById('btn-go-live').classList.remove('live');
+        document.getElementById('btn-go-live').textContent = '⏺';
+        setStatus('', 'Stopped');
+
+        // WHIP teardown
+        if (whipSession) {
+            try { await fetch(whipSession, { method: 'DELETE' }); } catch(e) {}
+            whipSession = null;
+        }
+
+        if (pc) { pc.close(); pc = null; }
+    }
+
+    async function flipCamera() {
+        facingMode = facingMode === 'environment' ? 'user' : 'environment';
+        const quality = document.getElementById('quality-select').value;
+
+        // Stop current tracks
+        if (localStream) {
+            localStream.getTracks().forEach(t => t.stop());
+        }
+
+        const constraints = {
+            video: {
+                facingMode: { ideal: facingMode },
+                width: { ideal: orientation === 'landscape' ? (quality === '1080' ? 1920 : 1280) : (quality === '1080' ? 1080 : 720) },
+                height: { ideal: orientation === 'landscape' ? (quality === '1080' ? 1080 : 720) : (quality === '1080' ? 1920 : 1280) },
+                frameRate: { ideal: 30 }
+            },
+            audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true
+            }
+        };
+
+        try {
+            localStream = await navigator.mediaDevices.getUserMedia(constraints);
+            document.getElementById('preview').srcObject = localStream;
+
+            if (facingMode === 'environment') document.getElementById('preview').classList.add('rear');
+            else document.getElementById('preview').classList.remove('rear');
+
+            // If live, replace tracks in peer connection
+            if (pc && isLive) {
+                const senders = pc.getSenders();
+                const videoTrack = localStream.getVideoTracks()[0];
+                const audioTrack = localStream.getAudioTracks()[0];
+                for (const sender of senders) {
+                    if (sender.track && sender.track.kind === 'video' && videoTrack) {
+                        await sender.replaceTrack(videoTrack);
+                    } else if (sender.track && sender.track.kind === 'audio' && audioTrack) {
+                        await sender.replaceTrack(audioTrack);
+                    }
+                }
+            }
+        } catch(e) {
+            console.error('Flip camera error:', e);
+        }
+    }
+
+    function toggleMute() {
+        isMuted = !isMuted;
+        if (localStream) {
+            localStream.getAudioTracks().forEach(t => { t.enabled = !isMuted; });
+        }
+        const btn = document.getElementById('btn-mute');
+        btn.classList.toggle('muted', isMuted);
+        btn.textContent = isMuted ? '🔇' : '🎙️';
+    }
+
+    async function toggleOrientation() {
+        orientation = orientation === 'landscape' ? 'portrait' : 'landscape';
+        const btn = document.getElementById('btn-orient');
+        btn.classList.toggle('active', orientation === 'portrait');
+
+        // Restart camera with new dimensions
+        const quality = document.getElementById('quality-select').value;
+        if (localStream) {
+            localStream.getTracks().forEach(t => t.stop());
+        }
+
+        const constraints = {
+            video: {
+                facingMode: { ideal: facingMode },
+                width: { ideal: orientation === 'landscape' ? (quality === '1080' ? 1920 : 1280) : (quality === '1080' ? 1080 : 720) },
+                height: { ideal: orientation === 'landscape' ? (quality === '1080' ? 1080 : 720) : (quality === '1080' ? 1920 : 1280) },
+                frameRate: { ideal: 30 }
+            },
+            audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true
+            }
+        };
+
+        try {
+            localStream = await navigator.mediaDevices.getUserMedia(constraints);
+            document.getElementById('preview').srcObject = localStream;
+
+            if (facingMode === 'environment') document.getElementById('preview').classList.add('rear');
+            else document.getElementById('preview').classList.remove('rear');
+
+            // If live, replace tracks in peer connection
+            if (pc && isLive) {
+                const senders = pc.getSenders();
+                const videoTrack = localStream.getVideoTracks()[0];
+                const audioTrack = localStream.getAudioTracks()[0];
+                for (const sender of senders) {
+                    if (sender.track && sender.track.kind === 'video' && videoTrack) {
+                        await sender.replaceTrack(videoTrack);
+                    } else if (sender.track && sender.track.kind === 'audio' && audioTrack) {
+                        await sender.replaceTrack(audioTrack);
+                    }
+                }
+            }
+        } catch(e) {
+            console.error('Toggle orientation error:', e);
+        }
+    }
+
+    async function toggleTorch() {
+        if (!localStream) return;
+        const track = localStream.getVideoTracks()[0];
+        const caps = track.getCapabilities();
+        if (!caps.torch) return;
+        const settings = track.getSettings();
+        const on = !settings.torch;
+        await track.applyConstraints({ advanced: [{ torch: on }] });
+        document.getElementById('btn-torch').classList.toggle('active', on);
+    }
+
+    function stopAll() {
+        if (isLive) stopPublish();
+        if (localStream) {
+            localStream.getTracks().forEach(t => t.stop());
+            localStream = null;
+        }
+        document.getElementById('preview').srcObject = null;
+        document.getElementById('live-screen').style.display = 'none';
+        document.getElementById('setup').style.display = '';
+        setStatus('', 'Ready');
+    }
+
+    let lastBytes = 0, lastTs = 0;
+
+    function startStats() {
+        lastBytes = 0; lastTs = 0;
+        statsInterval = setInterval(async () => {
+            if (!pc) return;
+            const stats = await pc.getStats();
+            let bytesSent = 0, fps = 0, width = 0, height = 0, codec = '';
+            stats.forEach(s => {
+                if (s.type === 'outbound-rtp' && s.kind === 'video') {
+                    bytesSent = s.bytesSent || 0;
+                    fps = s.framesPerSecond || 0;
+                    width = s.frameWidth || 0;
+                    height = s.frameHeight || 0;
+                    // Find codec
+                    if (s.codecId) {
+                        const codecStat = stats.get(s.codecId);
+                        if (codecStat) codec = codecStat.mimeType || '';
+                    }
+                }
+            });
+            const now = Date.now();
+            let bitrateStr = '';
+            if (lastTs > 0 && now > lastTs) {
+                const bps = ((bytesSent - lastBytes) * 8) / ((now - lastTs) / 1000);
+                bitrateStr = (bps / 1000000).toFixed(1) + 'Mbps';
+            }
+            lastBytes = bytesSent; lastTs = now;
+            const codecShort = codec.replace('video/', '');
+            document.getElementById('stats').textContent =
+                `${width}x${height} ${fps}fps ${bitrateStr} ${codecShort}`.trim();
+        }, 2000);
+    }
+
+    function stopStats() {
+        if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
+        document.getElementById('stats').textContent = '';
+    }
+
+    // Handle page visibility — pause/resume
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden && isLive) {
+            // Keep sending — browser should maintain WebRTC in background
+        }
+    });
+
+    // Prevent accidental navigation
+    window.onbeforeunload = () => {
+        if (isLive) return 'You are currently live streaming. Stop before leaving?';
+    };
+    </script>
+</body>
+</html>

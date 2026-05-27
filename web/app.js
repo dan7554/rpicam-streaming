@@ -40,7 +40,7 @@ async function init() {
         const isUpscaled = name.endsWith('-4k');
         const label = isUpscaled ? `${name.replace('-4k','').toUpperCase()} <span class="ai-badge">AI SHARP</span>` : name.toUpperCase();
         card.innerHTML = `
-            <video id="video-${name}" muted autoplay playsinline></video>
+            <video id="video-${name}" muted autoplay playsinline controls></video>
             <div class="label">
                 <span>${label}</span>
                 <button onclick="switchTo('${name}')">Switch</button>

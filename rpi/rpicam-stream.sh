@@ -19,9 +19,10 @@ MEDIAMTX_HOST="${MEDIAMTX_HOST:-192.168.50.208}"
 SRT_PORT="${SRT_PORT:-8890}"
 RTMP_PORT="${MEDIAMTX_RTMP_PORT:-1935}"
 RTSP_PORT="${RTSP_PORT:-8554}"
-# NOTE: Use RTSP for WebRTC/WHEP audio (Opus). RTMP uses AAC which WebRTC can't play.
-# SRT (UDP) causes corrupted frames over WiFi. RTSP and RTMP are both TCP (reliable).
-PROTOCOL="${PROTOCOL:-rtsp}"
+# NOTE: Always use SRT. It handles WiFi jitter better than TCP-based protocols
+# (RTMP/RTSP) which stall on retransmits. SRT has its own retransmission with
+# configurable latency buffer. MediaMTX SRT port must be open (UDP 8890).
+PROTOCOL="${PROTOCOL:-srt}"
 RETRY_DELAY="${RETRY_DELAY:-5}"
 WIDTH="${WIDTH:-1920}"
 HEIGHT="${HEIGHT:-1080}"
@@ -29,8 +30,9 @@ FPS="${FPS:-30}"
 AUDIO_DEVICE="${AUDIO_DEVICE:-hw:2,0}"
 BITRATE="${BITRATE:-5500}"
 SPEED_PRESET="${SPEED_PRESET:-medium}"  # x264 speed preset: ultrafast, superfast, veryfast, faster, fast, medium
-SRT_LATENCY="${SRT_LATENCY:-200}"  # SRT latency in ms (lower = less latency, more risk)
+SRT_LATENCY="${SRT_LATENCY:-500}"  # SRT latency in ms (lower = less latency, more risk)
 HW_ENCODE="${HW_ENCODE:-auto}"     # auto, yes, or no — use rpicam-vid hardware H264 encoder
+TUNING_FILE="${TUNING_FILE:-}"     # Custom ISP tuning file (e.g. /usr/share/libcamera/ipa/rpi/pisp/imx477_video.json)
 
 # Stream name: rpicamN → camN, or use hostname as-is
 detect_stream_name() {
@@ -200,6 +202,13 @@ while true; do
     retry_count=$((retry_count + 1))
     log "Starting stream (attempt $retry_count) via $PROTOCOL"
 
+    # Build libcamerasrc element with optional tuning file
+    CAMERA_SRC="libcamerasrc"
+    if [ -n "$TUNING_FILE" ] && [ -f "$TUNING_FILE" ]; then
+        CAMERA_SRC="libcamerasrc tuning-file=$TUNING_FILE"
+        log "Using custom ISP tuning: $TUNING_FILE"
+    fi
+
     # Determine if hardware encoding should be used
     # Auto mode: only on Pi Zero 2W (too weak for x264 software encode)
     # RPi 5 has plenty of CPU for x264 — no hw encoder on BCM2712 anyway
@@ -231,7 +240,7 @@ while true; do
         if $has_audio; then
             if [ "$PROTOCOL" = "srt" ]; then
                 gst-launch-1.0 -e \
-                    libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
+                    ${CAMERA_SRC} ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
                     v4l2h264enc extra-controls="$V4L2_CONTROLS" ! "video/x-h264,level=(string)4" ! \
                     h264parse ! queue max-size-buffers=1 leaky=downstream ! \
                     mpegtsmux name=mux alignment=7 ! \
@@ -243,7 +252,7 @@ while true; do
                     2>&1 &
             else
                 gst-launch-1.0 -e \
-                    libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
+                    ${CAMERA_SRC} ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
                     v4l2h264enc extra-controls="$V4L2_CONTROLS" ! "video/x-h264,level=(string)4" ! \
                     h264parse ! queue max-size-buffers=1 leaky=downstream ! \
                     flvmux name=mux streamable=true ! \
@@ -256,7 +265,7 @@ while true; do
         else
             if [ "$PROTOCOL" = "srt" ]; then
                 gst-launch-1.0 -e \
-                    libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
+                    ${CAMERA_SRC} ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
                     v4l2h264enc extra-controls="$V4L2_CONTROLS" ! "video/x-h264,level=(string)4" ! \
                     h264parse ! queue max-size-buffers=1 leaky=downstream ! mpegtsmux alignment=7 ! \
                     queue max-size-bytes=2000000 max-size-time=0 max-size-buffers=0 ! \
@@ -264,7 +273,7 @@ while true; do
                     2>&1 &
             else
                 gst-launch-1.0 -e \
-                    libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
+                    ${CAMERA_SRC} ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
                     v4l2h264enc extra-controls="$V4L2_CONTROLS" ! "video/x-h264,level=(string)4" ! \
                     h264parse ! queue max-size-buffers=1 leaky=downstream ! flvmux streamable=true ! \
                     rtmpsink location="rtmp://${MEDIAMTX_HOST}:${RTMP_PORT}/${STREAM_NAME}" \
@@ -280,7 +289,7 @@ while true; do
             # produces its first frame, so the PMT only lists audio and MediaMTX
             # (which only reads the first PMT) misses the video track entirely.
             gst-launch-1.0 -e \
-                libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
+                ${CAMERA_SRC} ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
                 queue max-size-buffers=1 leaky=downstream ! \
                 videoconvert ! x264enc tune=zerolatency speed-preset=${SPEED_PRESET} bitrate=${BITRATE} key-int-max=60 threads=4 ! \
                 h264parse ! mpegtsmux name=mux latency=3000000000 ! \
@@ -294,7 +303,7 @@ while true; do
             # Opus is native to WebRTC/WHEP — no server-side transcoding needed.
             # RTSP uses TCP (like RTMP) so it's reliable over WiFi.
             gst-launch-1.0 -e \
-                libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
+                ${CAMERA_SRC} ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
                 queue max-size-buffers=1 leaky=downstream ! \
                 videoconvert ! x264enc tune=zerolatency speed-preset=${SPEED_PRESET} bitrate=${BITRATE} key-int-max=60 threads=4 ! \
                 h264parse ! rtspclientsink name=mux location="rtsp://${MEDIAMTX_HOST}:${RTSP_PORT}/${STREAM_NAME}" protocols=tcp latency=0 \
@@ -305,7 +314,7 @@ while true; do
         else
             # RTMP with audio (AAC — works for HLS but NOT for WebRTC/WHEP)
             gst-launch-1.0 -e \
-                libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
+                ${CAMERA_SRC} ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
                 queue max-size-buffers=1 leaky=downstream ! \
                 videoconvert ! x264enc tune=zerolatency speed-preset=${SPEED_PRESET} bitrate=${BITRATE} key-int-max=60 threads=4 ! \
                 h264parse ! flvmux name=mux streamable=true ! \
@@ -319,7 +328,7 @@ while true; do
         if [ "$PROTOCOL" = "srt" ]; then
             # SRT video-only
             gst-launch-1.0 -e \
-                libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
+                ${CAMERA_SRC} ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
                 queue max-size-buffers=1 leaky=downstream ! \
                 videoconvert ! x264enc tune=zerolatency speed-preset=${SPEED_PRESET} bitrate=${BITRATE} key-int-max=60 threads=4 ! \
                 h264parse ! mpegtsmux ! \
@@ -328,7 +337,7 @@ while true; do
         elif [ "$PROTOCOL" = "rtsp" ]; then
             # RTSP video-only
             gst-launch-1.0 -e \
-                libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
+                ${CAMERA_SRC} ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
                 queue max-size-buffers=1 leaky=downstream ! \
                 videoconvert ! x264enc tune=zerolatency speed-preset=${SPEED_PRESET} bitrate=${BITRATE} key-int-max=60 threads=4 ! \
                 h264parse ! rtspclientsink location="rtsp://${MEDIAMTX_HOST}:${RTSP_PORT}/${STREAM_NAME}" protocols=tcp latency=0 \
@@ -336,7 +345,7 @@ while true; do
         else
             # RTMP video-only
             gst-launch-1.0 -e \
-                libcamerasrc ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
+                ${CAMERA_SRC} ! "video/x-raw,width=${WIDTH},height=${HEIGHT},framerate=${FPS}/1,format=NV12" ! \
                 queue max-size-buffers=1 leaky=downstream ! \
                 videoconvert ! x264enc tune=zerolatency speed-preset=${SPEED_PRESET} bitrate=${BITRATE} key-int-max=60 threads=4 ! \
                 h264parse ! flvmux streamable=true ! \

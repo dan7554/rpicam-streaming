@@ -179,6 +179,11 @@ func (h *Handler) routes() {
 		http.ServeFile(w, r, "web/fleet.html")
 	})
 
+	// Serve phone publish page at /publish
+	h.mux.HandleFunc("GET /publish", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "web/publish.html")
+	})
+
 	// Serve web UI
 	h.mux.Handle("GET /", http.FileServer(http.Dir("web")))
 }
@@ -219,7 +224,7 @@ func (h *Handler) getStreams(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Return only configured cameras
+	// Return configured cameras + any dynamic phone/extra streams
 	type streamItem struct {
 		Name  string `json:"name"`
 		Ready bool   `json:"ready"`
@@ -227,6 +232,30 @@ func (h *Handler) getStreams(w http.ResponseWriter, r *http.Request) {
 	items := make([]streamItem, 0, len(h.cfg.Cameras))
 	for _, cam := range h.cfg.Cameras {
 		items = append(items, streamItem{Name: cam, Ready: readyPaths[cam]})
+	}
+	// Include any ready paths not in the static camera list (phone streams, etc.)
+	// Exclude internal paths (commentary, live-preview, live-output)
+	for name, ready := range readyPaths {
+		if !ready {
+			continue
+		}
+		// Skip if already in configured cameras
+		found := false
+		for _, cam := range h.cfg.Cameras {
+			if cam == name {
+				found = true
+				break
+			}
+		}
+		if found {
+			continue
+		}
+		// Skip internal paths
+		if name == "live-preview" || name == "live-output" ||
+			strings.HasPrefix(name, "commentary") {
+			continue
+		}
+		items = append(items, streamItem{Name: name, Ready: true})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"itemCount": len(items),
@@ -1470,6 +1499,7 @@ func (h *Handler) logoUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	h.uiCfg.Merge(cfg)
 	h.sw.SetLogoConfig(tr, br)
+	h.sw.RestartIfLive()
 
 	log.Printf("[api] logoUpload: %s → %s", position, destPath)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "uploaded", "position": position})
@@ -1517,6 +1547,7 @@ func (h *Handler) logoDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	h.uiCfg.Merge(cfg)
 	h.sw.SetLogoConfig(tr, br)
+	h.sw.RestartIfLive()
 
 	log.Printf("[api] logoDelete: %s → transparent", position)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "removed", "position": position})
